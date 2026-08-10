@@ -1,0 +1,15 @@
+[package]
+name = "maicenta-storage"
+version = "0.1.0"
+description = "SQLite persistence adapter for MAICENTA."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+maicenta-application = { path = "../application" }
+maicenta-domain = { path = "../domain" }
+rusqlite = { version = "0.40.1", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+[lints]
+workspace = true

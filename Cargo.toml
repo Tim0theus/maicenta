@@ -1,0 +1,23 @@
+[workspace]
+members = [
+    "connectors/mail",
+    "core/application",
+    "core/bridge",
+    "core/domain",
+    "core/rendering",
+    "core/storage",
+    "core/vault",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MPL-2.0"
+rust-version = "1.85"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"

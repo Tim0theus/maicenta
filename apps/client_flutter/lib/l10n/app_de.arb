@@ -1,0 +1,28 @@
+{
+  "@@locale": "de",
+  "mailModule": "E-Mail",
+  "favorites": "Favoriten",
+  "localArea": "Lokaler Bereich",
+  "localDemoMode": "Lokaler Demo-Modus",
+  "mailAccountsConnected": "{count, plural, one{1 Mailkonto verbunden} other{{count} Mailkonten verbunden}}",
+  "@mailAccountsConnected": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "unreadEmails": "Ungelesene E-Mails",
+  "followUp": "Zur Nachverfolgung",
+  "accountMenu": "Kontomenü",
+  "accountSettings": "Kontoeinstellungen",
+  "newLocalFolder": "Neuer lokaler Ordner",
+  "mailboxInbox": "Posteingang",
+  "mailboxDrafts": "Entwürfe",
+  "mailboxSent": "Gesendet",
+  "mailboxArchive": "Archiv",
+  "mailboxTrash": "Papierkorb",
+  "mailboxJunk": "Spam",
+  "virtualFlagged": "Markiert",
+  "virtualUnread": "Ungelesen"
+}

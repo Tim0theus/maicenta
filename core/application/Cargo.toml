@@ -1,0 +1,13 @@
+[package]
+name = "maicenta-application"
+version = "0.1.0"
+description = "Application ports and use-case boundaries for MAICENTA."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+maicenta-domain = { path = "../domain" }
+
+[lints]
+workspace = true

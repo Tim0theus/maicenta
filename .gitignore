@@ -1,13 +1,31 @@
 # Miscellaneous
 *.class
-*.lock
 *.log
 *.pyc
 *.swp
 .buildlog/
 .history
+.DS_Store
+Thumbs.db
 
+# Editors and local tooling
+.idea/
+.vscode/
+*.iml
 
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Internal project planning
+/Todo.md
+*/Todo.md
+
+# Local branding experiments and generated scratch exports. Published brand
+# sources and application icons remain versioned.
+/assets/branding/.work/
+/assets/branding/.exports/
 
 # Flutter repo-specific
 /bin/cache/
@@ -45,6 +63,11 @@ flutter_*.png
 linked_*.ds
 unlinked.ds
 unlinked_spec.ds
+
+# Rust/Cargo
+target/
+**/target/
+# Cargo.lock is intentionally committed for this application.
 
 # Android related
 **/android/**/gradle-wrapper.jar
@@ -106,6 +129,23 @@ unlinked_spec.ds
 
 # Coverage
 coverage/
+
+# Local application data and profile backups
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.objects/
+profiles/
+workspace-data/
+*.workspace-backup
+*.maicenta-profile
+*.profile.json
+*.import-backup
+*.plaintext-backup
+*.sqlite.encrypted
+.maicenta-import-*/
 
 # Symbols
 app.*.symbols

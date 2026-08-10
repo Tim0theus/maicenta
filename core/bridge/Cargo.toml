@@ -1,0 +1,22 @@
+[package]
+name = "maicenta_bridge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+flutter_rust_bridge = "=2.12.0"
+maicenta-application = { path = "../application" }
+maicenta-domain = { path = "../domain" }
+maicenta-mail-connector = { path = "../../connectors/mail" }
+maicenta-rendering = { path = "../rendering" }
+maicenta-storage = { path = "../storage" }
+maicenta-vault = { path = "../vault" }
+zeroize = "1.9.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

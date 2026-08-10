@@ -1,0 +1,23 @@
+[package]
+name = "maicenta-mail-connector"
+version = "0.1.0"
+description = "IMAP/SMTP connector and legacy credential migration adapter for MAICENTA."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-imap = { version = "0.11.3", default-features = false, features = ["runtime-tokio"] }
+async-native-tls = { version = "0.6.0", default-features = false, features = ["runtime-tokio"] }
+futures = "0.3.31"
+keyring = "4.1.6"
+lettre = { version = "0.11.22", default-features = false, features = ["builder", "hostname", "pool", "smtp-transport", "tokio1-native-tls"] }
+maicenta-domain = { path = "../../core/domain" }
+thiserror = "2.0.16"
+tokio = { version = "1.47.1", features = ["net", "time"] }
+
+[dev-dependencies]
+maicenta-rendering = { path = "../../core/rendering" }
+
+[lints]
+workspace = true
