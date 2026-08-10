@@ -1,0 +1,13 @@
+[package]
+name = "maicenta-domain"
+version = "0.1.0"
+description = "Provider-independent domain types for the MAICENTA workspace."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[lints]
+workspace = true

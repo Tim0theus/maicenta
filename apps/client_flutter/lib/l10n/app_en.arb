@@ -1,0 +1,28 @@
+{
+  "@@locale": "en",
+  "mailModule": "Mail",
+  "favorites": "Favorites",
+  "localArea": "Local area",
+  "localDemoMode": "Local demo mode",
+  "mailAccountsConnected": "{count, plural, one{1 mail account connected} other{{count} mail accounts connected}}",
+  "@mailAccountsConnected": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "unreadEmails": "Unread Mail",
+  "followUp": "For Follow Up",
+  "accountMenu": "Account menu",
+  "accountSettings": "Account Settings",
+  "newLocalFolder": "New local folder",
+  "mailboxInbox": "Inbox",
+  "mailboxDrafts": "Drafts",
+  "mailboxSent": "Sent",
+  "mailboxArchive": "Archive",
+  "mailboxTrash": "Trash",
+  "mailboxJunk": "Junk Email",
+  "virtualFlagged": "Flagged",
+  "virtualUnread": "Unread"
+}
