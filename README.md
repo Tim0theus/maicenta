@@ -287,10 +287,9 @@ you can use one of the voluntary funding options below.
 
 | Method | Details |
 | --- | --- |
-| Bank transfer | `Placeholder: account holder, IBAN and BIC` |
-| PayPal | `Placeholder: PayPal link` |
-| Cryptocurrency | `Placeholder: wallet address and network` |
-| Patreon | `Placeholder: Patreon link` |
+| Bank transfer | `Timm Sebastian Beckmann IBAN: DE48202208000044244886 BIC: SXPYDEHHXXX` |
+| PayPal | `paypal.me/Tim0theus` |
+| Patreon | `patreon.com/maicenta` |
 
 Support is voluntary and does not purchase control over the roadmap. Essential
 features and security updates will not be placed behind a supporter paywall.
