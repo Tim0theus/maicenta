@@ -1,0 +1,120 @@
+---
+import { site, type Locale } from '../config';
+import { localePath, t } from '../i18n';
+
+interface Props {
+  lang: Locale;
+}
+
+const { lang } = Astro.props;
+const ui = t(lang);
+const year = new Date().getFullYear();
+---
+
+<footer class="site-footer">
+  <div class="container cols">
+    <div class="about">
+      <a class="brand" href={localePath(lang)}>
+        <img src="/branding/maicenta-symbol.svg" alt="" width="30" height="26" />
+        <span>MAICENTA</span>
+      </a>
+      <p class="muted">{ui.footer.tagline}</p>
+    </div>
+    <div>
+      <h4>{ui.footer.product}</h4>
+      <ul>
+        <li><a href={localePath(lang, 'download')}>{ui.nav.download}</a></li>
+        <li><a href={localePath(lang, 'pricing')}>{ui.nav.pricing}</a></li>
+        <li><a href={localePath(lang, 'docs')}>{ui.nav.docs}</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>{ui.footer.project}</h4>
+      <ul>
+        <li><a href={site.github} rel="noopener" target="_blank">GitHub</a></li>
+        <li><a href={site.releases} rel="noopener" target="_blank">{ui.footer.releases}</a></li>
+        <li><a href={site.issues} rel="noopener" target="_blank">{ui.footer.issues}</a></li>
+        <li><a href={site.security} rel="noopener" target="_blank">{ui.footer.security}</a></li>
+        <li><a href={site.license} rel="noopener" target="_blank">{ui.footer.license}</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>{ui.footer.legal}</h4>
+      <ul>
+        <li><a href={localePath(lang, 'imprint')}>{ui.footer.imprint}</a></li>
+        <li><a href={localePath(lang, 'privacy')}>{ui.footer.privacy}</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="container bottom">
+    <p class="muted">© {year} MAICENTA · {ui.footer.copyright}</p>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    border-top: 1px solid var(--border);
+    padding-block: 3rem 2rem;
+    margin-top: 4rem;
+    background: rgba(3, 11, 31, 0.6);
+  }
+  .cols {
+    display: grid;
+    grid-template-columns: 2fr repeat(3, 1fr);
+    gap: 2rem;
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--text);
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    margin-bottom: 0.75rem;
+  }
+  .brand:hover {
+    text-decoration: none;
+  }
+  .brand img {
+    width: 30px;
+    height: auto;
+  }
+  h4 {
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 0.9rem;
+  }
+  ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 0.5rem;
+  }
+  ul a {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+  }
+  ul a:hover {
+    color: var(--text);
+  }
+  .bottom {
+    margin-top: 2.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.85rem;
+  }
+  .bottom p {
+    margin: 0;
+  }
+  @media (max-width: 800px) {
+    .cols {
+      grid-template-columns: 1fr 1fr;
+    }
+    .about {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

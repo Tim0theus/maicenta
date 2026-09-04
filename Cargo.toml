@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "connectors/mail",
+    "connectors/microsoft_graph",
     "core/application",
     "core/bridge",
     "core/domain",

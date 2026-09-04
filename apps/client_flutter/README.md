@@ -1,7 +1,9 @@
-# MAICENTA desktop client
+# MAICENTA Flutter client
 
 This directory contains the Flutter desktop prototype for Windows, macOS, and
-Linux.
+Linux, together with an experimental Android target. The Android build already
+loads the shared Rust core, but its interface is still optimized for desktop
+window sizes and is not yet a mobile-ready release.
 
 ## Run locally
 
@@ -19,6 +21,16 @@ available devices with:
 flutter devices
 ```
 
+To verify the experimental Android target, install the Android SDK and NDK and
+build a debug APK:
+
+```sh
+flutter build apk --debug
+```
+
+The APK is written to `build/app/outputs/flutter-apk/app-debug.apk`. With an
+Android device or emulator connected, start it using `flutter run -d <device>`.
+
 The alpha opens a local SQLCipher-encrypted profile through the Rust core. It seeds
 demonstration data when that profile is empty, renders sanitized HTML mail, and
 provides the Outlook Classic-inspired reading and rich-text composition flows.
@@ -34,8 +46,16 @@ bar.
 Double-clicking a message opens a dedicated classic message window with
 functional Message/File/View ribbon tabs, detailed envelope fields, safe HTML,
 attachments, zoom, reply-all, marking, moving, archiving, and deletion.
-It can connect to password-based IMAP/SMTP accounts and send sanitized HTML
-messages through SMTP, with a plain-text MIME fallback.
+It can connect to password-based IMAP/SMTP accounts and to Microsoft
+365/Exchange Online or Google accounts through OAuth 2.0 + PKCE and XOAUTH2.
+It sends sanitized HTML messages through SMTP, with a plain-text MIME fallback.
+New accounts use automatic setup by default: the client checks HTTPS
+autoconfiguration, standard IMAP/SMTP SRV records, an HTTPS provider database,
+and conservative domain/MX-based fallbacks before validating the result against
+both servers. Only the email address and domain are used for discovery; the
+password is sent exclusively to the selected mail servers during the connection
+test. Manual server settings remain available and open automatically when no
+configuration can be confirmed.
 
 Visible workspace commands are wired to local behavior: messages can be
 filtered, sorted, marked, archived, or moved to trash; folders and personal
@@ -44,8 +64,11 @@ folders; and the complete profile can be exported and imported with a separate
 password. Messages can also be dragged onto folders in the same account.
 Folders can be dragged into Favorites, reordered there, or dragged back to the
 account heading to remove the shortcut; the order persists in the encrypted
-profile. Native files dropped anywhere on the compose window are validated and
-added to its attachment strip. The title-bar search first prioritizes subjects,
+profile. Right-clicking a message exposes Outlook-style open, reply, forward,
+read-state, follow-up, archive, move, delete, spam, and not-spam actions. Folder
+actions are restricted to the message's account and use the same durable local
+operation queue as drag and drop. Native files dropped anywhere on the compose
+window are validated and added to its attachment strip. The title-bar search first prioritizes subjects,
 senders, and recipients from the encrypted profile catalogue rather than only
 the currently loaded folder. Its document button explicitly expands the search
 to cached message bodies, previews, and attachment names. Selecting a header-only result
@@ -96,14 +119,50 @@ are fetched individually through `BODY.PEEK` into the native Save As
 destination. Later passes reuse known UIDs, refresh their flags without loading
 their bodies, use persisted UIDNEXT ranges for new messages, and use CONDSTORE
 mod-sequence flag deltas when the server supports them. A periodic full UID
-reconciliation detects deletions safely. QRESYNC-capable servers additionally
+reconciliation detects deletions safely. The persistent client synchronizes at
+startup, every five minutes while active, and after app resume; servers without
+QRESYNC receive a complete UID safety reconciliation at least every 15 minutes.
+The currently selected remote folder additionally uses bounded RFC 2177 IMAP
+IDLE waits when advertised, so a server notification can trigger an immediate
+silent sync. Servers without IDLE continue using polling. QRESYNC-capable servers additionally
 send `VANISHED` deletion deltas, which remove exact generation-matched local
-records and attachment objects. The synchronization status reports how many
+records and attachment objects. A selective body request that confirms a stale
+UID removes the local entry immediately instead of showing a protocol error.
+The synchronization status reports how many
 folders used the delta, full, and QRESYNC paths. Bounded PNG, JPEG, and GIF
 `cid:` resources are rendered from memory without implicit network access.
-Detailed progress/cancellation, additional inline formats, OAuth, permanent
+Detailed progress/cancellation, additional inline formats, permanent
 deletion, remote folder mutations, automatic full-history body caching, CalDAV, and
-CardDAV are still pending.
+CardDAV are still pending. Exchange Online currently uses IMAP/SMTP rather
+than Microsoft Graph; on-premises Exchange/EWS and Graph-only tenant support
+are also still pending.
+
+## OAuth development setup
+
+MAICENTA is a native public client and therefore never embeds an OAuth client
+secret. Register native applications with Microsoft Entra and Google. Use
+`com.maicenta.app://oauth2redirect` on macOS and Android and
+`http://localhost:43821/oauth2redirect` on Windows and Linux, then provide the
+public client IDs at build or run time:
+
+```sh
+flutter run -d macos \
+  --dart-define=MAICENTA_MICROSOFT_OAUTH_CLIENT_ID=<public-client-id> \
+  --dart-define=MAICENTA_GOOGLE_OAUTH_CLIENT_ID=<public-client-id>
+```
+
+These defines override the project's built-in public client IDs in
+`lib/features/mail/oauth_client_ids.dart`; they are only needed for forks or
+when no project registration is compiled in yet.
+
+The callback can be overridden with `MAICENTA_OAUTH_REDIRECT_URI`. Custom app
+schemes must also be registered in the corresponding Android manifest or Apple
+URL types; localhost loopback callbacks need the matching fixed port in the
+provider registration. The current source tree pre-registers
+`com.maicenta.app`. OAuth access tokens, refresh tokens, client
+ID, scopes, endpoint, and expiry are stored as separate entries inside the
+SQLCipher-encrypted profile. The Rust core refreshes tokens shortly before
+expiry and never exposes stored tokens in workspace snapshots.
 
 Generated Flutter/Rust bindings live in `lib/src/rust` and
 `core/bridge/src/frb_generated.rs`. After changing the public bridge API,

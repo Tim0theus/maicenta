@@ -19,7 +19,8 @@ requiring a central MAICENTA service.
 - Clear separation of interface, domain logic, connectors, and storage
 - Modules with stable, versioned boundaries
 - Least-privilege access for extensions and AI providers
-- Secrets stored only through secure operating-system facilities
+- Secrets encrypted at rest; the operating-system facility protects the
+  profile master key
 - Explicit migrations, atomic writes, checksums, and recoverable operations
 
 ## High-level components
@@ -87,9 +88,9 @@ The current core is split into:
 - `maicenta-application`: ports for durable mail and personal workspace storage
 - `maicenta-storage`: SQLite schema migrations and transactional persistence
   for mailboxes, message summaries, flags, sanitized message bodies, and
-  attachment metadata, derived mailbox counters, remote IMAP identities, and a
-  compacted mutation queue, plus account configuration, calendar entries,
-  tasks, and contacts
+  attachment metadata, derived mailbox counters, provider-neutral remote
+  identities (IMAP UID pairs or opaque provider IDs), and a compacted mutation
+  queue, plus account configuration, calendar entries, tasks, and contacts
 - `maicenta-vault`: profile master-key handling, OS credential-store access,
   authenticated attachment objects, legacy plaintext migration, and portable
   password-protected profile archives
@@ -99,10 +100,15 @@ The current core is split into:
 - `maicenta-mail-connector`: async IMAP folder discovery and bounded
   multi-folder synchronization, MIME `BODYSTRUCTURE` extraction, validated
   section downloads through `BODY.PEEK`, UID-safe flag/move application, SMTP
-  submission over TLS or STARTTLS, plus temporary legacy credential migration
+  submission over TLS or STARTTLS, password and XOAUTH2 SASL authentication,
+  shared RFC 5322 rendering of outgoing messages, plus temporary legacy
+  credential migration
+- `maicenta-graph-connector`: Microsoft Graph mail synchronization with
+  per-folder delta cursors, immutable message IDs, synthetic MIME for the
+  renderer, on-demand attachment download, mutations, drafts, and `sendMail`
 - `maicenta-bridge`: generated, type-safe Flutter/Rust bindings for workspace
-  snapshots, account operations, synchronization, SMTP submission, attachment
-  export, and local mutations
+  snapshots, account operations, provider-dispatched synchronization, message
+  submission, attachment export, and local mutations
 
 Concrete IMAP, SMTP, vault, keychain, and Flutter-bridge implementations belong in
 adapter crates outside the domain and application packages. This keeps domain
@@ -118,11 +124,53 @@ prototype records only when the profile is empty, and returns mail, calendar,
 task, contact, and account DTOs. Generated bridge files are checked in so
 ordinary Flutter builds do not require the code generator.
 
-Account snapshots contain only non-secret server configuration. Passwords and
-app passwords are rows in the encrypted profile and never cross back into a
-workspace snapshot. The platform keychain contains only the profile key. A
-connection test authenticates
-to IMAP and opens an authenticated SMTP connection without sending a message.
+Account snapshots contain only non-secret server configuration and an OAuth
+provider identifier. Passwords, app passwords, OAuth access/refresh tokens,
+client IDs, scopes, token endpoints, and expiry timestamps are independent
+named rows in the encrypted profile and stored tokens never cross back into a
+workspace snapshot. The platform keychain contains only the profile key.
+
+The Flutter account flow implements OAuth Authorization Code + PKCE for native
+public clients and never embeds a client secret. It opens the platform's
+browser/authentication session. Windows and Linux use an external browser with
+a fixed localhost loopback redirect; macOS and Android use their native
+authentication session and a registered app callback scheme. The flow verifies
+the returned state, exchanges the code directly with the provider,
+and passes the resulting token set once to Rust. Before every network operation
+the bridge selects a password or OAuth credential; an expiring OAuth token is
+refreshed in Rust and atomically replaced in the encrypted profile. Refresh
+requests are restricted to compiled trusted Google and Microsoft token
+endpoints so an imported profile cannot turn the bridge into an arbitrary POST
+client. IMAP uses SASL XOAUTH2 and SMTP restricts authentication to XOAUTH2 for
+OAuth accounts.
+
+Microsoft 365/Exchange Online has two connectors. The standards connector uses
+`outlook.office365.com` IMAP and `smtp.office365.com` SMTP with XOAUTH2. The
+Microsoft Graph connector (`connectors/microsoft_graph`) covers tenants where
+IMAP/SMTP AUTH is disabled: it discovers folders and their well-known roles,
+runs per-folder delta queries whose opaque `nextLink`/`deltaLink` cursor is
+persisted as the mailbox sync state, requests bodies as HTML and wraps them
+with bounded inline images into a synthetic RFC 5322 message so the existing
+renderer and `cid:` resolution apply unchanged, lists normal attachments by ID
+for on-demand download, applies read/flag/move mutations, uploads drafts as
+MIME, and sends through `sendMail`. Every request uses immutable IDs so a
+message keeps its identity across folder moves. Graph change notifications
+need a public webhook, so Graph accounts rely on the regular polling interval.
+An account records its provider (`imap` or `microsoft_graph`); the bridge
+dispatches synchronization, content download, mutations, drafts, and sending
+on that field. EWS, on-premises Exchange discovery, shared/delegated mailbox
+semantics, and Exchange calendar/contact data remain separate future work.
+A connection test authenticates to IMAP and opens an authenticated SMTP
+connection without sending a message, or reads the Graph inbox folder.
+
+Remote message identity is provider-neutral. Storage keeps exactly one of an
+IMAP `UIDVALIDITY`/`UID` pair or an opaque provider ID per cached message, per
+queued mutation, and per queued draft operation; reconciliation and vanished
+removal compare complete identities, so a UIDVALIDITY change or a Graph delta
+removal is handled by the same code path. Mailboxes carry a separate
+`remote_name` (the IMAP mailbox name or the Graph folder ID) next to their
+display name, and mailbox sync states hold either the IMAP triple or a delta
+cursor.
 The current synchronization pass discovers selectable folders, prioritizes
 standard roles, and inspects up to 25 recent message bodies from every
 subscribed folder. A first UID fetch retrieves flags, headers, and
@@ -143,7 +191,16 @@ all known UIDs. Without CONDSTORE, a bounded recent flag refresh remains the
 fallback. Previously unknown new UIDs are handled before incomplete-body
 retries, with at most 25 bodies fetched per mailbox and pass.
 
-On the next synchronization after 24 hours, or immediately after an absent,
+Persistent clients start a silent synchronization after launch, poll every five
+minutes while active, and synchronize again after the application resumes. For
+the currently selected remote mailbox, the Flutter client issues bounded bridge
+waits backed by RFC 2177 IMAP IDLE when the authenticated server advertises it.
+Any unsolicited mailbox change ends the wait and triggers a silent sync; folder
+changes, offline mode, suspension, connection failure, and servers without IDLE
+fall back safely to bounded waits or periodic polling. If IDLE is available but
+QRESYNC cannot be enabled, the changed mailbox checkpoint is marked for a full
+UID reconciliation before that sync. On
+the next synchronization after 15 minutes, or immediately after an absent,
 incomplete, inconsistent, or UIDVALIDITY-mismatched checkpoint, the connector
 performs a complete `UID SEARCH ALL` safety reconciliation. The bridge then removes rows
 missing on the server or belonging to an obsolete UIDVALIDITY generation,
@@ -155,6 +212,9 @@ current UIDVALIDITY generation are accepted, then removed transactionally with
 their attachment metadata and local objects. If QRESYNC fails, synchronization
 falls back to CONDSTORE and then to the bounded/full flag path without advancing
 an unsafe checkpoint. The periodic full scan remains a defensive fallback.
+If a selective body request discovers that its exact UID has already vanished,
+the bridge removes that message and its attachment objects transactionally and
+returns a structured missing result instead of exposing a protocol error.
 
 SMTP emits `multipart/alternative` with a plain-text fallback and sanitized HTML.
 When the user selects files, that alternative part is nested in
@@ -175,7 +235,7 @@ accounts commit their cache and timestamps even when another account reports a
 credential or protocol error; the bridge returns those warnings alongside the
 refreshed snapshot.
 
-Removing an account deletes its configuration, vault credential, and cached
+Removing an account deletes its configuration, all vault secrets, and cached
 mail in one encrypted SQLite transaction. Other workspace modules and the
 server-side mailbox remain untouched.
 
@@ -540,16 +600,17 @@ core/
   search/               Local search
   plugins/              Extension runtime and permissions
 connectors/
-  mail/                 IMAP, SMTP, and legacy credential migration adapter
+  mail/                 IMAP, SMTP, MIME rendering, and legacy credential migration
+  microsoft_graph/      Microsoft Graph mail connector for Exchange Online
   caldav/
   carddav/
-  microsoft_graph/
 platform/
   windows/
   macos/
   linux/
 schemas/                 Versioned data and extension schemas
 tests/                   Unit, integration, and protocol tests
+website/                 Static Astro site for maicenta.com (EN/DE), deployed by CI
 docs/                    Additional design documentation
 ```
 

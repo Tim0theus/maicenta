@@ -1,4 +1,5 @@
 import '../../src/rust/api/workspace.dart' as rust;
+import 'oauth_service.dart';
 
 class MailFolder {
   const MailFolder({
@@ -213,6 +214,7 @@ class LocalContactItem {
 class MailAccountConfig {
   const MailAccountConfig({
     required this.id,
+    this.provider = 'imap',
     required this.displayName,
     required this.email,
     required this.imapHost,
@@ -223,10 +225,16 @@ class MailAccountConfig {
     required this.smtpPort,
     required this.smtpSecurity,
     required this.smtpUsername,
+    this.authentication = 'password',
+    this.oauthProvider,
     this.lastSyncAt,
   });
 
   final String id;
+
+  /// `imap` for the IMAP/SMTP connector or `microsoft_graph` for Exchange
+  /// Online through the Microsoft Graph API.
+  final String provider;
   final String displayName;
   final String email;
   final String imapHost;
@@ -237,6 +245,8 @@ class MailAccountConfig {
   final int smtpPort;
   final String smtpSecurity;
   final String smtpUsername;
+  final String authentication;
+  final String? oauthProvider;
   final DateTime? lastSyncAt;
 }
 
@@ -286,6 +296,16 @@ class DraftSyncOutcome {
   final List<String> warnings;
 }
 
+class MailboxIdleOutcome {
+  const MailboxIdleOutcome({
+    required this.idleSupported,
+    required this.changed,
+  });
+
+  final bool idleSupported;
+  final bool changed;
+}
+
 /// Source of message view models for the workspace.
 abstract interface class MailDataSource {
   const MailDataSource();
@@ -300,6 +320,11 @@ abstract interface class MailDataSource {
   List<MailAccountConfig> get mailAccounts;
   int get pendingMailOperations;
   bool get isPersistent;
+  bool get automaticSynchronizationEnabled;
+  Future<MailboxIdleOutcome> waitForMailboxChange(
+    String mailboxId, {
+    Duration timeout = const Duration(seconds: 110),
+  });
 
   Future<DemoMessage> saveMessage(
     DemoMessage message, {
@@ -324,7 +349,10 @@ abstract interface class MailDataSource {
     String query, {
     bool includeContent = false,
   });
-  Future<DemoMessage> loadMessageContent(DemoMessage message);
+
+  /// Returns `null` when the exact IMAP UID was removed from the server and
+  /// the stale local catalogue entry was deleted as part of the request.
+  Future<DemoMessage?> loadMessageContent(DemoMessage message);
   Future<List<DemoMessage>> loadMailboxMessages(
     String mailboxId, {
     required int offset,
@@ -342,6 +370,14 @@ abstract interface class MailDataSource {
   Future<void> saveContact(LocalContactItem contact);
   Future<void> testAccount(MailAccountConfig account, String password);
   Future<void> saveAccount(MailAccountConfig account, String password);
+  Future<void> testOAuthAccount(
+    MailAccountConfig account,
+    MailOAuthTokens tokens,
+  );
+  Future<void> saveOAuthAccount(
+    MailAccountConfig account,
+    MailOAuthTokens tokens,
+  );
   Future<WorkspaceDataSnapshot> deleteAccount(String accountId);
   Future<WorkspaceDataSnapshot> synchronizeAccounts();
   Future<DraftSyncOutcome> synchronizeDrafts(String accountId);
@@ -398,6 +434,15 @@ class DemoMailDataSource implements MailDataSource {
 
   @override
   bool get isPersistent => false;
+
+  @override
+  bool get automaticSynchronizationEnabled => false;
+
+  @override
+  Future<MailboxIdleOutcome> waitForMailboxChange(
+    String mailboxId, {
+    Duration timeout = const Duration(seconds: 110),
+  }) async => const MailboxIdleOutcome(idleSupported: false, changed: false);
 
   @override
   Future<DemoMessage> saveMessage(
@@ -468,7 +513,7 @@ class DemoMailDataSource implements MailDataSource {
   }
 
   @override
-  Future<DemoMessage> loadMessageContent(DemoMessage message) async => message;
+  Future<DemoMessage?> loadMessageContent(DemoMessage message) async => message;
 
   @override
   Future<List<DemoMessage>> loadMailboxMessages(
@@ -515,6 +560,18 @@ class DemoMailDataSource implements MailDataSource {
 
   @override
   Future<void> saveAccount(MailAccountConfig account, String password) async {}
+
+  @override
+  Future<void> testOAuthAccount(
+    MailAccountConfig account,
+    MailOAuthTokens tokens,
+  ) async {}
+
+  @override
+  Future<void> saveOAuthAccount(
+    MailAccountConfig account,
+    MailOAuthTokens tokens,
+  ) async {}
 
   @override
   Future<WorkspaceDataSnapshot> deleteAccount(String accountId) async {
@@ -630,6 +687,25 @@ class RustMailDataSource implements MailDataSource {
   bool get isPersistent => true;
 
   @override
+  bool get automaticSynchronizationEnabled => true;
+
+  @override
+  Future<MailboxIdleOutcome> waitForMailboxChange(
+    String mailboxId, {
+    Duration timeout = const Duration(seconds: 110),
+  }) async {
+    final result = await rust.waitForMailboxIdleChange(
+      databasePath: databasePath,
+      mailboxId: mailboxId,
+      timeoutSeconds: timeout.inSeconds,
+    );
+    return MailboxIdleOutcome(
+      idleSupported: result.idleSupported,
+      changed: result.changed,
+    );
+  }
+
+  @override
   Future<DemoMessage> saveMessage(
     DemoMessage message, {
     required String plainText,
@@ -716,12 +792,12 @@ class RustMailDataSource implements MailDataSource {
   }
 
   @override
-  Future<DemoMessage> loadMessageContent(DemoMessage message) async {
+  Future<DemoMessage?> loadMessageContent(DemoMessage message) async {
     final loaded = await rust.loadRemoteMessageContent(
       databasePath: databasePath,
       messageId: message.id,
     );
-    return _messageData(loaded);
+    return loaded == null ? null : _messageData(loaded);
   }
 
   @override
@@ -847,6 +923,37 @@ class RustMailDataSource implements MailDataSource {
   }
 
   @override
+  Future<void> testOAuthAccount(
+    MailAccountConfig account,
+    MailOAuthTokens tokens,
+  ) {
+    return rust.testOauthMailAccountConnection(
+      input: _mailAccountInput(account),
+      accessToken: tokens.accessToken,
+    );
+  }
+
+  @override
+  Future<void> saveOAuthAccount(
+    MailAccountConfig account,
+    MailOAuthTokens tokens,
+  ) {
+    return rust.saveOauthMailAccount(
+      databasePath: databasePath,
+      input: _mailAccountInput(account),
+      tokens: rust.OAuthTokenInput(
+        provider: tokens.provider.storageName,
+        clientId: tokens.clientId,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        expiresAtMs: tokens.expiresAt.millisecondsSinceEpoch,
+        tokenEndpoint: tokens.tokenEndpoint,
+        scopes: tokens.scopes,
+      ),
+    );
+  }
+
+  @override
   Future<WorkspaceDataSnapshot> deleteAccount(String accountId) async {
     final snapshot = await rust.deleteMailAccount(
       databasePath: databasePath,
@@ -964,6 +1071,7 @@ WorkspaceDataSnapshot _workspaceData(rust.WorkspaceSnapshot snapshot) {
         .map(
           (account) => MailAccountConfig(
             id: account.id,
+            provider: account.provider,
             displayName: account.displayName,
             email: account.email,
             imapHost: account.imapHost,
@@ -974,6 +1082,8 @@ WorkspaceDataSnapshot _workspaceData(rust.WorkspaceSnapshot snapshot) {
             smtpPort: account.smtpPort,
             smtpSecurity: account.smtpSecurity,
             smtpUsername: account.smtpUsername,
+            authentication: account.authentication,
+            oauthProvider: account.oauthProvider,
             lastSyncAt: account.lastSyncAtMs == null
                 ? null
                 : DateTime.fromMillisecondsSinceEpoch(
@@ -1033,6 +1143,7 @@ DemoMessage _messageData(rust.MessageDto message) {
 rust.MailAccountInput _mailAccountInput(MailAccountConfig account) {
   return rust.MailAccountInput(
     id: account.id,
+    provider: account.provider,
     displayName: account.displayName,
     email: account.email,
     imapHost: account.imapHost,
@@ -1099,6 +1210,13 @@ const demoFolders = <MailFolder>[
     id: 'personal.trash',
     displayName: 'Papierkorb',
     role: 'trash',
+    unreadCount: 0,
+    totalCount: 0,
+  ),
+  MailFolder(
+    id: 'personal.junk',
+    displayName: 'Spam',
+    role: 'junk',
     unreadCount: 0,
     totalCount: 0,
   ),

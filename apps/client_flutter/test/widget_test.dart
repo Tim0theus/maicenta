@@ -2,10 +2,15 @@ import 'dart:typed_data';
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:maicenta/main.dart';
+import 'package:maicenta/features/mail/account_autodiscovery.dart';
+import 'package:maicenta/features/mail/account_setup_detection.dart';
 import 'package:maicenta/features/mail/mail_data.dart';
+import 'package:maicenta/features/mail/oauth_service.dart';
+import 'package:maicenta/features/mail/safe_message_html.dart';
 
 void main() {
   testWidgets('shows the mail workspace by default', (tester) async {
@@ -26,6 +31,16 @@ void main() {
     expect(find.byKey(const Key('classic-folder-pane')), findsOneWidget);
     expect(find.byKey(const Key('classic-module-bar')), findsOneWidget);
     expect(find.byKey(const Key('classic-status-bar')), findsOneWidget);
+
+    final readingPane = find.byKey(const Key('reading-pane'));
+    final readingSubject = find.descendant(
+      of: readingPane,
+      matching: find.text('Willkommen bei MAICENTA'),
+    );
+    expect(
+      tester.getTopLeft(readingSubject).dy,
+      lessThan(tester.getTopLeft(readingPane).dy + 60),
+    );
 
     final folderPane = tester.getRect(
       find.byKey(const Key('classic-folder-pane')),
@@ -364,6 +379,118 @@ void main() {
     expect(dataSource.updatedMessages.single.mailboxId, 'personal.archive');
   });
 
+  testWidgets('right click opens Outlook-style mail actions', (tester) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const MaicentaApp());
+    await tester.tapAt(
+      tester.getCenter(find.byType(MessageTile).first),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+
+    for (final action in const [
+      'open',
+      'reply',
+      'replyAll',
+      'forward',
+      'toggleRead',
+      'toggleFlag',
+      'archive',
+      'move',
+      'spam',
+      'delete',
+    ]) {
+      expect(find.byKey(Key('mail-context-$action')), findsOneWidget);
+    }
+  });
+
+  testWidgets('context menu moves a mail into the junk folder', (tester) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final dataSource = RecordingMailDataSource();
+
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.tapAt(
+      tester.getCenter(find.byType(MessageTile).first),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('mail-context-spam')));
+    await tester.pumpAndSettle();
+
+    expect(dataSource.updatedMessages, hasLength(1));
+    expect(dataSource.updatedMessages.single.mailboxId, 'personal.junk');
+  });
+
+  testWidgets('context move submenu moves a mail to a selected folder', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final dataSource = RecordingMailDataSource();
+
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.tapAt(
+      tester.getCenter(find.byType(MessageTile).first),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('mail-context-move')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('mail-context-move-personal.archive')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(dataSource.updatedMessages, hasLength(1));
+    expect(dataSource.updatedMessages.single.mailboxId, 'personal.archive');
+  });
+
+  testWidgets('junk context menu offers not spam and restores the inbox', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const junkMessage = DemoMessage(
+      id: 'message.junk',
+      mailboxId: 'personal.junk',
+      sender: 'Newsletter',
+      email: 'news@example.org',
+      subject: 'Kein Spam',
+      preview: 'Nachricht',
+      body: '<p>Nachricht</p>',
+      time: 'Jetzt',
+    );
+    final dataSource = RecordingMailDataSource(
+      configuredMessages: const [junkMessage],
+    );
+
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.tap(find.byKey(const Key('folder-personal.junk')));
+    await tester.pumpAndSettle();
+    await tester.tapAt(
+      tester.getCenter(find.byType(MessageTile).first),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('mail-context-notSpam')), findsOneWidget);
+    expect(find.byKey(const Key('mail-context-spam')), findsNothing);
+    await tester.tap(find.byKey(const Key('mail-context-notSpam')));
+    await tester.pumpAndSettle();
+    expect(dataSource.updatedMessages.single.mailboxId, 'personal.inbox');
+  });
+
   testWidgets('adds, reorders and removes favorite folders by drag and drop', (
     tester,
   ) async {
@@ -680,6 +807,135 @@ void main() {
     expect(find.textContaining('Nachgeladener Inhalt'), findsWidgets);
   });
 
+  testWidgets('removes a catalogue entry whose IMAP UID vanished', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const vanished = DemoMessage(
+      id: 'message.vanished',
+      accountId: 'account.work',
+      mailboxId: 'personal.inbox',
+      sender: 'Server',
+      email: 'server@example.org',
+      subject: 'Inzwischen gelöscht',
+      preview: '',
+      body: '',
+      time: 'Gestern',
+    );
+    final dataSource = RecordingMailDataSource(
+      configuredAccounts: const [
+        MailAccountConfig(
+          id: 'account.work',
+          displayName: 'Arbeit',
+          email: 'user@example.org',
+          imapHost: 'imap.example.org',
+          imapPort: 993,
+          imapSecurity: 'tls',
+          imapUsername: 'user@example.org',
+          smtpHost: 'smtp.example.org',
+          smtpPort: 587,
+          smtpSecurity: 'starttls',
+          smtpUsername: 'user@example.org',
+        ),
+      ],
+      configuredMessages: const [vanished],
+      messageRemovedOnLoad: true,
+    );
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.tap(find.text('Inzwischen gelöscht').first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(dataSource.loadMessageContentCalls, 1);
+    expect(find.text('Inzwischen gelöscht'), findsNothing);
+    expect(
+      find.textContaining('inzwischen auf dem IMAP-Server entfernt'),
+      findsOneWidget,
+    );
+    expect(find.text('Nachrichteninhalt nicht verfügbar'), findsNothing);
+  });
+
+  testWidgets(
+    'starts automatic IMAP synchronization for a persistent profile',
+    (tester) async {
+      final dataSource = RecordingMailDataSource(
+        automaticSynchronization: true,
+        configuredAccounts: const [
+          MailAccountConfig(
+            id: 'account.work',
+            displayName: 'Arbeit',
+            email: 'user@example.org',
+            imapHost: 'imap.example.org',
+            imapPort: 993,
+            imapSecurity: 'tls',
+            imapUsername: 'user@example.org',
+            smtpHost: 'smtp.example.org',
+            smtpPort: 587,
+            smtpSecurity: 'starttls',
+            smtpUsername: 'user@example.org',
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+      await tester.pumpAndSettle();
+
+      expect(dataSource.synchronizeCalls, 1);
+      expect(find.text('IMAP-Synchronisierung läuft …'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('an IMAP IDLE notification triggers background synchronization', (
+    tester,
+  ) async {
+    final dataSource = RecordingMailDataSource(
+      automaticSynchronization: true,
+      configuredAccounts: const [
+        MailAccountConfig(
+          id: 'account.work',
+          displayName: 'Arbeit',
+          email: 'user@example.org',
+          imapHost: 'imap.example.org',
+          imapPort: 993,
+          imapSecurity: 'tls',
+          imapUsername: 'user@example.org',
+          smtpHost: 'smtp.example.org',
+          smtpPort: 587,
+          smtpSecurity: 'starttls',
+          smtpUsername: 'user@example.org',
+        ),
+      ],
+      configuredFolders: const [
+        MailFolder(
+          id: 'account.work.inbox',
+          accountId: 'account.work',
+          displayName: 'INBOX',
+          role: 'inbox',
+          unreadCount: 0,
+          totalCount: 0,
+        ),
+      ],
+      configuredFavoriteFolderIds: const ['account.work.inbox'],
+      configuredMessages: const [],
+      idleOutcomes: const [
+        MailboxIdleOutcome(idleSupported: true, changed: true),
+        MailboxIdleOutcome(idleSupported: false, changed: false),
+      ],
+    );
+
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.pumpAndSettle();
+
+    expect(dataSource.waitForMailboxChangeCalls, 2);
+    expect(dataSource.synchronizeCalls, 2);
+    expect(find.text('IMAP-Synchronisierung läuft …'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('shows a readable startup error', (tester) async {
     await tester.pumpWidget(const StartupFailureApp(message: 'database error'));
 
@@ -908,6 +1164,68 @@ void main() {
     );
     expect(find.byKey(const Key('sanitized-html-body')), findsOneWidget);
     expect(find.textContaining('Local-first software'), findsWidgets);
+  });
+
+  test('external mail images require explicit consent', () {
+    var allowed = false;
+    final factory = SafeMailWidgetFactory(allowRemoteImages: () => allowed);
+    const encoded =
+        'https%3A%2F%2Fimages.example.org%2Fnewsletter.png%3Fid%3D42';
+    const inertUrl = '$blockedRemoteImageScheme$encoded';
+
+    expect(factory.imageProviderFromNetwork(inertUrl), isNull);
+    allowed = true;
+    final provider = factory.imageProviderFromNetwork(inertUrl);
+
+    expect(provider, isA<NetworkImage>());
+    expect(
+      (provider! as NetworkImage).url,
+      'https://images.example.org/newsletter.png?id=42',
+    );
+    expect(
+      hasUnresolvedMessageImages('<p>Text</p><img alt="Altes Bild">'),
+      isTrue,
+    );
+  });
+
+  testWidgets('offers external images for an image-only remote message', (
+    tester,
+  ) async {
+    const message = DemoMessage(
+      id: 'message.remote-image',
+      accountId: 'account.remote',
+      mailboxId: 'account.remote.spam',
+      sender: 'Newsletter',
+      email: 'news@example.org',
+      subject: 'Nur ein Bild',
+      preview: '',
+      body:
+          '<img alt="Newsletter" src="maicenta-blocked-image:https%3A%2F%2Fimages.example.org%2Fmail.png">',
+      time: 'Jetzt',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ReadingPane(
+            message: message,
+            onReply: () {},
+            onForward: () {},
+            onEditDraft: () {},
+            onSaveAttachment: (_) {},
+            zoom: 1,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('reading-load-external-content')), findsOne);
+    expect(find.text('Bilder laden'), findsOneWidget);
+    expect(
+      find.textContaining('möglicherweise nur aus externen Bildern'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('shows and opens a locally stored attachment', (tester) async {
@@ -1559,8 +1877,10 @@ void main() {
     expect(dataSource.savedTasks.last.done, isTrue);
   });
 
-  testWidgets('tests complete IMAP and SMTP account settings', (tester) async {
-    tester.view.physicalSize = const Size(1200, 1000);
+  testWidgets('enters manual server settings when nothing is detected', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1100);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -1570,6 +1890,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: AccountSetupDialog(
+            onDetect: (email) async => _manualOnlyDetection(email),
             onTest: (account, password) async {
               testedAccount = account;
               expect(password, 'app-password');
@@ -1578,14 +1899,15 @@ void main() {
         ),
       ),
     );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Kontoname'),
-      'Arbeit',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'E-Mail-Adresse'),
-      'user@example.org',
-    );
+    expect(find.byKey(const Key('account-identity-step')), findsOneWidget);
+    expect(find.byKey(const Key('account-password')), findsNothing);
+    await _enterIdentity(tester, 'Arbeit', 'user@example.org');
+    await tester.tap(find.byKey(const Key('account-continue')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('account-method-step')), findsOneWidget);
+    expect(find.textContaining('kein Anbieter'), findsOneWidget);
+    expect(find.byKey(const Key('account-manual-settings')), findsOneWidget);
     await tester.enterText(
       find.widgetWithText(TextField, 'Server').at(0),
       'imap.example.org',
@@ -1601,12 +1923,154 @@ void main() {
     await tester.tap(find.byKey(const Key('account-test')));
     await tester.pumpAndSettle();
 
+    expect(testedAccount?.imapHost, 'imap.example.org');
     expect(testedAccount?.imapUsername, 'user@example.org');
     expect(testedAccount?.smtpUsername, 'user@example.org');
+    expect(testedAccount?.authentication, 'password');
+    expect(find.text('Verbindung erfolgreich geprüft.'), findsOneWidget);
+  });
+
+  testWidgets('recommends detected IMAP servers and asks only for a password', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    MailAccountConfig? testedAccount;
+    String? detectedAddress;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AccountSetupDialog(
+            onDetect: (email) async {
+              detectedAddress = email;
+              return _imapDetection(email);
+            },
+            onTest: (account, password) async {
+              testedAccount = account;
+              expect(password, 'app-password');
+            },
+          ),
+        ),
+      ),
+    );
+    await _enterIdentity(tester, 'Arbeit', 'user@example.org');
+    await tester.tap(find.byKey(const Key('account-continue')));
+    await tester.pumpAndSettle();
+
+    expect(detectedAddress, 'user@example.org');
     expect(
-      find.text('IMAP und SMTP wurden erfolgreich geprüft.'),
+      find.byKey(const Key('account-method-imapPassword')),
       findsOneWidget,
     );
+    expect(find.byKey(const Key('account-detected-servers')), findsOneWidget);
+    expect(find.byKey(const Key('account-manual-settings')), findsNothing);
+    expect(find.text('Empfohlen'), findsOneWidget);
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Passwort deines E-Mail-Postfachs'),
+      'app-password',
+    );
+    await tester.tap(find.byKey(const Key('account-test')));
+    await tester.pumpAndSettle();
+
+    expect(testedAccount?.imapHost, 'mail.example.org');
+    expect(testedAccount?.imapPort, 993);
+    expect(testedAccount?.smtpHost, 'mail.example.org');
+    expect(testedAccount?.smtpPort, 587);
+    expect(find.text('Verbindung erfolgreich geprüft.'), findsOneWidget);
+  });
+
+  testWidgets('saves a newly detected account in one step', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    AccountSetupResult? result;
+    var connectionTests = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            key: const Key('open-auto-account'),
+            onPressed: () async {
+              result = await showDialog<AccountSetupResult>(
+                context: context,
+                builder: (_) => AccountSetupDialog(
+                  onDetect: (email) async => _imapDetection(email),
+                  onTest: (_, password) async {
+                    connectionTests += 1;
+                    expect(password, 'app-password');
+                  },
+                ),
+              );
+            },
+            child: const Text('Öffnen'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('open-auto-account')));
+    await tester.pumpAndSettle();
+    await _enterIdentity(tester, 'Arbeit', 'user@example.org');
+    await tester.tap(find.byKey(const Key('account-continue')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Passwort deines E-Mail-Postfachs'),
+      'app-password',
+    );
+    await tester.tap(find.byKey(const Key('account-save')));
+    await tester.pumpAndSettle();
+
+    expect(connectionTests, 1);
+    expect(result?.account.imapHost, 'mail.example.org');
+    expect(result?.account.smtpPort, 587);
+    expect(result?.account.provider, 'imap');
+    expect(result?.password, 'app-password');
+  });
+
+  testWidgets('lets the user override the recommendation with manual servers', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AccountSetupDialog(
+            onDetect: (email) async => _imapDetection(email),
+            onTest: (_, _) async {},
+          ),
+        ),
+      ),
+    );
+    await _enterIdentity(tester, 'Arbeit', 'user@example.org');
+    await tester.tap(find.byKey(const Key('account-continue')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('account-manual-settings')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('account-method-manual')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('account-manual-settings')), findsOneWidget);
+    expect(find.byKey(const Key('account-imap-host')), findsOneWidget);
+    // The detected servers are prefilled so the user only adjusts what differs.
+    final imapHostField = tester.widget<TextField>(
+      find.descendant(
+        of: find.byKey(const Key('account-imap-host')),
+        matching: find.byType(TextField),
+      ),
+    );
+    expect(imapHostField.controller?.text, 'mail.example.org');
+
+    await tester.tap(find.byKey(const Key('account-back')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('account-identity-step')), findsOneWidget);
   });
 
   testWidgets('edits an existing account without re-entering its password', (
@@ -1636,6 +2100,7 @@ void main() {
                 context: context,
                 builder: (_) => AccountSetupDialog(
                   existing: account,
+                  onDetect: (_) async => fail('editing must not re-detect'),
                   onTest: (_, _) async {},
                 ),
               );
@@ -1647,13 +2112,225 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('open-existing-account')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('account-method-step')), findsOneWidget);
+    expect(find.byKey(const Key('account-back')), findsNothing);
+    expect(find.byKey(const Key('account-manual-settings')), findsOneWidget);
     await tester.tap(find.byKey(const Key('account-save')));
     await tester.pumpAndSettle();
 
     expect(result?.account.id, 'account.work');
+    expect(result?.account.imapHost, 'imap.example.org');
     expect(result?.password, isEmpty);
   });
+
+  testWidgets('connects Exchange Online classically through OAuth and IMAP', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    MailAccountConfig? testedAccount;
+    MailOAuthTokens? testedTokens;
+    AccountSetupResult? result;
+    final tokens = MailOAuthTokens(
+      provider: MailOAuthProvider.microsoft365,
+      clientId: 'public-client-id',
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      expiresAt: DateTime.utc(2030),
+      tokenEndpoint:
+          'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+      scopes: 'offline_access https://outlook.office.com/SMTP.Send',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            key: const Key('open-oauth-account'),
+            onPressed: () async {
+              result = await showDialog<AccountSetupResult>(
+                context: context,
+                builder: (_) => AccountSetupDialog(
+                  onDetect: (email) async => _microsoftDetection(email),
+                  onTest: (_, _) async {},
+                  onAuthorizeOAuth: (provider, address) async {
+                    expect(provider, MailOAuthProvider.microsoft365);
+                    expect(address, 'alex@example.org');
+                    return tokens;
+                  },
+                  onTestOAuth: (account, authorizedTokens) async {
+                    testedAccount = account;
+                    testedTokens = authorizedTokens;
+                  },
+                ),
+              );
+            },
+            child: const Text('Öffnen'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('open-oauth-account')));
+    await tester.pumpAndSettle();
+    await _enterIdentity(tester, 'Exchange', 'alex@example.org');
+    await tester.tap(find.byKey(const Key('account-continue')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Microsoft 365 registriert'), findsOneWidget);
+
+    // The user prefers the classic protocols over the recommendation.
+    await tester.tap(find.byKey(const Key('account-method-microsoftImap')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('account-oauth-login')));
+    await tester.pumpAndSettle();
+
+    expect(testedTokens, same(tokens));
+    expect(testedAccount?.authentication, 'oauth2');
+    expect(testedAccount?.provider, 'imap');
+    expect(testedAccount?.oauthProvider, 'microsoft365');
+    expect(testedAccount?.imapHost, 'outlook.office365.com');
+    expect(testedAccount?.smtpHost, 'smtp.office365.com');
+    // A successful sign-in finishes the setup without a second click.
+    expect(result?.oauthTokens, same(tokens));
+    expect(result?.account.oauthProvider, 'microsoft365');
+    expect(find.byKey(const Key('account-method-step')), findsNothing);
+  });
+
+  testWidgets('recommends the Microsoft Graph API for Microsoft 365 domains', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    MailAccountConfig? testedAccount;
+    AccountSetupResult? result;
+    final tokens = MailOAuthTokens(
+      provider: MailOAuthProvider.microsoftGraph,
+      clientId: 'public-client-id',
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      expiresAt: DateTime.utc(2030),
+      tokenEndpoint:
+          'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+      scopes: 'offline_access https://graph.microsoft.com/Mail.ReadWrite',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            key: const Key('open-graph-account'),
+            onPressed: () async {
+              result = await showDialog<AccountSetupResult>(
+                context: context,
+                builder: (_) => AccountSetupDialog(
+                  onDetect: (email) async => _microsoftDetection(email),
+                  onTest: (_, _) async {},
+                  onAuthorizeOAuth: (provider, address) async {
+                    expect(provider, MailOAuthProvider.microsoftGraph);
+                    return tokens;
+                  },
+                  onTestOAuth: (account, authorizedTokens) async {
+                    testedAccount = account;
+                  },
+                ),
+              );
+            },
+            child: const Text('Öffnen'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('open-graph-account')));
+    await tester.pumpAndSettle();
+    await _enterIdentity(tester, 'Exchange Graph', 'alex@example.org');
+    await tester.tap(find.byKey(const Key('account-continue')));
+    await tester.pumpAndSettle();
+
+    // No protocol vocabulary in the main view; the recommendation is
+    // preselected and the sign-in button speaks plainly.
+    expect(find.text('Mit Microsoft anmelden'), findsOneWidget);
+    expect(find.byKey(const Key('account-manual-settings')), findsNothing);
+    expect(find.byKey(const Key('account-password')), findsNothing);
+    expect(find.text('Empfohlen'), findsOneWidget);
+    // One primary action only; no duplicate "Anmelden und testen" row.
+    expect(find.byKey(const Key('account-test')), findsNothing);
+    expect(find.byKey(const Key('account-save')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('account-oauth-login')));
+    await tester.pumpAndSettle();
+
+    expect(testedAccount?.authentication, 'oauth2');
+    expect(testedAccount?.provider, 'microsoft_graph');
+    expect(testedAccount?.oauthProvider, 'microsoft_graph');
+    expect(testedAccount?.imapUsername, 'alex@example.org');
+    expect(result?.account.provider, 'microsoft_graph');
+    expect(result?.oauthTokens, same(tokens));
+  });
 }
+
+Future<void> _enterIdentity(
+  WidgetTester tester,
+  String name,
+  String address,
+) async {
+  await tester.enterText(find.widgetWithText(TextField, 'Kontoname'), name);
+  await tester.enterText(
+    find.widgetWithText(TextField, 'E-Mail-Adresse'),
+    address,
+  );
+}
+
+const _detectedServers = DiscoveredMailSettings(
+  imapHost: 'mail.example.org',
+  imapPort: 993,
+  imapSecurity: 'tls',
+  imapUsername: 'user@example.org',
+  smtpHost: 'mail.example.org',
+  smtpPort: 587,
+  smtpSecurity: 'starttls',
+  smtpUsername: 'user@example.org',
+  source: 'DNS-SRV',
+);
+
+MailSetupDetection _manualOnlyDetection(String email) => MailSetupDetection(
+  emailAddress: email,
+  suggestions: const [
+    MailSetupSuggestion(method: MailSetupMethod.manual, recommended: true),
+  ],
+  summary: 'Für example.org wurde kein Anbieter automatisch erkannt.',
+);
+
+MailSetupDetection _imapDetection(String email) => MailSetupDetection(
+  emailAddress: email,
+  suggestions: const [
+    MailSetupSuggestion(
+      method: MailSetupMethod.imapPassword,
+      settingsCandidates: [_detectedServers],
+      recommended: true,
+    ),
+    MailSetupSuggestion(
+      method: MailSetupMethod.manual,
+      settingsCandidates: [_detectedServers],
+    ),
+  ],
+  summary: 'Servereinstellungen für example.org gefunden (DNS-SRV).',
+);
+
+MailSetupDetection _microsoftDetection(String email) => MailSetupDetection(
+  emailAddress: email,
+  suggestions: const [
+    MailSetupSuggestion(
+      method: MailSetupMethod.microsoftGraph,
+      recommended: true,
+    ),
+    MailSetupSuggestion(method: MailSetupMethod.microsoftImap),
+    MailSetupSuggestion(method: MailSetupMethod.manual),
+  ],
+  summary: 'Die Domain example.org ist bei Microsoft 365 registriert.',
+);
 
 class RecordingMailDataSource implements MailDataSource {
   RecordingMailDataSource({
@@ -1668,6 +2345,9 @@ class RecordingMailDataSource implements MailDataSource {
     this.configuredMessages = demoMessages,
     this.configuredSearchResults,
     this.loadedMessage,
+    this.messageRemovedOnLoad = false,
+    this.automaticSynchronization = false,
+    this.idleOutcomes = const [],
     this.configuredMailboxPage = const [],
     this.syncCatalogRemaining = const [],
     this.syncDeltaMailboxes = 0,
@@ -1684,6 +2364,9 @@ class RecordingMailDataSource implements MailDataSource {
   final List<DemoMessage> configuredMessages;
   final List<DemoMessage>? configuredSearchResults;
   final DemoMessage? loadedMessage;
+  final bool messageRemovedOnLoad;
+  final bool automaticSynchronization;
+  final List<MailboxIdleOutcome> idleOutcomes;
   final List<DemoMessage> configuredMailboxPage;
   final List<int> syncCatalogRemaining;
   final int syncDeltaMailboxes;
@@ -1692,6 +2375,7 @@ class RecordingMailDataSource implements MailDataSource {
   final DraftSyncOutcome draftSyncOutcome;
   int pendingOperations;
   int synchronizeCalls = 0;
+  int waitForMailboxChangeCalls = 0;
   int draftSynchronizeCalls = 0;
   final List<String> draftSynchronizedAccountIds = [];
   int searchCalls = 0;
@@ -1764,6 +2448,20 @@ class RecordingMailDataSource implements MailDataSource {
 
   @override
   bool get isPersistent => true;
+
+  @override
+  bool get automaticSynchronizationEnabled => automaticSynchronization;
+
+  @override
+  Future<MailboxIdleOutcome> waitForMailboxChange(
+    String mailboxId, {
+    Duration timeout = const Duration(seconds: 110),
+  }) async {
+    final index = waitForMailboxChangeCalls++;
+    return index < idleOutcomes.length
+        ? idleOutcomes[index]
+        : const MailboxIdleOutcome(idleSupported: false, changed: false);
+  }
 
   @override
   Future<DemoMessage> saveMessage(
@@ -1857,8 +2555,9 @@ class RecordingMailDataSource implements MailDataSource {
   }
 
   @override
-  Future<DemoMessage> loadMessageContent(DemoMessage message) async {
+  Future<DemoMessage?> loadMessageContent(DemoMessage message) async {
     loadMessageContentCalls += 1;
+    if (messageRemovedOnLoad) return null;
     return loadedMessage ?? message;
   }
 
@@ -1916,6 +2615,18 @@ class RecordingMailDataSource implements MailDataSource {
 
   @override
   Future<void> saveAccount(MailAccountConfig account, String password) async {}
+
+  @override
+  Future<void> testOAuthAccount(
+    MailAccountConfig account,
+    MailOAuthTokens tokens,
+  ) async {}
+
+  @override
+  Future<void> saveOAuthAccount(
+    MailAccountConfig account,
+    MailOAuthTokens tokens,
+  ) async {}
 
   @override
   Future<WorkspaceDataSnapshot> deleteAccount(String accountId) async {

@@ -61,8 +61,8 @@ their data unless the user explicitly chooses to remove it.
 ## Current status
 
 The repository contains a runnable local desktop alpha. In addition to the
-offline demonstration mailbox, it can configure multiple password-based
-IMAP/SMTP accounts, discover their folders, progressively catalogue compact
+offline demonstration mailbox, it can configure multiple password- or
+OAuth-backed IMAP/SMTP accounts, discover their folders, progressively catalogue compact
 headers from every subscribed selectable folder, download a bounded set of recent message
 bodies, and send standards-oriented HTML mail with a plain-text alternative and
 file attachments through SMTP. Incoming sync retains sender, recipient,
@@ -117,6 +117,13 @@ their account heading to remove the shortcut. The exact favorite order is
 stored in the encrypted profile. Files dropped from Finder, Explorer, or a
 Linux file manager onto the compose window become attachments and follow the
 same ten-file/18-MiB validation as the native file picker.
+
+Message rows also provide an Outlook-style right-click menu for opening,
+replying, forwarding, changing read and follow-up state, archiving, moving,
+deleting, and moving messages into or out of the account's spam folder.
+Account-local changes use the same durable IMAP operation queue as drag and
+drop, so they remain available offline and synchronize when the account is
+online again.
 
 The desktop chrome, folder and message panes, dialogs, composer, and dedicated
 message window support a profile-specific dark mode. It can be changed through
@@ -178,17 +185,74 @@ flutter pub get
 flutter run -d macos    # or windows / linux
 ```
 
-Open **Datei → Kontoeinstellungen → Konto hinzufügen** to enter IMAP and SMTP
-settings, test both connections, and save the account. Saving starts the first
-synchronization. The mail reading pane renders downloaded MIME messages as
+Open **Datei → Kontoeinstellungen → Konto hinzufügen**, enter a name and the
+e-mail address, and choose **Weiter**. MAICENTA probes public, password-free
+signals for the domain and recommends a setup: Microsoft 365 when the domain is
+registered in Entra ID or its MX records point to Exchange Online, Google when
+mail is hosted by Google, otherwise the IMAP/SMTP servers found through domain
+autoconfig, DNS SRV, or the Mozilla provider database. The recommendation is
+preselected but never final: every other supported method stays one click away,
+for example when a company domain is registered with Microsoft 365 but the
+mailbox actually lives on the company's own IMAP server. Protocol details are
+shown under **Erweitert**. Saving starts the first synchronization. The mail reading pane renders downloaded MIME messages as
 sanitized HTML, blocks active and remote content, and does not automatically
 open external links. Reply and forward actions open a prefilled rich-text
 compose window.
 
+Microsoft 365/Exchange Online and Google Workspace/Gmail accounts sign in
+through the browser. MAICENTA opens a platform authentication session, uses an
+Authorization Code flow with PKCE, validates the mailbox access, and stores
+access and refresh tokens only in the encrypted profile. For Microsoft 365 the
+recommended method uses the Graph API, which also works when the tenant has
+disabled IMAP or SMTP AUTH; the classic IMAP/SMTP variant with XOAUTH2 remains
+available as an alternative. A native app
+does not contain an OAuth client secret.
+
+Like Thunderbird or Outlook, MAICENTA identifies itself to the identity
+provider with a public client ID that is compiled into the app, so users never
+create their own app registration. The project's IDs live in
+`apps/client_flutter/lib/features/mail/oauth_client_ids.dart`. The Microsoft
+registration is a single multi-tenant Entra ID app ("Accounts in any
+organizational directory and personal Microsoft accounts") with public client
+flows enabled, the redirect URIs listed below, and the delegated permissions
+`Mail.ReadWrite`, `Mail.Send`, `offline_access`, `openid`, `profile`, `email`
+(Microsoft Graph) plus `IMAP.AccessAsUser.All` and `SMTP.Send` (Office 365
+Exchange Online). Whether a work or school user may consent to these
+permissions themselves is decided by their tenant's consent policy; many
+organizations require a one-time admin consent for any third-party mail client,
+MAICENTA included. Publisher verification of the registration removes the
+"unverified publisher" notice on the consent screen and is required by tenants
+that only allow verified publishers.
+
+Forks and development builds can override the built-in IDs with their own
+registrations:
+
+```sh
+flutter run -d macos \
+  --dart-define=MAICENTA_MICROSOFT_OAUTH_CLIENT_ID=<public-client-id> \
+  --dart-define=MAICENTA_GOOGLE_OAUTH_CLIENT_ID=<public-client-id>
+```
+
+Register `com.maicenta.app://oauth2redirect` for macOS and Android builds. On
+Windows and Linux, register `http://localhost:43821/oauth2redirect`; those
+targets use the external browser and a temporary loopback listener instead of
+an embedded WebView. A provider-specific URI can be passed with
+`--dart-define=MAICENTA_OAUTH_REDIRECT_URI=<uri>` and must also be configured
+for the target platform. Provider consent, tenant policy, Google verification,
+and enabled IMAP/SMTP AUTH remain prerequisites outside MAICENTA.
+
 Current account limitations are important:
 
-- Authentication uses a password or provider-issued app password. OAuth 2.0,
-  including modern Microsoft 365 sign-in, is not implemented yet.
+- Authentication supports a password/app password or OAuth 2.0 with PKCE and
+  automatic refresh for Microsoft 365/Exchange Online and Google. Exchange
+  Online can be connected in two ways: through its standards endpoints (IMAP
+  and SMTP with XOAUTH2) or through the Microsoft Graph API for tenants where
+  IMAP/SMTP AUTH is disabled. The Graph variant requires the delegated
+  `Mail.ReadWrite` and `Mail.Send` permissions on the same app registration,
+  synchronizes with per-folder delta queries, and has no push notifications;
+  the regular polling interval applies. On-premises Exchange/EWS, shared
+  mailboxes, delegation, tenant administration, and Exchange calendar/contact
+  sync are not implemented yet.
 - Incoming synchronization reads every subscribed selectable folder and
   downloads up to 25 recent bounded display bodies per folder on the first
   pass, then up to 25 new or previously incomplete bodies per pass. Compact
@@ -216,11 +280,17 @@ Current account limitations are important:
   bounded and reports an explicit warning when a declared section is missing,
   unsupported, or over its safety limit. Completed mailboxes use persisted
   UIDNEXT checkpoints for new-message ranges. Servers advertising CONDSTORE
-  additionally use HIGHESTMODSEQ/CHANGEDSINCE for flag deltas. The next
-  synchronization after a checkpoint becomes 24 hours old performs a complete
+  additionally use HIGHESTMODSEQ/CHANGEDSINCE for flag deltas. Persistent
+  profiles synchronize silently at startup, every five minutes while active,
+  and after the app resumes. While a real IMAP folder is open, servers
+  advertising RFC 2177 IDLE can trigger that background synchronization
+  immediately; unsupported servers retain polling. The next synchronization after a checkpoint
+  becomes 15 minutes old performs a complete
   `UID SEARCH ALL` safety reconciliation. On servers advertising QRESYNC,
   `VANISHED` deltas remove generation-matched local messages and attachments
   immediately; the periodic reconciliation remains as a defensive fallback.
+  An on-demand body fetch that finds a vanished UID also removes that stale
+  local catalogue entry and its cached attachments immediately.
   Detailed per-message progress,
   cancellation, additional inline formats, permanent
   deletion, remote folder creation/renaming, and automatic full-history body or

@@ -6,8 +6,9 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `attachment_content_type`, `attachment_object_path`, `cache_remote_message`, `calendar_event_dto`, `cleanup_import_backups`, `compact_preview`, `contact_dto`, `copy_local_attachment`, `current_timestamp_ms`, `draft_recipient_list`, `import_backup_path`, `install_staged_profile`, `load_account_password`, `load_outgoing_attachments`, `load_snapshot`, `load_stored_outgoing_attachments`, `mail_account_dto`, `mail_account_from_input`, `mailbox_dto`, `mailbox_role_name`, `message_dto`, `message_dtos`, `migrate_legacy_credentials`, `open_profile_store`, `parse_transport_security`, `persist_attachment_objects`, `plain_text_as_html`, `profile_object_root`, `profile_vault`, `prototype_body`, `prototype_mailbox`, `prototype_messages`, `remote_mailbox_id`, `remote_message_id`, `remove_attachment_objects`, `replace_cached_vault`, `rollback_imported_profile`, `seed_prototype`, `synchronize_account`, `synchronize_pending_drafts`, `synchronized_draft_ids`, `task_dto`, `transport_security_name`, `upgrade_prototype_content`, `validate_combined_outgoing_attachments`, `validate_draft_metadata`, `validate_outgoing_attachment_set`, `validated_display_name`, `validated_server_name`, `validated_text`, `write_exported_attachment`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AccountSyncReport`
+// These functions are ignored because they are not marked as `pub`: `attachment_content_type`, `attachment_object_path`, `cache_remote_message`, `calendar_event_dto`, `cleanup_import_backups`, `compact_preview`, `connector_credential`, `contact_dto`, `copy_local_attachment`, `current_timestamp_ms`, `draft_recipient_list`, `imap_identities`, `import_backup_path`, `install_staged_profile`, `load_account_credential`, `load_outgoing_attachments`, `load_snapshot`, `load_stored_outgoing_attachments`, `mail_account_dto`, `mail_account_from_input`, `mail_provider_name`, `mailbox_dto`, `mailbox_role_name`, `message_dto`, `message_dtos`, `migrate_legacy_credentials`, `oauth_access_token`, `open_profile_store`, `parse_mail_provider`, `parse_transport_security`, `persist_attachment_objects`, `plain_text_as_html`, `profile_object_root`, `profile_vault`, `prototype_body`, `prototype_mailbox`, `prototype_messages`, `remote_mailbox_id`, `remote_message_id`, `remove_attachment_objects`, `remove_oauth_secrets`, `replace_cached_vault`, `required_secret`, `rollback_imported_profile`, `seed_prototype`, `synchronize_account`, `synchronize_graph_account`, `synchronize_imap_account`, `synchronize_pending_drafts`, `synchronized_draft_ids`, `task_dto`, `transport_security_name`, `upgrade_prototype_content`, `validate_combined_outgoing_attachments`, `validate_draft_metadata`, `validate_oauth_provider_for_account`, `validate_oauth_token_endpoint`, `validate_oauth_token_input`, `validate_outgoing_attachment_set`, `validated_display_name`, `validated_server_name`, `validated_text`, `write_exported_attachment`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AccountSyncReport`, `CachedRemoteInput`, `PendingDraftUpload`, `RemoteAttachmentDescriptor`, `StoredMailCredential`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `from`, `from`
 
 /// Opens the local profile database and returns its mail workspace snapshot.
 ///
@@ -90,12 +91,32 @@ Future<MessageDto> saveLocalMessage({
 ///
 /// Returns an error when the remote identity is stale, the account credential
 /// is unavailable, or the bounded IMAP body download cannot be persisted.
-Future<MessageDto> loadRemoteMessageContent({
+Future<MessageDto?> loadRemoteMessageContent({
   required String databasePath,
   required String messageId,
 }) => RustLib.instance.api.crateApiWorkspaceLoadRemoteMessageContent(
   databasePath: databasePath,
   messageId: messageId,
+);
+
+/// Waits for a push-style IMAP IDLE notification on one configured mailbox.
+///
+/// The call is bounded by `timeout_seconds`. If the server lacks QRESYNC, a
+/// received IDLE notification marks only this mailbox for a full UID safety
+/// reconciliation during the immediately following synchronization.
+///
+/// # Errors
+///
+/// Returns an account, credential, connection, or protocol error. Local and
+/// virtual folders return an unsupported result without opening a connection.
+Future<MailboxIdleDto> waitForMailboxIdleChange({
+  required String databasePath,
+  required String mailboxId,
+  required int timeoutSeconds,
+}) => RustLib.instance.api.crateApiWorkspaceWaitForMailboxIdleChange(
+  databasePath: databasePath,
+  mailboxId: mailboxId,
+  timeoutSeconds: timeoutSeconds,
 );
 
 /// Saves one cached or server-backed attachment to a user-selected destination.
@@ -308,6 +329,21 @@ Future<void> saveMailAccount({
   password: password,
 );
 
+/// Saves an OAuth-backed IMAP/SMTP account and its refreshable token set in
+/// the encrypted profile vault.
+///
+/// Native applications must use Authorization Code + PKCE and must not ship a
+/// client secret. The refresh token never crosses back into Flutter snapshots.
+Future<void> saveOauthMailAccount({
+  required String databasePath,
+  required MailAccountInput input,
+  required OAuthTokenInput tokens,
+}) => RustLib.instance.api.crateApiWorkspaceSaveOauthMailAccount(
+  databasePath: databasePath,
+  input: input,
+  tokens: tokens,
+);
+
 /// Deletes an account, its cached mail, and its vault credential.
 ///
 /// Calendar entries, tasks, contacts, and other accounts are not affected.
@@ -335,6 +371,16 @@ Future<void> testMailAccountConnection({
 }) => RustLib.instance.api.crateApiWorkspaceTestMailAccountConnection(
   input: input,
   password: password,
+);
+
+/// Tests IMAP and SMTP with a short-lived OAuth access token without storing
+/// either the configuration or token.
+Future<void> testOauthMailAccountConnection({
+  required MailAccountInput input,
+  required String accessToken,
+}) => RustLib.instance.api.crateApiWorkspaceTestOauthMailAccountConnection(
+  input: input,
+  accessToken: accessToken,
 );
 
 /// Pushes queued draft creates, edits, and removals for one account without
@@ -645,6 +691,9 @@ class LocalTaskInput {
 
 class MailAccountDto {
   final String id;
+
+  /// `imap` for the standards connector or `microsoft_graph`.
+  final String provider;
   final String displayName;
   final String email;
   final String imapHost;
@@ -655,10 +704,13 @@ class MailAccountDto {
   final int smtpPort;
   final String smtpSecurity;
   final String smtpUsername;
+  final String authentication;
+  final String? oauthProvider;
   final PlatformInt64? lastSyncAtMs;
 
   const MailAccountDto({
     required this.id,
+    required this.provider,
     required this.displayName,
     required this.email,
     required this.imapHost,
@@ -669,12 +721,15 @@ class MailAccountDto {
     required this.smtpPort,
     required this.smtpSecurity,
     required this.smtpUsername,
+    required this.authentication,
+    this.oauthProvider,
     this.lastSyncAtMs,
   });
 
   @override
   int get hashCode =>
       id.hashCode ^
+      provider.hashCode ^
       displayName.hashCode ^
       email.hashCode ^
       imapHost.hashCode ^
@@ -685,6 +740,8 @@ class MailAccountDto {
       smtpPort.hashCode ^
       smtpSecurity.hashCode ^
       smtpUsername.hashCode ^
+      authentication.hashCode ^
+      oauthProvider.hashCode ^
       lastSyncAtMs.hashCode;
 
   @override
@@ -693,6 +750,7 @@ class MailAccountDto {
       other is MailAccountDto &&
           runtimeType == other.runtimeType &&
           id == other.id &&
+          provider == other.provider &&
           displayName == other.displayName &&
           email == other.email &&
           imapHost == other.imapHost &&
@@ -703,13 +761,20 @@ class MailAccountDto {
           smtpPort == other.smtpPort &&
           smtpSecurity == other.smtpSecurity &&
           smtpUsername == other.smtpUsername &&
+          authentication == other.authentication &&
+          oauthProvider == other.oauthProvider &&
           lastSyncAtMs == other.lastSyncAtMs;
 }
 
-/// Complete user-supplied IMAP/SMTP configuration. `password` is accepted only
+/// Complete user-supplied account configuration. `password` is accepted only
 /// by credential-related functions and is never included in snapshots.
+///
+/// `provider` selects the connector: `imap` uses the IMAP/SMTP endpoints,
+/// `microsoft_graph` synchronizes through the Graph API and keeps the endpoint
+/// fields only as a documented fallback description.
 class MailAccountInput {
   final String id;
+  final String provider;
   final String displayName;
   final String email;
   final String imapHost;
@@ -723,6 +788,7 @@ class MailAccountInput {
 
   const MailAccountInput({
     required this.id,
+    required this.provider,
     required this.displayName,
     required this.email,
     required this.imapHost,
@@ -738,6 +804,7 @@ class MailAccountInput {
   @override
   int get hashCode =>
       id.hashCode ^
+      provider.hashCode ^
       displayName.hashCode ^
       email.hashCode ^
       imapHost.hashCode ^
@@ -755,6 +822,7 @@ class MailAccountInput {
       other is MailAccountInput &&
           runtimeType == other.runtimeType &&
           id == other.id &&
+          provider == other.provider &&
           displayName == other.displayName &&
           email == other.email &&
           imapHost == other.imapHost &&
@@ -805,6 +873,25 @@ class MailboxDto {
           role == other.role &&
           unreadCount == other.unreadCount &&
           totalCount == other.totalCount;
+}
+
+/// Result of one bounded IMAP IDLE wait for the currently visible mailbox.
+class MailboxIdleDto {
+  final bool idleSupported;
+  final bool changed;
+
+  const MailboxIdleDto({required this.idleSupported, required this.changed});
+
+  @override
+  int get hashCode => idleSupported.hashCode ^ changed.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MailboxIdleDto &&
+          runtimeType == other.runtimeType &&
+          idleSupported == other.idleSupported &&
+          changed == other.changed;
 }
 
 /// Downloadable attachment metadata transferred to Flutter.
@@ -953,6 +1040,52 @@ class MessageDto {
           editorDeltaJson == other.editorDeltaJson &&
           hasAttachment == other.hasAttachment &&
           attachments == other.attachments;
+}
+
+/// OAuth token set returned by an Authorization Code + PKCE exchange.
+/// It is accepted only by credential functions and stored in the encrypted
+/// profile; tokens are never returned in workspace snapshots.
+class OAuthTokenInput {
+  final String provider;
+  final String clientId;
+  final String accessToken;
+  final String refreshToken;
+  final PlatformInt64 expiresAtMs;
+  final String tokenEndpoint;
+  final String scopes;
+
+  const OAuthTokenInput({
+    required this.provider,
+    required this.clientId,
+    required this.accessToken,
+    required this.refreshToken,
+    required this.expiresAtMs,
+    required this.tokenEndpoint,
+    required this.scopes,
+  });
+
+  @override
+  int get hashCode =>
+      provider.hashCode ^
+      clientId.hashCode ^
+      accessToken.hashCode ^
+      refreshToken.hashCode ^
+      expiresAtMs.hashCode ^
+      tokenEndpoint.hashCode ^
+      scopes.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OAuthTokenInput &&
+          runtimeType == other.runtimeType &&
+          provider == other.provider &&
+          clientId == other.clientId &&
+          accessToken == other.accessToken &&
+          refreshToken == other.refreshToken &&
+          expiresAtMs == other.expiresAtMs &&
+          tokenEndpoint == other.tokenEndpoint &&
+          scopes == other.scopes;
 }
 
 /// Rich message submitted from the desktop composer.

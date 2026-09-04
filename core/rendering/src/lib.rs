@@ -10,7 +10,7 @@ use std::{
 use ammonia::{Builder, UrlRelative};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
-use percent_encoding::percent_decode_str;
+use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
 const MAX_CACHED_ATTACHMENTS: usize = 20;
 const MAX_CACHED_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
@@ -19,6 +19,9 @@ const MAX_INLINE_IMAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_INLINE_IMAGE_TOTAL_BYTES: usize = 5 * 1024 * 1024;
 const MAX_INLINE_IMAGE_DIMENSION: u32 = 4096;
 const MAX_INLINE_IMAGE_PIXELS: u64 = 16_777_216;
+/// Inert URL scheme used to retain a sanitized remote image reference without
+/// allowing an HTML viewer to contact the sender before explicit consent.
+pub const BLOCKED_REMOTE_IMAGE_SCHEME: &str = "maicenta-blocked-image:";
 
 /// Policy controlling how a message may load content from the network.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -407,7 +410,7 @@ fn sanitize_html(
     let mut builder = Builder::default();
     builder
         .url_relative(UrlRelative::Deny)
-        .add_url_schemes(["cid", "data"])
+        .add_url_schemes(["cid", "data", "maicenta-blocked-image"])
         .add_generic_attributes([
             "align",
             "bgcolor",
@@ -443,7 +446,10 @@ fn sanitize_html(
                 && !policy.allow_remote_images
             {
                 blocked.fetch_add(1, Ordering::Relaxed);
-                None
+                Some(Cow::Owned(format!(
+                    "{BLOCKED_REMOTE_IMAGE_SCHEME}{}",
+                    utf8_percent_encode(value, NON_ALPHANUMERIC)
+                )))
             } else {
                 Some(Cow::Borrowed(value))
             }
@@ -607,8 +613,9 @@ mod tests {
     use std::fmt::Write as _;
 
     use super::{
-        AttachmentDecodeError, MAX_CACHED_ATTACHMENTS, MessageRenderer, RenderPolicy,
-        decode_attachment_part, has_safe_raster_dimensions, sanitize_composed_html,
+        AttachmentDecodeError, BLOCKED_REMOTE_IMAGE_SCHEME, MAX_CACHED_ATTACHMENTS,
+        MessageRenderer, RenderPolicy, decode_attachment_part, has_safe_raster_dimensions,
+        sanitize_composed_html,
     };
 
     const MULTIPART: &[u8] = br#"From: Anna <anna@example.org>
@@ -700,6 +707,7 @@ iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAA
         assert!(!html.contains("onerror"));
         assert!(!html.contains("javascript:"));
         assert!(!html.contains("tracker.example/pixel"));
+        assert_eq!(html.matches(BLOCKED_REMOTE_IMAGE_SCHEME).count(), 2);
         assert!(!html.contains("cid:logo@example.org"));
         assert!(html.contains("https://example.org"));
         assert!(html.contains("rel=\"noopener noreferrer\""));

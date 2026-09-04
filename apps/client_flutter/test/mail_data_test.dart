@@ -5,8 +5,9 @@ void main() {
   test('demo mail source remains deterministic', () {
     const source = DemoMailDataSource();
 
-    expect(source.folders, hasLength(5));
+    expect(source.folders, hasLength(6));
     expect(source.folders.first.displayName, 'Posteingang');
+    expect(source.folders.any((folder) => folder.role == 'junk'), isTrue);
     expect(source.messages, hasLength(5));
     expect(source.messages.where((message) => message.unread), hasLength(2));
     expect(source.messages.any((message) => message.hasAttachment), isTrue);

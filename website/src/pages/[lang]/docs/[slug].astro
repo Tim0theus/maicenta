@@ -1,0 +1,52 @@
+---
+import { getCollection, render } from 'astro:content';
+import Base from '../../../layouts/Base.astro';
+import { locales, type Locale } from '../../../config';
+import { localePath, t } from '../../../i18n';
+
+export async function getStaticPaths() {
+  const entries = await getCollection('docs');
+  return entries
+    .filter((e) => locales.includes(e.id.split('/')[0] as Locale))
+    .map((e) => {
+      const [lang, ...rest] = e.id.split('/');
+      return { params: { lang, slug: rest.join('/') }, props: { entry: e } };
+    });
+}
+
+const lang = Astro.params.lang as Locale;
+const slug = Astro.params.slug as string;
+const { entry } = Astro.props;
+const ui = t(lang);
+const { Content } = await render(entry);
+---
+
+<Base
+  lang={lang}
+  title={`${entry.data.title} – ${ui.docs.title} – MAICENTA`}
+  description={entry.data.description}
+  path={`docs/${slug}`}
+>
+  <section class="section">
+    <div class="container">
+      <a class="back" href={localePath(lang, 'docs')}>← {ui.docs.backToDocs}</a>
+      <article class="prose">
+        <h1>{entry.data.title}</h1>
+        <p class="lead">{entry.data.description}</p>
+        <Content />
+      </article>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .back {
+    display: inline-block;
+    margin-bottom: 1.5rem;
+    font-size: 0.95rem;
+  }
+  .lead {
+    font-size: 1.1rem;
+    margin-bottom: 2rem;
+  }
+</style>

@@ -1,34 +1,59 @@
 //! SQLite-backed local persistence for MAICENTA.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::Read,
+    ops::{Deref, DerefMut},
     path::{Component, Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
     time::Duration,
 };
 
 use maicenta_application::{
     ApplicationError, LocalDraftMetadata, LocalDraftStore, MailAccountStore, MailStore,
     MailSyncStore, PendingDraftAction, PendingDraftOperation, PendingMailMutation,
-    RemoteMailboxSyncState, RemoteMessageMetadata, SecretStore, WorkspaceStore,
+    RemoteMailboxSyncState, RemoteMessageIdentity, RemoteMessageMetadata, SecretStore,
+    WorkspaceStore,
 };
 use maicenta_domain::{
-    AccountId, AttachmentId, CalendarEvent, Contact, MailAccount, MailAddress, Mailbox, MailboxId,
-    MailboxRole, MessageAttachment, MessageBody, MessageFlag, MessageId, MessageRecipients,
-    MessageSummary, TaskItem, TransportSecurity, WorkspaceItemId,
+    AccountId, AttachmentId, CalendarEvent, Contact, MailAccount, MailAddress, MailProvider,
+    Mailbox, MailboxId, MailboxRole, MessageAttachment, MessageBody, MessageFlag, MessageId,
+    MessageRecipients, MessageSummary, TaskItem, TransportSecurity, WorkspaceItemId,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-const CURRENT_SCHEMA_VERSION: u32 = 13;
+const CURRENT_SCHEMA_VERSION: u32 = 15;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const FAVORITE_MAILBOXES_KEY: &str = "favorite_mailbox_ids";
 const DARK_MODE_KEY: &str = "dark_mode_enabled";
 
+static DATABASE_OPERATION_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
+    OnceLock::new();
+
 /// Thread-safe `SQLite` implementation of [`MailStore`].
 pub struct SqliteMailStore {
     connection: Mutex<Connection>,
+    operation_lock: Arc<Mutex<()>>,
+}
+
+struct StoreConnectionGuard<'a> {
+    _operation_guard: MutexGuard<'a, ()>,
+    connection_guard: MutexGuard<'a, Connection>,
+}
+
+impl Deref for StoreConnectionGuard<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.connection_guard
+    }
+}
+
+impl DerefMut for StoreConnectionGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.connection_guard
+    }
 }
 
 impl SqliteMailStore {
@@ -39,8 +64,11 @@ impl SqliteMailStore {
     /// Returns a storage error when the database cannot be opened, configured,
     /// or migrated.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ApplicationError> {
+        let path = path.as_ref();
+        let operation_lock = database_operation_lock(path);
+        let _operation_guard = lock_operation(&operation_lock)?;
         let connection = Connection::open(path).map_err(storage_error)?;
-        Self::from_connection(connection)
+        Self::from_connection_with_lock(connection, operation_lock.clone())
     }
 
     /// Opens an encrypted profile database, migrating a legacy plaintext
@@ -55,10 +83,12 @@ impl SqliteMailStore {
         key: &[u8; 32],
     ) -> Result<Self, ApplicationError> {
         let path = path.as_ref();
+        let operation_lock = database_operation_lock(path);
+        let _operation_guard = lock_operation(&operation_lock)?;
         migrate_plaintext_database(path, key)?;
         let connection = open_keyed_connection(path, key)?;
         restrict_database_permissions(path)?;
-        Self::from_connection(connection)
+        Self::from_connection_with_lock(connection, operation_lock.clone())
     }
 
     /// Creates an initialized in-memory database.
@@ -71,7 +101,14 @@ impl SqliteMailStore {
         Self::from_connection(connection)
     }
 
-    fn from_connection(mut connection: Connection) -> Result<Self, ApplicationError> {
+    fn from_connection(connection: Connection) -> Result<Self, ApplicationError> {
+        Self::from_connection_with_lock(connection, Arc::new(Mutex::new(())))
+    }
+
+    fn from_connection_with_lock(
+        mut connection: Connection,
+        operation_lock: Arc<Mutex<()>>,
+    ) -> Result<Self, ApplicationError> {
         connection
             .busy_timeout(Duration::from_secs(5))
             .map_err(storage_error)?;
@@ -79,15 +116,23 @@ impl SqliteMailStore {
             .execute_batch(
                 "
                 PRAGMA foreign_keys = ON;
-                PRAGMA journal_mode = WAL;
                 PRAGMA synchronous = NORMAL;
                 ",
             )
             .map_err(storage_error)?;
+        let journal_mode: String = connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .map_err(storage_error)?;
+        if !matches!(journal_mode.as_str(), "wal" | "memory") {
+            connection
+                .execute_batch("PRAGMA journal_mode = WAL;")
+                .map_err(storage_error)?;
+        }
         migrate(&mut connection)?;
 
         Ok(Self {
             connection: Mutex::new(connection),
+            operation_lock,
         })
     }
 
@@ -147,11 +192,41 @@ impl SqliteMailStore {
         Ok(())
     }
 
-    fn connection(&self) -> Result<MutexGuard<'_, Connection>, ApplicationError> {
-        self.connection
-            .lock()
-            .map_err(|_| ApplicationError::Storage("database lock was poisoned".into()))
+    fn connection(&self) -> Result<StoreConnectionGuard<'_>, ApplicationError> {
+        let operation_guard = lock_operation(&self.operation_lock)?;
+        let connection_guard = self.connection.lock().map_err(|_| {
+            ApplicationError::Storage("database connection lock was poisoned".into())
+        })?;
+        Ok(StoreConnectionGuard {
+            _operation_guard: operation_guard,
+            connection_guard,
+        })
     }
+}
+
+fn lock_operation(lock: &Mutex<()>) -> Result<MutexGuard<'_, ()>, ApplicationError> {
+    lock.lock()
+        .map_err(|_| ApplicationError::Storage("database operation lock was poisoned".into()))
+}
+
+fn database_operation_lock(path: &Path) -> Arc<Mutex<()>> {
+    let key = fs::canonicalize(path).unwrap_or_else(|_| {
+        path.parent()
+            .and_then(|parent| fs::canonicalize(parent).ok())
+            .and_then(|parent| path.file_name().map(|name| parent.join(name)))
+            .unwrap_or_else(|| path.to_path_buf())
+    });
+    let registry = DATABASE_OPERATION_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
 }
 
 impl MailStore for SqliteMailStore {
@@ -160,7 +235,8 @@ impl MailStore for SqliteMailStore {
         let mut statement = connection
             .prepare(
                 "
-                SELECT id, account_id, display_name, role, unread_count, total_count
+                SELECT id, account_id, display_name, remote_name, role, unread_count,
+                       total_count
                 FROM mailboxes
                 WHERE account_id = ?1
                 ORDER BY
@@ -184,9 +260,10 @@ impl MailStore for SqliteMailStore {
                     id: row.get(0)?,
                     account_id: row.get(1)?,
                     display_name: row.get(2)?,
-                    role: row.get(3)?,
-                    unread_count: row.get(4)?,
-                    total_count: row.get(5)?,
+                    remote_name: row.get(3)?,
+                    role: row.get(4)?,
+                    unread_count: row.get(5)?,
+                    total_count: row.get(6)?,
                 })
             })
             .map_err(storage_error)?;
@@ -462,12 +539,14 @@ impl MailStore for SqliteMailStore {
                 .execute(
                     "
                     INSERT INTO mailboxes (
-                        id, account_id, display_name, role, unread_count, total_count
+                        id, account_id, display_name, remote_name, role, unread_count,
+                        total_count
                     )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                     ON CONFLICT(id) DO UPDATE SET
                         account_id = excluded.account_id,
                         display_name = excluded.display_name,
+                        remote_name = excluded.remote_name,
                         role = excluded.role,
                         unread_count = excluded.unread_count,
                         total_count = excluded.total_count
@@ -476,6 +555,7 @@ impl MailStore for SqliteMailStore {
                         mailbox.id.as_str(),
                         mailbox.account_id.as_str(),
                         mailbox.display_name,
+                        mailbox.remote_name,
                         mailbox_role_to_str(mailbox.role),
                         mailbox.unread_count,
                         mailbox.total_count,
@@ -580,7 +660,8 @@ impl MailStore for SqliteMailStore {
         let (encoded, message_account_id) = message.ok_or(ApplicationError::NotFound)?;
         let target_mailbox: Option<(String, String)> = transaction
             .query_row(
-                "SELECT account_id, display_name FROM mailboxes WHERE id = ?1",
+                "SELECT account_id, COALESCE(remote_name, display_name)
+                 FROM mailboxes WHERE id = ?1",
                 [mailbox_id.as_str()],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -614,24 +695,17 @@ impl MailStore for SqliteMailStore {
             )
             .map_err(storage_error)?;
 
-        let remote: Option<(String, u32, u32)> = transaction
-            .query_row(
-                "SELECT remote_mailbox, uid_validity, remote_uid
-                 FROM remote_messages WHERE message_id = ?1",
-                [message_id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(storage_error)?;
-        if let Some((source_mailbox, uid_validity, remote_uid)) = remote {
+        let remote = query_remote_identity(&transaction, message_id)?;
+        if let Some((source_mailbox, identity)) = remote {
             let target_mailbox =
                 (target_remote_name != source_mailbox).then_some(target_remote_name);
+            let (uid_validity, remote_uid, provider_id) = identity_columns(&identity);
             transaction
                 .execute(
                     "INSERT INTO pending_mail_mutations (
                         message_id, account_id, source_mailbox, target_mailbox,
-                        uid_validity, remote_uid, seen, flagged, updated_at_ms
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+                        uid_validity, remote_uid, remote_id, seen, flagged, updated_at_ms
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
                         CAST(strftime('%s', 'now') AS INTEGER) * 1000)
                      ON CONFLICT(message_id) DO UPDATE SET
                         account_id = excluded.account_id,
@@ -646,6 +720,7 @@ impl MailStore for SqliteMailStore {
                         target_mailbox,
                         uid_validity,
                         remote_uid,
+                        provider_id,
                         !unread,
                         flagged,
                     ],
@@ -832,7 +907,8 @@ impl MailSyncStore for SqliteMailStore {
         let mut statement = connection
             .prepare(
                 "SELECT account_id, remote_mailbox, uid_validity, uid_next,
-                        highest_modseq, catalog_complete, last_full_reconcile_at_ms
+                        highest_modseq, delta_cursor, catalog_complete,
+                        last_full_reconcile_at_ms
                  FROM remote_mailbox_sync_states
                  WHERE account_id = ?1
                  ORDER BY remote_mailbox",
@@ -846,8 +922,9 @@ impl MailSyncStore for SqliteMailStore {
                     row.get::<_, u32>(2)?,
                     row.get::<_, Option<u32>>(3)?,
                     row.get::<_, Option<String>>(4)?,
-                    row.get::<_, bool>(5)?,
-                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, bool>(6)?,
+                    row.get::<_, i64>(7)?,
                 ))
             })
             .map_err(storage_error)?;
@@ -862,8 +939,9 @@ impl MailSyncStore for SqliteMailStore {
                     .4
                     .map(|value| value.parse::<u64>().map_err(invalid_data))
                     .transpose()?,
-                catalog_complete: raw.5,
-                last_full_reconcile_at_ms: raw.6,
+                delta_cursor: raw.5,
+                catalog_complete: raw.6,
+                last_full_reconcile_at_ms: raw.7,
             })
         })
         .collect()
@@ -876,6 +954,10 @@ impl MailSyncStore for SqliteMailStore {
         if state.remote_mailbox.is_empty()
             || state.uid_next == Some(0)
             || state.last_full_reconcile_at_ms < 0
+            || state
+                .delta_cursor
+                .as_ref()
+                .is_some_and(|cursor| cursor.is_empty() || cursor.len() > 8_192)
         {
             return Err(ApplicationError::Storage(
                 "remote mailbox synchronization state is invalid".into(),
@@ -885,12 +967,14 @@ impl MailSyncStore for SqliteMailStore {
             .execute(
                 "INSERT INTO remote_mailbox_sync_states (
                     account_id, remote_mailbox, uid_validity, uid_next,
-                    highest_modseq, catalog_complete, last_full_reconcile_at_ms
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                    highest_modseq, delta_cursor, catalog_complete,
+                    last_full_reconcile_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(account_id, remote_mailbox) DO UPDATE SET
                     uid_validity = excluded.uid_validity,
                     uid_next = excluded.uid_next,
                     highest_modseq = excluded.highest_modseq,
+                    delta_cursor = excluded.delta_cursor,
                     catalog_complete = excluded.catalog_complete,
                     last_full_reconcile_at_ms = excluded.last_full_reconcile_at_ms",
                 params![
@@ -899,6 +983,7 @@ impl MailSyncStore for SqliteMailStore {
                     state.uid_validity,
                     state.uid_next,
                     state.highest_modseq.map(|value| value.to_string()),
+                    state.delta_cursor,
                     state.catalog_complete,
                     state.last_full_reconcile_at_ms,
                 ],
@@ -915,38 +1000,18 @@ impl MailSyncStore for SqliteMailStore {
         let mut statement = connection
             .prepare(
                 "SELECT message_id, account_id, remote_mailbox, uid_validity, remote_uid,
-                        catalog_complete, body_requested, body_complete
+                        remote_id, catalog_complete, body_requested, body_complete
                  FROM remote_messages
                  WHERE account_id = ?1
-                 ORDER BY remote_mailbox, uid_validity, remote_uid",
+                 ORDER BY remote_mailbox, uid_validity, remote_uid, remote_id",
             )
             .map_err(storage_error)?;
         let rows = statement
-            .query_map([account_id.as_str()], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, u32>(3)?,
-                    row.get::<_, u32>(4)?,
-                    row.get::<_, bool>(5)?,
-                    row.get::<_, bool>(6)?,
-                    row.get::<_, bool>(7)?,
-                ))
-            })
+            .query_map([account_id.as_str()], remote_metadata_row)
             .map_err(storage_error)?;
         rows.map(|row| {
-            let raw = row.map_err(storage_error)?;
-            Ok(RemoteMessageMetadata {
-                message_id: MessageId::parse(raw.0).map_err(invalid_data)?,
-                account_id: AccountId::parse(raw.1).map_err(invalid_data)?,
-                remote_mailbox: raw.2,
-                uid_validity: raw.3,
-                remote_uid: raw.4,
-                catalog_complete: raw.5,
-                body_requested: raw.6,
-                body_complete: raw.7,
-            })
+            row.map_err(storage_error)
+                .and_then(RawRemoteMetadata::into_domain)
         })
         .collect()
     }
@@ -956,38 +1021,18 @@ impl MailSyncStore for SqliteMailStore {
         message_id: &MessageId,
     ) -> Result<RemoteMessageMetadata, ApplicationError> {
         let connection = self.connection()?;
-        let raw = connection
+        connection
             .query_row(
                 "SELECT message_id, account_id, remote_mailbox, uid_validity, remote_uid,
-                        catalog_complete, body_requested, body_complete
+                        remote_id, catalog_complete, body_requested, body_complete
                  FROM remote_messages WHERE message_id = ?1",
                 [message_id.as_str()],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, u32>(3)?,
-                        row.get::<_, u32>(4)?,
-                        row.get::<_, bool>(5)?,
-                        row.get::<_, bool>(6)?,
-                        row.get::<_, bool>(7)?,
-                    ))
-                },
+                remote_metadata_row,
             )
             .optional()
             .map_err(storage_error)?
-            .ok_or(ApplicationError::NotFound)?;
-        Ok(RemoteMessageMetadata {
-            message_id: MessageId::parse(raw.0).map_err(invalid_data)?,
-            account_id: AccountId::parse(raw.1).map_err(invalid_data)?,
-            remote_mailbox: raw.2,
-            uid_validity: raw.3,
-            remote_uid: raw.4,
-            catalog_complete: raw.5,
-            body_requested: raw.6,
-            body_complete: raw.7,
-        })
+            .ok_or(ApplicationError::NotFound)?
+            .into_domain()
     }
 
     fn save_remote_message(
@@ -1010,7 +1055,7 @@ impl MailSyncStore for SqliteMailStore {
                 "remote message identifiers differ".into(),
             ));
         }
-        if metadata.remote_mailbox.is_empty() || metadata.remote_uid == 0 {
+        if metadata.remote_mailbox.is_empty() || !metadata.identity.is_complete() {
             return Err(ApplicationError::Storage(
                 "remote message identity is incomplete".into(),
             ));
@@ -1050,17 +1095,19 @@ impl MailSyncStore for SqliteMailStore {
                 .map_err(storage_error)?;
         }
         save_message_recipients(&transaction, recipients)?;
+        let (uid_validity, remote_uid, provider_id) = identity_columns(&metadata.identity);
         transaction
             .execute(
                 "INSERT INTO remote_messages (
                     message_id, account_id, remote_mailbox, uid_validity, remote_uid,
-                    catalog_complete, body_requested, body_complete
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    remote_id, catalog_complete, body_requested, body_complete
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(message_id) DO UPDATE SET
                     account_id = excluded.account_id,
                     remote_mailbox = excluded.remote_mailbox,
                     uid_validity = excluded.uid_validity,
                     remote_uid = excluded.remote_uid,
+                    remote_id = excluded.remote_id,
                     catalog_complete = excluded.catalog_complete,
                     body_requested = CASE
                         WHEN excluded.body_requested THEN 1
@@ -1074,8 +1121,9 @@ impl MailSyncStore for SqliteMailStore {
                     metadata.message_id.as_str(),
                     metadata.account_id.as_str(),
                     metadata.remote_mailbox,
-                    metadata.uid_validity,
-                    metadata.remote_uid,
+                    uid_validity,
+                    remote_uid,
+                    provider_id,
                     metadata.catalog_complete,
                     metadata.body_requested,
                     metadata.body_complete,
@@ -1125,45 +1173,26 @@ impl MailSyncStore for SqliteMailStore {
         &mut self,
         account_id: &AccountId,
         remote_mailbox: &str,
-        uid_validity: u32,
-        active_uids: &[u32],
+        active_identities: &[RemoteMessageIdentity],
     ) -> Result<Vec<MessageAttachment>, ApplicationError> {
-        if remote_mailbox.is_empty() || active_uids.contains(&0) {
+        if remote_mailbox.is_empty()
+            || active_identities
+                .iter()
+                .any(|identity| !identity.is_complete())
+        {
             return Err(ApplicationError::Storage(
                 "remote mailbox snapshot is invalid".into(),
             ));
         }
-        let active_uids = active_uids.iter().copied().collect::<HashSet<_>>();
+        let active_identities = active_identities.iter().collect::<HashSet<_>>();
         let mut connection = self.connection()?;
         let transaction = connection.transaction().map_err(storage_error)?;
-        let stale_message_ids = {
-            let mut statement = transaction
-                .prepare(
-                    "SELECT message_id, uid_validity, remote_uid
-                     FROM remote_messages
-                     WHERE account_id = ?1 AND remote_mailbox = ?2",
-                )
-                .map_err(storage_error)?;
-            let rows = statement
-                .query_map(params![account_id.as_str(), remote_mailbox], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, u32>(1)?,
-                        row.get::<_, u32>(2)?,
-                    ))
-                })
-                .map_err(storage_error)?;
-            rows.filter_map(|row| match row {
-                Ok((message_id, stored_validity, uid))
-                    if stored_validity != uid_validity || !active_uids.contains(&uid) =>
-                {
-                    Some(Ok(message_id))
-                }
-                Ok(_) => None,
-                Err(error) => Some(Err(storage_error(error))),
-            })
-            .collect::<Result<Vec<_>, ApplicationError>>()?
-        };
+        let stale_message_ids =
+            mailbox_remote_identities(&transaction, account_id, remote_mailbox)?
+                .into_iter()
+                .filter(|(_, identity)| !active_identities.contains(identity))
+                .map(|(message_id, _)| message_id)
+                .collect::<Vec<_>>();
 
         let removed_attachments = delete_remote_message_ids(&transaction, &stale_message_ids)?;
         refresh_mailbox_counts(&transaction)?;
@@ -1175,41 +1204,29 @@ impl MailSyncStore for SqliteMailStore {
         &mut self,
         account_id: &AccountId,
         remote_mailbox: &str,
-        uid_validity: u32,
-        vanished_uids: &[u32],
+        vanished_identities: &[RemoteMessageIdentity],
     ) -> Result<Vec<MessageAttachment>, ApplicationError> {
-        if remote_mailbox.is_empty() || vanished_uids.contains(&0) {
+        if remote_mailbox.is_empty()
+            || vanished_identities
+                .iter()
+                .any(|identity| !identity.is_complete())
+        {
             return Err(ApplicationError::Storage(
-                "vanished remote UID set is invalid".into(),
+                "vanished remote identity set is invalid".into(),
             ));
         }
-        if vanished_uids.is_empty() {
+        if vanished_identities.is_empty() {
             return Ok(Vec::new());
         }
-        let vanished_uids = vanished_uids.iter().copied().collect::<HashSet<_>>();
+        let vanished_identities = vanished_identities.iter().collect::<HashSet<_>>();
         let mut connection = self.connection()?;
         let transaction = connection.transaction().map_err(storage_error)?;
-        let vanished_message_ids = {
-            let mut statement = transaction
-                .prepare(
-                    "SELECT message_id, remote_uid
-                     FROM remote_messages
-                     WHERE account_id = ?1 AND remote_mailbox = ?2 AND uid_validity = ?3",
-                )
-                .map_err(storage_error)?;
-            let rows = statement
-                .query_map(
-                    params![account_id.as_str(), remote_mailbox, uid_validity],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?)),
-                )
-                .map_err(storage_error)?;
-            rows.filter_map(|row| match row {
-                Ok((message_id, uid)) if vanished_uids.contains(&uid) => Some(Ok(message_id)),
-                Ok(_) => None,
-                Err(error) => Some(Err(storage_error(error))),
-            })
-            .collect::<Result<Vec<_>, ApplicationError>>()?
-        };
+        let vanished_message_ids =
+            mailbox_remote_identities(&transaction, account_id, remote_mailbox)?
+                .into_iter()
+                .filter(|(_, identity)| vanished_identities.contains(identity))
+                .map(|(message_id, _)| message_id)
+                .collect::<Vec<_>>();
         let removed_attachments = delete_remote_message_ids(&transaction, &vanished_message_ids)?;
         refresh_mailbox_counts(&transaction)?;
         transaction.commit().map_err(storage_error)?;
@@ -1224,7 +1241,7 @@ impl MailSyncStore for SqliteMailStore {
         let mut statement = connection
             .prepare(
                 "SELECT message_id, account_id, source_mailbox, target_mailbox,
-                        uid_validity, remote_uid, seen, flagged
+                        uid_validity, remote_uid, remote_id, seen, flagged
                  FROM pending_mail_mutations
                  WHERE account_id = ?1
                  ORDER BY updated_at_ms, message_id",
@@ -1237,10 +1254,11 @@ impl MailSyncStore for SqliteMailStore {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
-                    row.get::<_, u32>(4)?,
-                    row.get::<_, u32>(5)?,
-                    row.get::<_, bool>(6)?,
+                    row.get::<_, Option<u32>>(4)?,
+                    row.get::<_, Option<u32>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
                     row.get::<_, bool>(7)?,
+                    row.get::<_, bool>(8)?,
                 ))
             })
             .map_err(storage_error)?;
@@ -1253,6 +1271,7 @@ impl MailSyncStore for SqliteMailStore {
                 target_mailbox,
                 uid_validity,
                 remote_uid,
+                provider_id,
                 seen,
                 flagged,
             ) = row.map_err(storage_error)?;
@@ -1261,8 +1280,7 @@ impl MailSyncStore for SqliteMailStore {
                 account_id: AccountId::parse(account_id).map_err(invalid_data)?,
                 source_mailbox,
                 target_mailbox,
-                uid_validity,
-                remote_uid,
+                identity: identity_from_columns(uid_validity, remote_uid, provider_id)?,
                 seen,
                 flagged,
             })
@@ -1315,7 +1333,7 @@ impl MailSyncStore for SqliteMailStore {
             .prepare(
                 "SELECT message_id, account_id, target_mailbox, operation,
                         previous_remote_mailbox, previous_uid_validity,
-                        previous_remote_uid
+                        previous_remote_uid, previous_remote_id
                  FROM pending_draft_operations
                  WHERE account_id = ?1
                  ORDER BY updated_at_ms, message_id",
@@ -1331,26 +1349,28 @@ impl MailSyncStore for SqliteMailStore {
                     row.get::<_, Option<String>>(4)?,
                     row.get::<_, Option<u32>>(5)?,
                     row.get::<_, Option<u32>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             })
             .map_err(storage_error)?;
         rows.map(|row| {
-            let (message_id, account_id, target_mailbox, action, mailbox, validity, uid) =
+            let (message_id, account_id, target_mailbox, action, mailbox, validity, uid, id) =
                 row.map_err(storage_error)?;
-            let previous_remote = match (mailbox, validity, uid) {
-                (Some(remote_mailbox), Some(uid_validity), Some(remote_uid)) => {
+            let previous_remote = match (mailbox, validity, uid, id) {
+                (Some(remote_mailbox), validity, uid, id)
+                    if validity.is_some() || uid.is_some() || id.is_some() =>
+                {
                     Some(RemoteMessageMetadata {
                         message_id: MessageId::parse(&message_id).map_err(invalid_data)?,
                         account_id: AccountId::parse(&account_id).map_err(invalid_data)?,
                         remote_mailbox,
-                        uid_validity,
-                        remote_uid,
+                        identity: identity_from_columns(validity, uid, id)?,
                         catalog_complete: true,
                         body_requested: true,
                         body_complete: true,
                     })
                 }
-                (None, None, None) => None,
+                (None, None, None, None) => None,
                 _ => {
                     return Err(ApplicationError::Storage(
                         "pending draft has a partial remote identity".into(),
@@ -1402,17 +1422,25 @@ impl MailSyncStore for SqliteMailStore {
             return Err(ApplicationError::NotFound);
         }
         if let Some(remote) = uploaded_remote {
+            if remote.remote_mailbox.is_empty() || !remote.identity.is_complete() {
+                return Err(ApplicationError::Storage(
+                    "uploaded draft identity is incomplete".into(),
+                ));
+            }
+            let (uid_validity, remote_uid, provider_id) = identity_columns(&remote.identity);
             transaction
                 .execute(
                     "INSERT INTO remote_messages (
                         message_id, account_id, remote_mailbox, uid_validity,
-                        remote_uid, catalog_complete, body_requested, body_complete
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, 1, 1, 1)
+                        remote_uid, remote_id, catalog_complete, body_requested,
+                        body_complete
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 1, 1)
                      ON CONFLICT(message_id) DO UPDATE SET
                         account_id = excluded.account_id,
                         remote_mailbox = excluded.remote_mailbox,
                         uid_validity = excluded.uid_validity,
                         remote_uid = excluded.remote_uid,
+                        remote_id = excluded.remote_id,
                         catalog_complete = 1,
                         body_requested = 1,
                         body_complete = 1",
@@ -1420,8 +1448,9 @@ impl MailSyncStore for SqliteMailStore {
                         message_id.as_str(),
                         remote.account_id.as_str(),
                         remote.remote_mailbox,
-                        remote.uid_validity,
-                        remote.remote_uid,
+                        uid_validity,
+                        remote_uid,
+                        provider_id,
                     ],
                 )
                 .map_err(storage_error)?;
@@ -1719,7 +1748,7 @@ impl MailAccountStore for SqliteMailStore {
                 "SELECT id, display_name, email,
                         imap_host, imap_port, imap_security, imap_username,
                         smtp_host, smtp_port, smtp_security, smtp_username,
-                        last_sync_at_ms
+                        last_sync_at_ms, provider
                  FROM mail_accounts
                  ORDER BY display_name COLLATE NOCASE, id",
             )
@@ -1739,6 +1768,7 @@ impl MailAccountStore for SqliteMailStore {
                     smtp_security: row.get(9)?,
                     smtp_username: row.get(10)?,
                     last_sync_at_ms: row.get(11)?,
+                    provider: row.get(12)?,
                 })
             })
             .map_err(storage_error)?;
@@ -1757,9 +1787,10 @@ impl MailAccountStore for SqliteMailStore {
                     id, display_name, email,
                     imap_host, imap_port, imap_security, imap_username,
                     smtp_host, smtp_port, smtp_security, smtp_username,
-                    last_sync_at_ms
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                    last_sync_at_ms, provider
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT(id) DO UPDATE SET
+                    provider = excluded.provider,
                     display_name = excluded.display_name,
                     email = excluded.email,
                     imap_host = excluded.imap_host,
@@ -1784,6 +1815,7 @@ impl MailAccountStore for SqliteMailStore {
                     transport_security_to_str(account.smtp_security),
                     account.smtp_username,
                     account.last_sync_at_ms,
+                    mail_provider_to_str(account.provider),
                 ],
             )
             .map(|_| ())
@@ -1840,15 +1872,11 @@ impl MailAccountStore for SqliteMailStore {
 
 impl SecretStore for SqliteMailStore {
     fn get(&self, account_id: &AccountId, key: &str) -> Result<Option<String>, ApplicationError> {
-        if key != "password" {
-            return Err(ApplicationError::Storage(format!(
-                "unsupported account secret: {key}"
-            )));
-        }
+        validate_secret_key(key)?;
         self.connection()?
             .query_row(
-                "SELECT password FROM account_secrets WHERE account_id = ?1",
-                [account_id.as_str()],
+                "SELECT value FROM account_secrets WHERE account_id = ?1 AND key = ?2",
+                params![account_id.as_str(), key],
                 |row| row.get(0),
             )
             .optional()
@@ -1861,41 +1889,47 @@ impl SecretStore for SqliteMailStore {
         key: &str,
         value: &str,
     ) -> Result<(), ApplicationError> {
-        if key != "password" {
-            return Err(ApplicationError::Storage(format!(
-                "unsupported account secret: {key}"
-            )));
-        }
+        validate_secret_key(key)?;
         if value.is_empty() {
             return Err(ApplicationError::Storage(
-                "account password must not be empty".into(),
+                "account secret must not be empty".into(),
             ));
         }
         self.connection()?
             .execute(
-                "INSERT INTO account_secrets (account_id, password)
-                 VALUES (?1, ?2)
-                 ON CONFLICT(account_id) DO UPDATE SET password = excluded.password",
-                params![account_id.as_str(), value],
+                "INSERT INTO account_secrets (account_id, key, value)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value",
+                params![account_id.as_str(), key, value],
             )
             .map(|_| ())
             .map_err(storage_error)
     }
 
     fn remove(&mut self, account_id: &AccountId, key: &str) -> Result<(), ApplicationError> {
-        if key != "password" {
-            return Err(ApplicationError::Storage(format!(
-                "unsupported account secret: {key}"
-            )));
-        }
+        validate_secret_key(key)?;
         self.connection()?
             .execute(
-                "DELETE FROM account_secrets WHERE account_id = ?1",
-                [account_id.as_str()],
+                "DELETE FROM account_secrets WHERE account_id = ?1 AND key = ?2",
+                params![account_id.as_str(), key],
             )
             .map(|_| ())
             .map_err(storage_error)
     }
+}
+
+fn validate_secret_key(key: &str) -> Result<(), ApplicationError> {
+    if key.is_empty()
+        || key.len() > 64
+        || !key
+            .bytes()
+            .all(|value| value.is_ascii_alphanumeric() || matches!(value, b'.' | b'_' | b'-'))
+    {
+        return Err(ApplicationError::Storage(
+            "account secret key is invalid".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn open_keyed_connection(path: &Path, key: &[u8; 32]) -> Result<Connection, ApplicationError> {
@@ -2069,7 +2103,7 @@ fn validate_local_message(
 struct DraftOperationContext {
     account_is_configured: bool,
     was_editable_draft: bool,
-    previous_remote: Option<(String, u32, u32)>,
+    previous_remote: Option<(String, RemoteMessageIdentity)>,
     target_mailbox: Option<String>,
 }
 
@@ -2091,18 +2125,10 @@ fn draft_operation_context(
             |row| row.get(0),
         )
         .map_err(storage_error)?;
-    let previous_remote = connection
-        .query_row(
-            "SELECT remote_mailbox, uid_validity, remote_uid
-             FROM remote_messages WHERE message_id = ?1",
-            [summary.id.as_str()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()
-        .map_err(storage_error)?;
+    let previous_remote = query_remote_identity(connection, &summary.id)?;
     let target_mailbox = connection
         .query_row(
-            "SELECT display_name FROM mailboxes WHERE id = ?1",
+            "SELECT COALESCE(remote_name, display_name) FROM mailboxes WHERE id = ?1",
             [summary.mailbox_id.as_str()],
             |row| row.get(0),
         )
@@ -2168,13 +2194,15 @@ fn queue_local_draft_operation(
         context.previous_remote.as_ref(),
     ) {
         (Some(_), Some(target_mailbox), previous) => {
+            let (uid_validity, remote_uid, provider_id) =
+                previous.map_or((None, None, None), |remote| identity_columns(&remote.1));
             connection
                 .execute(
                     "INSERT INTO pending_draft_operations (
                         message_id, account_id, target_mailbox, operation,
                         previous_remote_mailbox, previous_uid_validity,
-                        previous_remote_uid, updated_at_ms
-                     ) VALUES (?1, ?2, ?3, 'upsert', ?4, ?5, ?6,
+                        previous_remote_uid, previous_remote_id, updated_at_ms
+                     ) VALUES (?1, ?2, ?3, 'upsert', ?4, ?5, ?6, ?7,
                         CAST(strftime('%s', 'now') AS INTEGER) * 1000)
                      ON CONFLICT(message_id) DO UPDATE SET
                         account_id = excluded.account_id,
@@ -2183,26 +2211,29 @@ fn queue_local_draft_operation(
                         previous_remote_mailbox = excluded.previous_remote_mailbox,
                         previous_uid_validity = excluded.previous_uid_validity,
                         previous_remote_uid = excluded.previous_remote_uid,
+                        previous_remote_id = excluded.previous_remote_id,
                         updated_at_ms = excluded.updated_at_ms",
                     params![
                         summary.id.as_str(),
                         summary.account_id.as_str(),
                         target_mailbox,
                         previous.map(|remote| remote.0.as_str()),
-                        previous.map(|remote| remote.1),
-                        previous.map(|remote| remote.2),
+                        uid_validity,
+                        remote_uid,
+                        provider_id,
                     ],
                 )
                 .map_err(storage_error)?;
         }
         (None, _, Some(previous)) if context.was_editable_draft => {
+            let (uid_validity, remote_uid, provider_id) = identity_columns(&previous.1);
             connection
                 .execute(
                     "INSERT INTO pending_draft_operations (
                         message_id, account_id, target_mailbox, operation,
                         previous_remote_mailbox, previous_uid_validity,
-                        previous_remote_uid, updated_at_ms
-                     ) VALUES (?1, ?2, ?3, 'delete', ?3, ?4, ?5,
+                        previous_remote_uid, previous_remote_id, updated_at_ms
+                     ) VALUES (?1, ?2, ?3, 'delete', ?3, ?4, ?5, ?6,
                         CAST(strftime('%s', 'now') AS INTEGER) * 1000)
                      ON CONFLICT(message_id) DO UPDATE SET
                         account_id = excluded.account_id,
@@ -2211,13 +2242,15 @@ fn queue_local_draft_operation(
                         previous_remote_mailbox = excluded.previous_remote_mailbox,
                         previous_uid_validity = excluded.previous_uid_validity,
                         previous_remote_uid = excluded.previous_remote_uid,
+                        previous_remote_id = excluded.previous_remote_id,
                         updated_at_ms = excluded.updated_at_ms",
                     params![
                         summary.id.as_str(),
                         summary.account_id.as_str(),
                         previous.0.as_str(),
-                        previous.1,
-                        previous.2,
+                        uid_validity,
+                        remote_uid,
+                        provider_id,
                     ],
                 )
                 .map_err(storage_error)?;
@@ -2548,6 +2581,14 @@ fn migrate(connection: &mut Connection) -> Result<(), ApplicationError> {
         apply_migration_v13(connection)?;
     }
 
+    if version < 14 {
+        apply_migration_v14(connection)?;
+    }
+
+    if version < 15 {
+        apply_migration_v15(connection)?;
+    }
+
     Ok(())
 }
 
@@ -2856,6 +2897,33 @@ fn apply_migration_v8(connection: &mut Connection) -> Result<(), ApplicationErro
                 ) STRICT;
 
                 PRAGMA user_version = 8;
+                ",
+        )
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)
+}
+
+fn apply_migration_v14(connection: &mut Connection) -> Result<(), ApplicationError> {
+    let transaction = connection.transaction().map_err(storage_error)?;
+    transaction
+        .execute_batch(
+            "
+                ALTER TABLE account_secrets RENAME TO account_passwords_legacy;
+
+                CREATE TABLE account_secrets (
+                    account_id TEXT NOT NULL
+                        REFERENCES mail_accounts(id) ON DELETE CASCADE,
+                    key TEXT NOT NULL CHECK (length(key) BETWEEN 1 AND 64),
+                    value TEXT NOT NULL CHECK (length(value) > 0),
+                    PRIMARY KEY (account_id, key)
+                ) STRICT;
+
+                INSERT INTO account_secrets (account_id, key, value)
+                SELECT account_id, 'password', password
+                FROM account_passwords_legacy;
+
+                DROP TABLE account_passwords_legacy;
+                PRAGMA user_version = 14;
                 ",
         )
         .map_err(storage_error)?;
@@ -3255,6 +3323,170 @@ fn apply_migration_v13(connection: &mut Connection) -> Result<(), ApplicationErr
     transaction.commit().map_err(storage_error)
 }
 
+/// Generalizes remote message identity from IMAP UIDs to provider IDs.
+///
+/// Every row keeps exactly one identity form: the IMAP `uid_validity`/`remote_uid`
+/// pair or an opaque `remote_id`. Mailboxes gain a provider-side `remote_name`
+/// so a folder can carry a display name that differs from its stable remote
+/// identifier, accounts record their protocol family, and mailbox sync states
+/// can hold an opaque delta cursor.
+#[allow(clippy::too_many_lines)]
+fn apply_migration_v15(connection: &mut Connection) -> Result<(), ApplicationError> {
+    let transaction = connection.transaction().map_err(storage_error)?;
+    transaction
+        .execute_batch(
+            "
+                ALTER TABLE mail_accounts
+                ADD COLUMN provider TEXT NOT NULL DEFAULT 'imap'
+                    CHECK (provider IN ('imap', 'microsoft_graph'));
+
+                ALTER TABLE mailboxes ADD COLUMN remote_name TEXT
+                    CHECK (remote_name IS NULL OR length(remote_name) BETWEEN 1 AND 1024);
+
+                UPDATE mailboxes SET remote_name = display_name
+                WHERE account_id IN (SELECT id FROM mail_accounts);
+
+                ALTER TABLE remote_mailbox_sync_states ADD COLUMN delta_cursor TEXT
+                    CHECK (delta_cursor IS NULL OR length(delta_cursor) BETWEEN 1 AND 8192);
+
+                CREATE TABLE remote_messages_v15 (
+                    message_id TEXT PRIMARY KEY NOT NULL
+                        REFERENCES messages(id) ON DELETE CASCADE,
+                    account_id TEXT NOT NULL,
+                    remote_mailbox TEXT NOT NULL,
+                    uid_validity INTEGER
+                        CHECK (uid_validity BETWEEN 0 AND 4294967295),
+                    remote_uid INTEGER
+                        CHECK (remote_uid BETWEEN 1 AND 4294967295),
+                    remote_id TEXT
+                        CHECK (length(remote_id) BETWEEN 1 AND 1024),
+                    catalog_complete INTEGER NOT NULL DEFAULT 0
+                        CHECK (catalog_complete IN (0, 1)),
+                    body_requested INTEGER NOT NULL DEFAULT 1
+                        CHECK (body_requested IN (0, 1)),
+                    body_complete INTEGER NOT NULL DEFAULT 1
+                        CHECK (body_complete IN (0, 1)),
+                    CHECK (
+                        (uid_validity IS NOT NULL AND remote_uid IS NOT NULL
+                            AND remote_id IS NULL)
+                        OR
+                        (uid_validity IS NULL AND remote_uid IS NULL
+                            AND remote_id IS NOT NULL)
+                    )
+                ) STRICT;
+
+                INSERT INTO remote_messages_v15 (
+                    message_id, account_id, remote_mailbox, uid_validity, remote_uid,
+                    remote_id, catalog_complete, body_requested, body_complete
+                )
+                SELECT message_id, account_id, remote_mailbox, uid_validity, remote_uid,
+                       NULL, catalog_complete, body_requested, body_complete
+                FROM remote_messages;
+
+                DROP TABLE remote_messages;
+                ALTER TABLE remote_messages_v15 RENAME TO remote_messages;
+                CREATE INDEX remote_messages_account
+                    ON remote_messages (account_id);
+                CREATE INDEX remote_messages_mailbox
+                    ON remote_messages (account_id, remote_mailbox);
+
+                CREATE TABLE pending_mail_mutations_v15 (
+                    message_id TEXT PRIMARY KEY NOT NULL
+                        REFERENCES messages(id) ON DELETE CASCADE,
+                    account_id TEXT NOT NULL,
+                    source_mailbox TEXT NOT NULL,
+                    target_mailbox TEXT,
+                    uid_validity INTEGER
+                        CHECK (uid_validity BETWEEN 0 AND 4294967295),
+                    remote_uid INTEGER
+                        CHECK (remote_uid BETWEEN 1 AND 4294967295),
+                    remote_id TEXT
+                        CHECK (length(remote_id) BETWEEN 1 AND 1024),
+                    seen INTEGER NOT NULL CHECK (seen IN (0, 1)),
+                    flagged INTEGER NOT NULL CHECK (flagged IN (0, 1)),
+                    updated_at_ms INTEGER NOT NULL,
+                    CHECK (
+                        (uid_validity IS NOT NULL AND remote_uid IS NOT NULL
+                            AND remote_id IS NULL)
+                        OR
+                        (uid_validity IS NULL AND remote_uid IS NULL
+                            AND remote_id IS NOT NULL)
+                    )
+                ) STRICT;
+
+                INSERT INTO pending_mail_mutations_v15 (
+                    message_id, account_id, source_mailbox, target_mailbox,
+                    uid_validity, remote_uid, remote_id, seen, flagged, updated_at_ms
+                )
+                SELECT message_id, account_id, source_mailbox, target_mailbox,
+                       uid_validity, remote_uid, NULL, seen, flagged, updated_at_ms
+                FROM pending_mail_mutations;
+
+                DROP TABLE pending_mail_mutations;
+                ALTER TABLE pending_mail_mutations_v15 RENAME TO pending_mail_mutations;
+                CREATE INDEX pending_mail_mutations_account
+                    ON pending_mail_mutations (account_id, updated_at_ms);
+
+                CREATE TABLE pending_draft_operations_v15 (
+                    message_id TEXT PRIMARY KEY NOT NULL
+                        REFERENCES messages(id) ON DELETE CASCADE,
+                    account_id TEXT NOT NULL
+                        REFERENCES mail_accounts(id) ON DELETE CASCADE,
+                    target_mailbox TEXT NOT NULL CHECK (length(target_mailbox) > 0),
+                    operation TEXT NOT NULL
+                        CHECK (operation IN ('upsert', 'delete')),
+                    previous_remote_mailbox TEXT
+                        CHECK (previous_remote_mailbox IS NULL
+                            OR length(previous_remote_mailbox) > 0),
+                    previous_uid_validity INTEGER
+                        CHECK (previous_uid_validity BETWEEN 0 AND 4294967295),
+                    previous_remote_uid INTEGER
+                        CHECK (previous_remote_uid BETWEEN 1 AND 4294967295),
+                    previous_remote_id TEXT
+                        CHECK (length(previous_remote_id) BETWEEN 1 AND 1024),
+                    updated_at_ms INTEGER NOT NULL,
+                    CHECK (
+                        (previous_remote_mailbox IS NULL
+                            AND previous_uid_validity IS NULL
+                            AND previous_remote_uid IS NULL
+                            AND previous_remote_id IS NULL)
+                        OR
+                        (previous_remote_mailbox IS NOT NULL
+                            AND previous_uid_validity IS NOT NULL
+                            AND previous_remote_uid IS NOT NULL
+                            AND previous_remote_id IS NULL)
+                        OR
+                        (previous_remote_mailbox IS NOT NULL
+                            AND previous_uid_validity IS NULL
+                            AND previous_remote_uid IS NULL
+                            AND previous_remote_id IS NOT NULL)
+                    ),
+                    CHECK (operation != 'delete' OR previous_remote_mailbox IS NOT NULL)
+                ) STRICT;
+
+                INSERT INTO pending_draft_operations_v15 (
+                    message_id, account_id, target_mailbox, operation,
+                    previous_remote_mailbox, previous_uid_validity,
+                    previous_remote_uid, previous_remote_id, updated_at_ms
+                )
+                SELECT message_id, account_id, target_mailbox, operation,
+                       previous_remote_mailbox, previous_uid_validity,
+                       previous_remote_uid, NULL, updated_at_ms
+                FROM pending_draft_operations;
+
+                DROP TABLE pending_draft_operations;
+                ALTER TABLE pending_draft_operations_v15
+                    RENAME TO pending_draft_operations;
+                CREATE INDEX pending_draft_operations_account
+                    ON pending_draft_operations (account_id, updated_at_ms);
+
+                PRAGMA user_version = 15;
+                ",
+        )
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)
+}
+
 fn search_expression(
     query: &str,
     include_content: bool,
@@ -3290,6 +3522,7 @@ struct RawMailbox {
     id: String,
     account_id: String,
     display_name: String,
+    remote_name: Option<String>,
     role: String,
     unread_count: u32,
     total_count: u32,
@@ -3297,6 +3530,7 @@ struct RawMailbox {
 
 struct RawMailAccount {
     id: String,
+    provider: String,
     display_name: String,
     email: String,
     imap_host: String,
@@ -3314,6 +3548,7 @@ impl RawMailAccount {
     fn into_domain(self) -> Result<MailAccount, ApplicationError> {
         Ok(MailAccount {
             id: AccountId::parse(self.id).map_err(invalid_data)?,
+            provider: mail_provider_from_str(&self.provider)?,
             email: MailAddress::new(self.email, Some(self.display_name.clone()))
                 .map_err(invalid_data)?,
             display_name: self.display_name,
@@ -3336,6 +3571,7 @@ impl RawMailbox {
             id: MailboxId::parse(self.id).map_err(invalid_data)?,
             account_id: AccountId::parse(self.account_id).map_err(invalid_data)?,
             display_name: self.display_name,
+            remote_name: self.remote_name,
             role: mailbox_role_from_str(&self.role)?,
             unread_count: self.unread_count,
             total_count: self.total_count,
@@ -3423,6 +3659,152 @@ const fn transport_security_to_str(value: TransportSecurity) -> &'static str {
     }
 }
 
+const fn mail_provider_to_str(value: MailProvider) -> &'static str {
+    match value {
+        MailProvider::ImapSmtp => "imap",
+        MailProvider::MicrosoftGraph => "microsoft_graph",
+    }
+}
+
+fn mail_provider_from_str(value: &str) -> Result<MailProvider, ApplicationError> {
+    match value {
+        "imap" => Ok(MailProvider::ImapSmtp),
+        "microsoft_graph" => Ok(MailProvider::MicrosoftGraph),
+        other => Err(ApplicationError::Storage(format!(
+            "unknown mail provider: {other}"
+        ))),
+    }
+}
+
+/// Splits one remote identity into the three nullable identity columns.
+fn identity_columns(identity: &RemoteMessageIdentity) -> (Option<u32>, Option<u32>, Option<&str>) {
+    match identity {
+        RemoteMessageIdentity::ImapUid { uid_validity, uid } => {
+            (Some(*uid_validity), Some(*uid), None)
+        }
+        RemoteMessageIdentity::ProviderId(id) => (None, None, Some(id.as_str())),
+    }
+}
+
+fn identity_from_columns(
+    uid_validity: Option<u32>,
+    remote_uid: Option<u32>,
+    provider_id: Option<String>,
+) -> Result<RemoteMessageIdentity, ApplicationError> {
+    match (uid_validity, remote_uid, provider_id) {
+        (Some(uid_validity), Some(uid), None) => {
+            Ok(RemoteMessageIdentity::ImapUid { uid_validity, uid })
+        }
+        (None, None, Some(id)) => Ok(RemoteMessageIdentity::ProviderId(id)),
+        _ => Err(ApplicationError::Storage(
+            "remote message row has an inconsistent identity".into(),
+        )),
+    }
+}
+
+struct RawRemoteMetadata {
+    message_id: String,
+    account_id: String,
+    remote_mailbox: String,
+    uid_validity: Option<u32>,
+    remote_uid: Option<u32>,
+    provider_id: Option<String>,
+    catalog_complete: bool,
+    body_requested: bool,
+    body_complete: bool,
+}
+
+impl RawRemoteMetadata {
+    fn into_domain(self) -> Result<RemoteMessageMetadata, ApplicationError> {
+        Ok(RemoteMessageMetadata {
+            message_id: MessageId::parse(self.message_id).map_err(invalid_data)?,
+            account_id: AccountId::parse(self.account_id).map_err(invalid_data)?,
+            remote_mailbox: self.remote_mailbox,
+            identity: identity_from_columns(self.uid_validity, self.remote_uid, self.provider_id)?,
+            catalog_complete: self.catalog_complete,
+            body_requested: self.body_requested,
+            body_complete: self.body_complete,
+        })
+    }
+}
+
+fn remote_metadata_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawRemoteMetadata> {
+    Ok(RawRemoteMetadata {
+        message_id: row.get(0)?,
+        account_id: row.get(1)?,
+        remote_mailbox: row.get(2)?,
+        uid_validity: row.get(3)?,
+        remote_uid: row.get(4)?,
+        provider_id: row.get(5)?,
+        catalog_complete: row.get(6)?,
+        body_requested: row.get(7)?,
+        body_complete: row.get(8)?,
+    })
+}
+
+/// Loads the remote mailbox and identity of one cached message, if any.
+fn query_remote_identity(
+    connection: &Connection,
+    message_id: &MessageId,
+) -> Result<Option<(String, RemoteMessageIdentity)>, ApplicationError> {
+    let row = connection
+        .query_row(
+            "SELECT remote_mailbox, uid_validity, remote_uid, remote_id
+             FROM remote_messages WHERE message_id = ?1",
+            [message_id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<u32>>(1)?,
+                    row.get::<_, Option<u32>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    row.map(|(remote_mailbox, uid_validity, remote_uid, provider_id)| {
+        Ok((
+            remote_mailbox,
+            identity_from_columns(uid_validity, remote_uid, provider_id)?,
+        ))
+    })
+    .transpose()
+}
+
+/// Lists every cached remote identity inside one remote mailbox.
+fn mailbox_remote_identities(
+    connection: &Connection,
+    account_id: &AccountId,
+    remote_mailbox: &str,
+) -> Result<Vec<(String, RemoteMessageIdentity)>, ApplicationError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT message_id, uid_validity, remote_uid, remote_id
+             FROM remote_messages
+             WHERE account_id = ?1 AND remote_mailbox = ?2",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![account_id.as_str(), remote_mailbox], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<u32>>(1)?,
+                row.get::<_, Option<u32>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(storage_error)?;
+    rows.map(|row| {
+        let (message_id, uid_validity, remote_uid, provider_id) = row.map_err(storage_error)?;
+        Ok((
+            message_id,
+            identity_from_columns(uid_validity, remote_uid, provider_id)?,
+        ))
+    })
+    .collect()
+}
+
 fn transport_security_from_str(value: &str) -> Result<TransportSecurity, ApplicationError> {
     match value {
         "tls" => Ok(TransportSecurity::Tls),
@@ -3475,18 +3857,22 @@ mod tests {
     use std::{
         fs,
         path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
-        time::{Instant, SystemTime, UNIX_EPOCH},
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            mpsc,
+        },
+        thread,
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
     use maicenta_application::{
         ApplicationError, LocalDraftMetadata, LocalDraftStore, MailAccountStore, MailStore,
-        MailSyncStore, PendingDraftAction, RemoteMailboxSyncState, RemoteMessageMetadata,
-        SecretStore, WorkspaceStore,
+        MailSyncStore, PendingDraftAction, RemoteMailboxSyncState, RemoteMessageIdentity,
+        RemoteMessageMetadata, SecretStore, WorkspaceStore,
     };
     use maicenta_domain::{
-        AccountId, AttachmentId, CalendarEvent, Contact, MailAccount, MailAddress, Mailbox,
-        MailboxId, MailboxRole, MessageAttachment, MessageBody, MessageFlag, MessageId,
+        AccountId, AttachmentId, CalendarEvent, Contact, MailAccount, MailAddress, MailProvider,
+        Mailbox, MailboxId, MailboxRole, MessageAttachment, MessageBody, MessageFlag, MessageId,
         MessageRecipients, MessageSummary, TaskItem, TransportSecurity, WorkspaceItemId,
     };
 
@@ -3534,6 +3920,7 @@ mod tests {
             id: MailboxId::parse("inbox").expect("valid id"),
             account_id: AccountId::parse("personal").expect("valid id"),
             display_name: "Posteingang".into(),
+            remote_name: Some("Posteingang".into()),
             role: MailboxRole::Inbox,
             unread_count: 1,
             total_count: 1,
@@ -3559,8 +3946,10 @@ mod tests {
             message_id,
             account_id: AccountId::parse("personal").expect("valid id"),
             remote_mailbox: "Posteingang".into(),
-            uid_validity: 42,
-            remote_uid: 7,
+            identity: RemoteMessageIdentity::ImapUid {
+                uid_validity: 42,
+                uid: 7,
+            },
             catalog_complete: true,
             body_requested: true,
             body_complete: true,
@@ -3614,8 +4003,7 @@ mod tests {
                 .reconcile_remote_mailbox(
                     &metadata.account_id,
                     &metadata.remote_mailbox,
-                    metadata.uid_validity,
-                    &[metadata.remote_uid],
+                    std::slice::from_ref(&metadata.identity),
                 )
                 .expect("matching mailbox snapshot")
                 .is_empty()
@@ -3625,8 +4013,10 @@ mod tests {
                 .reconcile_remote_mailbox(
                     &metadata.account_id,
                     &metadata.remote_mailbox,
-                    metadata.uid_validity + 1,
-                    &[metadata.remote_uid],
+                    &[RemoteMessageIdentity::ImapUid {
+                        uid_validity: 43,
+                        uid: 7,
+                    }],
                 )
                 .expect("changed UIDVALIDITY"),
             vec![remote_attachment]
@@ -3642,6 +4032,7 @@ mod tests {
             id: MailboxId::parse("archive").expect("valid id"),
             account_id: AccountId::parse("personal").expect("valid id"),
             display_name: "Archiv".into(),
+            remote_name: None,
             role: MailboxRole::Archive,
             unread_count: 0,
             total_count: 0,
@@ -3651,6 +4042,7 @@ mod tests {
     fn mail_account() -> MailAccount {
         MailAccount {
             id: AccountId::parse("work-account").expect("account id"),
+            provider: MailProvider::ImapSmtp,
             display_name: "Arbeit".into(),
             email: MailAddress::new("user@example.org", Some("Arbeit".into()))
                 .expect("account address"),
@@ -3676,6 +4068,7 @@ mod tests {
             id: MailboxId::parse("work.drafts").expect("draft mailbox id"),
             account_id: account.id.clone(),
             display_name: "Drafts".into(),
+            remote_name: None,
             role: MailboxRole::Drafts,
             unread_count: 0,
             total_count: 0,
@@ -3684,6 +4077,7 @@ mod tests {
             id: MailboxId::parse("work.sent").expect("sent mailbox id"),
             account_id: account.id.clone(),
             display_name: "Sent".into(),
+            remote_name: None,
             role: MailboxRole::Sent,
             unread_count: 0,
             total_count: 0,
@@ -3731,8 +4125,10 @@ mod tests {
             message_id: message.id.clone(),
             account_id: account.id.clone(),
             remote_mailbox: "Drafts".into(),
-            uid_validity: 91,
-            remote_uid: 14,
+            identity: RemoteMessageIdentity::ImapUid {
+                uid_validity: 91,
+                uid: 14,
+            },
             catalog_complete: true,
             body_requested: true,
             body_complete: true,
@@ -3788,6 +4184,7 @@ mod tests {
             id: MailboxId::parse("work.remote-drafts").expect("draft mailbox id"),
             account_id: account.id.clone(),
             display_name: "Drafts".into(),
+            remote_name: None,
             role: MailboxRole::Drafts,
             unread_count: 0,
             total_count: 0,
@@ -3816,8 +4213,10 @@ mod tests {
             message_id: message.id.clone(),
             account_id: account.id.clone(),
             remote_mailbox: "Drafts".into(),
-            uid_validity: 77,
-            remote_uid: 9,
+            identity: RemoteMessageIdentity::ImapUid {
+                uid_validity: 77,
+                uid: 9,
+            },
             catalog_complete: true,
             body_requested: true,
             body_complete: true,
@@ -3929,23 +4328,131 @@ mod tests {
     }
 
     #[test]
-    fn stores_account_passwords_inside_the_encrypted_profile() {
+    fn stores_independent_account_secrets_inside_the_encrypted_profile() {
         let mut store = SqliteMailStore::open_in_memory().expect("profile");
         let account = mail_account();
         store.save_mail_account(&account).expect("save account");
         store
             .set(&account.id, "password", "app-password")
             .expect("save password");
+        store
+            .set(&account.id, "oauth.refresh_token", "refresh-token")
+            .expect("save refresh token");
         assert_eq!(
             store.get(&account.id, "password").expect("load password"),
             Some("app-password".into())
+        );
+        assert_eq!(
+            store
+                .get(&account.id, "oauth.refresh_token")
+                .expect("load refresh token"),
+            Some("refresh-token".into())
+        );
+        store
+            .remove(&account.id, "password")
+            .expect("remove password");
+        assert_eq!(
+            store
+                .get(&account.id, "password")
+                .expect("removed password"),
+            None
+        );
+        assert_eq!(
+            store
+                .get(&account.id, "oauth.refresh_token")
+                .expect("refresh token retained"),
+            Some("refresh-token".into())
         );
         store
             .delete_mail_account(&account.id)
             .expect("delete account");
         assert_eq!(
-            store.get(&account.id, "password").expect("deleted secret"),
+            store
+                .get(&account.id, "oauth.refresh_token")
+                .expect("deleted secret"),
             None
+        );
+    }
+
+    #[test]
+    fn migrates_existing_password_rows_to_named_secrets() {
+        let connection = Connection::open_in_memory().expect("database");
+        connection
+            .execute_batch(
+                "
+                PRAGMA foreign_keys = ON;
+                CREATE TABLE mail_accounts (
+                    id TEXT PRIMARY KEY NOT NULL
+                ) STRICT;
+                CREATE TABLE account_secrets (
+                    account_id TEXT PRIMARY KEY NOT NULL
+                        REFERENCES mail_accounts(id) ON DELETE CASCADE,
+                    password TEXT NOT NULL CHECK (length(password) > 0)
+                ) STRICT;
+                -- Minimal v13 shapes of the tables that later migrations rebuild.
+                CREATE TABLE mailboxes (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    account_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL
+                ) STRICT;
+                CREATE TABLE messages (id TEXT PRIMARY KEY NOT NULL) STRICT;
+                CREATE TABLE remote_messages (
+                    message_id TEXT PRIMARY KEY NOT NULL
+                        REFERENCES messages(id) ON DELETE CASCADE,
+                    account_id TEXT NOT NULL,
+                    remote_mailbox TEXT NOT NULL,
+                    uid_validity INTEGER NOT NULL,
+                    remote_uid INTEGER NOT NULL,
+                    body_complete INTEGER NOT NULL DEFAULT 1,
+                    catalog_complete INTEGER NOT NULL DEFAULT 0,
+                    body_requested INTEGER NOT NULL DEFAULT 1
+                ) STRICT;
+                CREATE TABLE pending_mail_mutations (
+                    message_id TEXT PRIMARY KEY NOT NULL,
+                    account_id TEXT NOT NULL,
+                    source_mailbox TEXT NOT NULL,
+                    target_mailbox TEXT,
+                    uid_validity INTEGER NOT NULL,
+                    remote_uid INTEGER NOT NULL,
+                    seen INTEGER NOT NULL,
+                    flagged INTEGER NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                ) STRICT;
+                CREATE TABLE remote_mailbox_sync_states (
+                    account_id TEXT NOT NULL,
+                    remote_mailbox TEXT NOT NULL,
+                    uid_validity INTEGER NOT NULL,
+                    PRIMARY KEY (account_id, remote_mailbox)
+                ) STRICT;
+                CREATE TABLE pending_draft_operations (
+                    message_id TEXT PRIMARY KEY NOT NULL,
+                    account_id TEXT NOT NULL,
+                    target_mailbox TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    previous_remote_mailbox TEXT,
+                    previous_uid_validity INTEGER,
+                    previous_remote_uid INTEGER,
+                    updated_at_ms INTEGER NOT NULL
+                ) STRICT;
+                INSERT INTO mail_accounts (id) VALUES ('work');
+                INSERT INTO account_secrets (account_id, password)
+                VALUES ('work', 'existing-password');
+                PRAGMA user_version = 13;
+                ",
+            )
+            .expect("legacy schema");
+
+        let store = SqliteMailStore::from_connection(connection).expect("migrated store");
+        let account_id = AccountId::parse("work").expect("account id");
+        assert_eq!(
+            store
+                .get(&account_id, "password")
+                .expect("migrated password"),
+            Some("existing-password".into())
+        );
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            CURRENT_SCHEMA_VERSION
         );
     }
 
@@ -3960,6 +4467,10 @@ mod tests {
             uid_validity: 42,
             uid_next: Some(8_192),
             highest_modseq: Some(u64::MAX - 7),
+            delta_cursor: Some(
+                "https://graph.microsoft.com/v1.0/me/mailFolders/x/messages/delta?$deltatoken=abc"
+                    .into(),
+            ),
             catalog_complete: true,
             last_full_reconcile_at_ms: 1_785_830_400_000,
         };
@@ -4015,8 +4526,10 @@ mod tests {
                 .remove_vanished_remote_messages(
                     &metadata.account_id,
                     &metadata.remote_mailbox,
-                    metadata.uid_validity + 1,
-                    &[metadata.remote_uid],
+                    &[RemoteMessageIdentity::ImapUid {
+                        uid_validity: 43,
+                        uid: 7,
+                    }],
                 )
                 .expect("different UIDVALIDITY")
                 .is_empty()
@@ -4026,8 +4539,10 @@ mod tests {
                 .remove_vanished_remote_messages(
                     &metadata.account_id,
                     &metadata.remote_mailbox,
-                    metadata.uid_validity,
-                    &[metadata.remote_uid + 1],
+                    &[RemoteMessageIdentity::ImapUid {
+                        uid_validity: 42,
+                        uid: 8,
+                    }],
                 )
                 .expect("different UID")
                 .is_empty()
@@ -4037,8 +4552,7 @@ mod tests {
                 .remove_vanished_remote_messages(
                     &metadata.account_id,
                     &metadata.remote_mailbox,
-                    metadata.uid_validity,
-                    &[metadata.remote_uid],
+                    std::slice::from_ref(&metadata.identity),
                 )
                 .expect("matching VANISHED UID"),
             [stored_attachment]
@@ -4415,6 +4929,33 @@ mod tests {
     }
 
     #[test]
+    fn coordinates_operations_across_connections_to_the_same_profile() {
+        let database = TemporaryDatabase::new();
+        let first = SqliteMailStore::open(&database.path).expect("first connection");
+        let second = SqliteMailStore::open(&database.path).expect("second connection");
+        let first_operation = first.connection().expect("first operation");
+        let (sender, receiver) = mpsc::channel();
+
+        let worker = thread::spawn(move || {
+            let result = second.schema_version();
+            sender.send(result).expect("send result");
+        });
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        drop(first_operation);
+        assert_eq!(
+            receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("coordinated operation"),
+            Ok(CURRENT_SCHEMA_VERSION)
+        );
+        worker.join().expect("worker");
+    }
+
+    #[test]
     fn upsert_replaces_mutable_message_fields() {
         let mut store = SqliteMailStore::open_in_memory().expect("open database");
         store.save_mailboxes(&[mailbox()]).expect("save mailbox");
@@ -4697,6 +5238,7 @@ mod tests {
             id: MailboxId::parse("other.archive").expect("mailbox id"),
             account_id: AccountId::parse("other").expect("account id"),
             display_name: "Archive".into(),
+            remote_name: None,
             role: MailboxRole::Archive,
             unread_count: 0,
             total_count: 0,
@@ -4831,6 +5373,7 @@ mod tests {
             id: MailboxId::parse("work-account.inbox").expect("mailbox id"),
             account_id: account.id.clone(),
             display_name: "Posteingang".into(),
+            remote_name: None,
             role: MailboxRole::Inbox,
             unread_count: 0,
             total_count: 0,

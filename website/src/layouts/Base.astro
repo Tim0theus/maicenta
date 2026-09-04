@@ -1,0 +1,75 @@
+---
+import '../styles/global.css';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { site, locales, type Locale } from '../config';
+import { localePath, stripLocale, t } from '../i18n';
+
+interface Props {
+  lang: Locale;
+  title: string;
+  description?: string;
+  /** Path without locale prefix, e.g. `pricing` or `docs/getting-started`. */
+  path?: string;
+}
+
+const { lang, title, description, path } = Astro.props;
+const ui = t(lang);
+const rel = path ?? stripLocale(Astro.url.pathname);
+const canonical = new URL(localePath(lang, rel), site.url).href;
+const pageDescription = description ?? ui.meta.defaultDescription;
+const ogImage = new URL('/branding/maicenta-banner.png', site.url).href;
+---
+
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={pageDescription} />
+    <link rel="canonical" href={canonical} />
+    {locales.map((l) => (
+      <link rel="alternate" hreflang={l} href={new URL(localePath(l, rel), site.url).href} />
+    ))}
+    <link rel="alternate" hreflang="x-default" href={new URL(localePath('en', rel), site.url).href} />
+    <link rel="icon" type="image/svg+xml" href="/branding/maicenta-symbol.svg" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/favicon.png" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <meta name="theme-color" content="#071f4f" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={site.name} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={pageDescription} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:locale" content={lang === 'de' ? 'de_DE' : 'en_US'} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="generator" content={Astro.generator} />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">{ui.nav.skipToContent}</a>
+    <Header lang={lang} />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer lang={lang} />
+  </body>
+</html>
+
+<style>
+  .skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -100px;
+    padding: 0.6rem 1rem;
+    background: var(--accent);
+    color: var(--accent-contrast);
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+    z-index: 100;
+  }
+  .skip-link:focus {
+    top: 1rem;
+  }
+</style>

@@ -76,6 +76,9 @@ pub struct Mailbox {
     pub id: MailboxId,
     pub account_id: AccountId,
     pub display_name: String,
+    /// Provider-side mailbox identity: the IMAP mailbox name or an opaque
+    /// provider folder ID. Local-only mailboxes have none.
+    pub remote_name: Option<String>,
     pub role: MailboxRole,
     pub unread_count: u32,
     pub total_count: u32,

@@ -9,14 +9,32 @@ pub enum TransportSecurity {
     StartTls,
 }
 
-/// Persisted configuration for one IMAP/SMTP account.
+/// Remote protocol family used to reach one mail account.
+///
+/// The standards connector speaks IMAP and SMTP. Provider-specific connectors
+/// are explicit variants so synchronization, identity handling, and
+/// capabilities can be selected without inspecting server names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MailProvider {
+    /// IMAP for incoming mail and SMTP for submission.
+    ImapSmtp,
+    /// Microsoft Graph mail API for Exchange Online tenants.
+    MicrosoftGraph,
+}
+
+/// Persisted configuration for one mail account.
 ///
 /// Passwords and OAuth tokens are intentionally absent from snapshots. They
 /// belong in the encrypted profile vault and are referenced by `id`; only the
 /// profile master key is stored by the operating system.
+///
+/// The IMAP/SMTP endpoint fields describe the standards endpoints of the
+/// account. A [`MailProvider::MicrosoftGraph`] account keeps them as a
+/// documented fallback description but is synchronized through Graph.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MailAccount {
     pub id: AccountId,
+    pub provider: MailProvider,
     pub display_name: String,
     pub email: MailAddress,
     pub imap_host: String,
@@ -61,12 +79,13 @@ pub struct Contact {
 mod tests {
     use crate::{AccountId, MailAddress, WorkspaceItemId};
 
-    use super::{MailAccount, TransportSecurity};
+    use super::{MailAccount, MailProvider, TransportSecurity};
 
     #[test]
     fn account_configuration_contains_no_secret_material() {
         let account = MailAccount {
             id: AccountId::parse("work").expect("account id"),
+            provider: MailProvider::ImapSmtp,
             display_name: "Arbeit".into(),
             email: MailAddress::new("user@example.org", Some("User".into())).expect("mail address"),
             imap_host: "imap.example.org".into(),
