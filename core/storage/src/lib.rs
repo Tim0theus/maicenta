@@ -2487,13 +2487,21 @@ fn save_attachment(
         .map_err(storage_error)
 }
 
+/// Accepts an IMAP MIME section (`TEXT`, `1`, `2.3`) or an opaque provider
+/// attachment identifier such as a Graph attachment ID.
 fn valid_attachment_section(value: &str) -> bool {
-    value == "TEXT"
+    let imap_section = value == "TEXT"
         || !value.is_empty()
             && value.len() <= 128
             && value
                 .split('.')
-                .all(|component| component.parse::<u32>().is_ok_and(|section| section > 0))
+                .all(|component| component.parse::<u32>().is_ok_and(|section| section > 0));
+    let provider_id = !value.is_empty()
+        && value.len() <= 1_024
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'=' | b'+' | b'/')
+        });
+    imap_section || provider_id
 }
 
 fn refresh_mailbox_counts(transaction: &rusqlite::Transaction<'_>) -> Result<(), ApplicationError> {
@@ -3880,7 +3888,7 @@ mod tests {
 
     use super::{
         CURRENT_SCHEMA_VERSION, SQLITE_HEADER, SqliteMailStore, apply_migration_v1,
-        apply_migration_v2, apply_migration_v3, apply_migration_v4,
+        apply_migration_v2, apply_migration_v3, apply_migration_v4, valid_attachment_section,
     };
 
     static NEXT_DATABASE_ID: AtomicU64 = AtomicU64::new(0);
@@ -4247,6 +4255,16 @@ mod tests {
                 .expect("draft queue")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn accepts_imap_sections_and_provider_attachment_identifiers() {
+        assert!(valid_attachment_section("TEXT"));
+        assert!(valid_attachment_section("2.1"));
+        assert!(valid_attachment_section("AAMkAGI2THVSAAA=_x-y/z+"));
+        assert!(!valid_attachment_section(""));
+        assert!(!valid_attachment_section("../secret"));
+        assert!(!valid_attachment_section("has space"));
     }
 
     #[test]
