@@ -12,6 +12,7 @@ import 'app_theme.dart';
 import 'features/compose/compose_window.dart';
 import 'features/mail/account_autodiscovery.dart';
 import 'features/mail/account_setup_detection.dart';
+import 'features/mail/folder_tree.dart';
 import 'features/mail/mail_data.dart';
 import 'features/mail/mailbox_labels.dart';
 import 'features/mail/message_window.dart';
@@ -256,6 +257,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   late List<DemoMessage> messages;
   late List<MailFolder> folders;
   late List<String> favoriteFolderIds;
+  late Set<String> collapsedFolderIds;
   String query = '';
   List<DemoMessage>? profileSearchResults;
   bool searchInProgress = false;
@@ -293,6 +295,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     messages = widget.mailDataSource.messages.toList();
     folders = widget.mailDataSource.folders.toList();
     favoriteFolderIds = widget.mailDataSource.favoriteFolderIds.toList();
+    collapsedFolderIds = widget.mailDataSource.collapsedFolderIds.toSet();
     calendarItems = widget.mailDataSource.calendarEvents.toList();
     tasks = widget.mailDataSource.tasks.toList();
     contacts = widget.mailDataSource.contacts.toList();
@@ -1200,6 +1203,22 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     }
   }
 
+  Future<void> toggleFolderCollapsed(String folderId) async {
+    final previous = collapsedFolderIds;
+    final next = Set<String>.of(previous);
+    if (!next.remove(folderId)) next.add(folderId);
+    setState(() => collapsedFolderIds = next);
+    try {
+      await widget.mailDataSource.saveCollapsedFolders(
+        next.toList(growable: false),
+      );
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => collapsedFolderIds = previous);
+      showPersistenceError(error);
+    }
+  }
+
   Future<bool> mutateSelected(
     DemoMessage Function(DemoMessage message) update,
   ) async {
@@ -1288,7 +1307,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   Future<void> synchronize({bool automatic = false}) async {
     if (synchronizing) {
       if (!automatic) {
-        showNotice('Die IMAP-Synchronisierung läuft bereits.');
+        showNotice('Die Synchronisierung läuft bereits.');
       }
       return;
     }
@@ -1302,13 +1321,13 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     }
     if (mailAccounts.isEmpty) {
       if (!automatic) {
-        showNotice('Bitte zuerst ein IMAP-/SMTP-Konto einrichten.');
+        showNotice('Bitte zuerst ein E-Mail-Konto einrichten.');
         await showAccountSettings();
       }
       return;
     }
     setState(() => synchronizing = true);
-    if (!automatic) showNotice('IMAP-Synchronisierung läuft …');
+    if (!automatic) showNotice('Synchronisierung läuft …');
     final warnings = <String>{};
     int? previousRemaining;
     try {
@@ -1321,7 +1340,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         if (remaining == 0) break;
         if (previousRemaining != null && remaining >= previousRemaining) {
           warnings.add(
-            'Der IMAP-Katalog macht momentan keinen weiteren Fortschritt. '
+            'Der Nachrichtenkatalog macht momentan keinen weiteren Fortschritt. '
             'Er wird beim nächsten Abgleich erneut versucht.',
           );
           break;
@@ -1703,6 +1722,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       favoriteFolderIds = snapshot.favoriteFolderIds
           .where((id) => snapshot.folders.any((folder) => folder.id == id))
           .toList();
+      collapsedFolderIds = snapshot.collapsedFolderIds.toSet();
       messages = snapshot.messages.toList();
       calendarItems = snapshot.calendarEvents.toList();
       tasks = snapshot.tasks.toList();
@@ -2137,7 +2157,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
                   pendingMailOperations == 0
                       ? 'Keine ausstehenden Serveränderungen.'
                       : '$pendingMailOperations Serveränderungen warten auf den nächsten IMAP-Abgleich.',
-                  if (synchronizing) 'Der IMAP-Abgleich läuft.',
+                  if (synchronizing) 'Der Abgleich mit den Konten läuft.',
                   if (catalogMessagesRemaining > 0)
                     '$catalogMessagesRemaining Nachrichtenmetadaten werden noch katalogisiert.',
                   if (deltaMailboxesSynchronized > 0 ||
@@ -2186,6 +2206,9 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         folders: visibleFolders,
         accounts: mailAccounts,
         favoriteFolderIds: favoriteFolderIds,
+        collapsedFolderIds: collapsedFolderIds,
+        onToggleFolderCollapsed: (folderId) =>
+            unawaited(toggleFolderCollapsed(folderId)),
         selectedMessage: selectedMessage,
         selectedFolder: selectedFolder,
         onMessageSelected: selectMessage,
@@ -4340,6 +4363,8 @@ class MailWorkspace extends StatelessWidget {
     required this.folders,
     required this.accounts,
     required this.favoriteFolderIds,
+    required this.collapsedFolderIds,
+    required this.onToggleFolderCollapsed,
     required this.selectedMessage,
     required this.selectedFolder,
     required this.onMessageSelected,
@@ -4374,6 +4399,8 @@ class MailWorkspace extends StatelessWidget {
   final List<MailFolder> folders;
   final List<MailAccountConfig> accounts;
   final List<String> favoriteFolderIds;
+  final Set<String> collapsedFolderIds;
+  final ValueChanged<String> onToggleFolderCollapsed;
   final int selectedMessage;
   final String selectedFolder;
   final ValueChanged<int> onMessageSelected;
@@ -4422,6 +4449,8 @@ class MailWorkspace extends StatelessWidget {
                 folders: folders,
                 accounts: accounts,
                 favoriteFolderIds: favoriteFolderIds,
+                collapsedFolderIds: collapsedFolderIds,
+                onToggleFolderCollapsed: onToggleFolderCollapsed,
                 selectedFolder: selectedFolder,
                 onSelected: onFolderSelected,
                 onMessageDropped: onMessageDropped,
@@ -4483,6 +4512,8 @@ class FolderPane extends StatelessWidget {
     required this.folders,
     required this.accounts,
     required this.favoriteFolderIds,
+    this.collapsedFolderIds = const {},
+    this.onToggleFolderCollapsed,
     required this.selectedFolder,
     required this.onSelected,
     required this.onMessageDropped,
@@ -4497,6 +4528,8 @@ class FolderPane extends StatelessWidget {
   final List<MailFolder> folders;
   final List<MailAccountConfig> accounts;
   final List<String> favoriteFolderIds;
+  final Set<String> collapsedFolderIds;
+  final ValueChanged<String>? onToggleFolderCollapsed;
   final String selectedFolder;
   final ValueChanged<String> onSelected;
   final void Function(DemoMessage message, MailFolder folder) onMessageDropped;
@@ -4681,10 +4714,7 @@ class FolderPane extends StatelessWidget {
                       ),
                     ),
                   ),
-                  for (final folder in folders.where(
-                    (folder) => folder.accountId == groupId,
-                  ))
-                    _draggableFolderTile(context, folder: folder),
+                  ..._accountFolderTiles(context, groupId),
                 ],
               ],
             ),
@@ -4765,11 +4795,36 @@ class FolderPane extends StatelessWidget {
     );
   }
 
+  /// Rows of one account as a collapsible tree.
+  List<Widget> _accountFolderTiles(BuildContext context, String groupId) {
+    final tree = buildFolderTree(
+      folders
+          .where((folder) => folder.accountId == groupId)
+          .toList(growable: false),
+    );
+    final parents = folderTreeParentIds(tree);
+    return [
+      for (final entry in visibleFolderTree(tree, collapsedFolderIds))
+        _draggableFolderTile(
+          context,
+          folder: entry.folder,
+          depth: entry.depth,
+          tooltip: entry.folder.role == 'custom' ? entry.path : null,
+          expandable: parents.contains(entry.folder.id),
+          collapsed: collapsedFolderIds.contains(entry.folder.id),
+        ),
+    ];
+  }
+
   Widget _draggableFolderTile(
     BuildContext context, {
     required MailFolder folder,
     String keyPrefix = 'folder',
     String? secondaryLabel,
+    int depth = 0,
+    String? tooltip,
+    bool? expandable,
+    bool collapsed = false,
   }) {
     final label = mailboxDisplayName(context, folder);
     final tile = DragTarget<DemoMessage>(
@@ -4794,6 +4849,11 @@ class FolderPane extends StatelessWidget {
           keyPrefix: keyPrefix,
           label: label,
           secondaryLabel: secondaryLabel,
+          tooltip: tooltip,
+          depth: depth,
+          expandable: expandable,
+          collapsed: collapsed,
+          onToggleCollapsed: onToggleFolderCollapsed,
           icon: folderIcon(folder.role),
           count: _folderBadgeCount(folder),
           selected: selectedFolder == folder.id,
@@ -4910,6 +4970,11 @@ class FolderTile extends StatelessWidget {
     required this.onTap,
     this.count,
     this.secondaryLabel,
+    this.tooltip,
+    this.depth = 0,
+    this.expandable,
+    this.collapsed = false,
+    this.onToggleCollapsed,
     this.keyPrefix = 'folder',
   });
 
@@ -4920,6 +4985,18 @@ class FolderTile extends StatelessWidget {
   final ValueChanged<String> onTap;
   final int? count;
   final String? secondaryLabel;
+
+  /// Full folder path for nested custom folders; defaults to the label.
+  final String? tooltip;
+
+  /// Nesting level; each level indents the row like a classic folder tree.
+  final int depth;
+
+  /// `true` shows a collapse toggle, `false` reserves its space so sibling
+  /// rows stay aligned, `null` renders a plain row without the gutter.
+  final bool? expandable;
+  final bool collapsed;
+  final ValueChanged<String>? onToggleCollapsed;
   final String keyPrefix;
 
   @override
@@ -4940,9 +5017,34 @@ class FolderTile extends StatelessWidget {
             ),
           ),
         ),
-        padding: const EdgeInsets.only(left: 27, right: 12),
+        padding: EdgeInsets.only(
+          left: (expandable == null ? 27.0 : 9.0) + depth * 14,
+          right: 12,
+        ),
         child: Row(
           children: [
+            if (expandable != null)
+              SizedBox(
+                width: 18,
+                height: 27,
+                child: expandable!
+                    ? InkWell(
+                        key: Key('folder-toggle-$id'),
+                        onTap: onToggleCollapsed == null
+                            ? null
+                            : () => onToggleCollapsed!(id),
+                        child: Tooltip(
+                          message: collapsed
+                              ? 'Unterordner anzeigen'
+                              : 'Unterordner ausblenden',
+                          child: Icon(
+                            collapsed ? Icons.chevron_right : Icons.expand_more,
+                            size: 15,
+                          ),
+                        ),
+                      )
+                    : null,
+              ),
             Icon(
               icon,
               size: 15,
@@ -4952,8 +5054,8 @@ class FolderTile extends StatelessWidget {
             Expanded(
               child: Tooltip(
                 message: secondaryLabel == null
-                    ? label
-                    : '$label — $secondaryLabel',
+                    ? (tooltip ?? label)
+                    : '${tooltip ?? label} — $secondaryLabel',
                 child: Text.rich(
                   TextSpan(
                     text: label,

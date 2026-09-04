@@ -42,8 +42,13 @@ const SYNC_OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(10);
 const DELTA_PAGE_SIZE: usize = 100;
 const MAX_DELTA_PAGES_PER_MAILBOX: usize = 3;
-const MAX_DELTA_PAGES_PER_PASS: usize = 60;
-const MAX_BODY_DOWNLOADS_PER_PASS: usize = 100;
+// One pass is deliberately short so the client can show progress between
+// passes and continue automatically while work remains.
+const MAX_DELTA_PAGES_PER_PASS: usize = 12;
+const MAX_BODY_DOWNLOADS_PER_PASS: usize = 25;
+// The very first pass of a new account returns as soon as the folder list
+// and the first inbox page are known; bodies follow in the next pass.
+const INITIAL_PASS_DELTA_PAGES: usize = 3;
 const MAX_FOLDERS: usize = 200;
 const MAX_FOLDER_DEPTH: usize = 4;
 const MAX_BODY_BYTES: usize = 5 * 1024 * 1024;
@@ -76,6 +81,8 @@ pub struct GraphMailbox {
     pub folder_id: String,
     pub display_name: String,
     pub role: MailboxRole,
+    /// Server-side message count, used to estimate remaining catalogue work.
+    pub total_item_count: Option<u64>,
 }
 
 /// Metadata for one non-inline attachment that stays on the server until the
@@ -670,9 +677,23 @@ async fn synchronize_inner(
         .iter()
         .map(|checkpoint| (checkpoint.folder_id.as_str(), checkpoint))
         .collect::<HashMap<_, _>>();
-    let mut budget = FolderBudget {
-        delta_pages: MAX_DELTA_PAGES_PER_PASS,
-        body_downloads: MAX_BODY_DOWNLOADS_PER_PASS,
+    let mut known_per_folder: HashMap<&str, usize> = HashMap::new();
+    for known in known_messages {
+        *known_per_folder
+            .entry(known.folder_id.as_str())
+            .or_default() += 1;
+    }
+    let initial_pass = checkpoints.is_empty();
+    let mut budget = if initial_pass {
+        FolderBudget {
+            delta_pages: INITIAL_PASS_DELTA_PAGES,
+            body_downloads: 0,
+        }
+    } else {
+        FolderBudget {
+            delta_pages: MAX_DELTA_PAGES_PER_PASS,
+            body_downloads: MAX_BODY_DOWNLOADS_PER_PASS,
+        }
     };
     let mut result = GraphSyncResult {
         mailboxes: mailboxes.clone(),
@@ -684,17 +705,27 @@ async fn synchronize_inner(
         let checkpoint = checkpoints_by_folder
             .get(mailbox.folder_id.as_str())
             .copied();
+        let known_in_folder = known_per_folder
+            .get(mailbox.folder_id.as_str())
+            .copied()
+            .unwrap_or(0);
         if budget.delta_pages == 0 {
             // Leave the folder untouched; its stored cursor continues later.
-            if let Some(checkpoint) = checkpoint {
-                result.mailbox_states.push(GraphMailboxState {
-                    folder_id: mailbox.folder_id.clone(),
-                    delta_cursor: checkpoint.delta_cursor.clone(),
-                    removed_ids: Vec::new(),
-                    catalog_complete: checkpoint.catalog_complete,
-                    catalog_remaining: usize::from(!checkpoint.catalog_complete) * DELTA_PAGE_SIZE,
-                });
-            }
+            // Reporting the remaining estimate keeps the client continuing.
+            let catalog_complete = checkpoint.is_some_and(|checkpoint| checkpoint.catalog_complete);
+            result.mailbox_states.push(GraphMailboxState {
+                folder_id: mailbox.folder_id.clone(),
+                delta_cursor: checkpoint.and_then(|checkpoint| checkpoint.delta_cursor.clone()),
+                removed_ids: Vec::new(),
+                catalog_complete,
+                catalog_remaining: remaining_estimate(
+                    mailbox,
+                    catalog_complete,
+                    known_in_folder,
+                    0,
+                    0,
+                ),
+            });
             continue;
         }
         let folder_result = synchronize_folder(
@@ -702,6 +733,7 @@ async fn synchronize_inner(
             mailbox,
             checkpoint,
             &known_by_id,
+            known_in_folder,
             message_limit_per_mailbox,
             &mut budget,
         )
@@ -719,17 +751,39 @@ struct FolderSyncResult {
     state: GraphMailboxState,
 }
 
+/// Lower-bound estimate of work left in one folder: messages the server
+/// reports but the catalogue does not know yet, plus body downloads that were
+/// deferred by the pass budget. Never zero while the catalogue is incomplete,
+/// so the client keeps continuing.
+fn remaining_estimate(
+    mailbox: &GraphMailbox,
+    catalog_complete: bool,
+    known_in_folder: usize,
+    catalogued_this_pass: usize,
+    deferred_bodies: usize,
+) -> usize {
+    let catalog = if catalog_complete {
+        0
+    } else {
+        let server_total = usize::try_from(mailbox.total_item_count.unwrap_or(0)).unwrap_or(0);
+        server_total
+            .saturating_sub(known_in_folder)
+            .saturating_sub(catalogued_this_pass)
+            .max(1)
+    };
+    catalog + deferred_bodies
+}
+
 #[allow(clippy::too_many_lines)]
 async fn synchronize_folder(
     client: &GraphClient,
     mailbox: &GraphMailbox,
     checkpoint: Option<&GraphMailboxCheckpoint>,
     known_by_id: &HashMap<&str, &KnownGraphMessage>,
+    known_in_folder: usize,
     message_limit_per_mailbox: usize,
     budget: &mut FolderBudget,
 ) -> Result<FolderSyncResult, ConnectorError> {
-    let initial_round = checkpoint
-        .is_none_or(|checkpoint| checkpoint.delta_cursor.is_none() && !checkpoint.catalog_complete);
     let mut url = checkpoint
         .and_then(|checkpoint| checkpoint.delta_cursor.clone())
         .unwrap_or_else(|| {
@@ -824,10 +878,13 @@ async fn synchronize_folder(
         catalog_complete = checkpoint.is_some_and(|checkpoint| checkpoint.catalog_complete);
     }
 
-    // Bodies: newest first. The initial round of a large folder may deliver
-    // old messages first, so ask the server for the newest ones explicitly.
+    let catalogued_this_pass = messages.len();
+
+    // Bodies: newest first. Delta rounds deliver messages in server order and
+    // only report changed items, so ask for the newest messages explicitly on
+    // every pass; those without a cached body are filled progressively.
     let mut selected = Vec::new();
-    if initial_round && message_limit_per_mailbox > 0 {
+    if message_limit_per_mailbox > 0 && budget.body_downloads > 0 {
         let newest = client
             .get_json(&format!(
                 "{GRAPH_BASE}/me/mailFolders/{}/messages?$orderby=receivedDateTime desc&$top={}&$select={MESSAGE_SELECT}",
@@ -858,7 +915,9 @@ async fn synchronize_folder(
             selected.push(id);
         }
     }
+    let wanted_bodies = selected.len();
     selected.truncate(message_limit_per_mailbox.min(budget.body_downloads));
+    let deferred_bodies = wanted_bodies.saturating_sub(selected.len());
     for id in selected {
         if budget.body_downloads == 0 {
             break;
@@ -894,7 +953,13 @@ async fn synchronize_folder(
             delta_cursor: next_cursor,
             removed_ids,
             catalog_complete,
-            catalog_remaining: usize::from(!catalog_complete) * DELTA_PAGE_SIZE,
+            catalog_remaining: remaining_estimate(
+                mailbox,
+                catalog_complete,
+                known_in_folder,
+                catalogued_this_pass,
+                deferred_bodies,
+            ),
         },
     })
 }
@@ -920,7 +985,9 @@ async fn discover_folders(client: &GraphClient) -> Result<Vec<GraphMailbox>, Con
     let mut folders = Vec::new();
     collect_folders(
         client,
-        &format!("{GRAPH_BASE}/me/mailFolders?$top=100&$select=id,displayName,childFolderCount"),
+        &format!(
+            "{GRAPH_BASE}/me/mailFolders?$top=100&$select=id,displayName,childFolderCount,totalItemCount"
+        ),
         &roles,
         None,
         0,
@@ -995,6 +1062,7 @@ async fn collect_folders(
                 folder_id: id.to_owned(),
                 display_name,
                 role,
+                total_item_count: item.get("totalItemCount").and_then(Value::as_u64),
             });
             if folders.len() >= MAX_FOLDERS {
                 break;
@@ -1004,7 +1072,7 @@ async fn collect_folders(
             Box::pin(collect_folders(
                 client,
                 &format!(
-                    "{GRAPH_BASE}/me/mailFolders/{}/childFolders?$top=100&$select=id,displayName,childFolderCount",
+                    "{GRAPH_BASE}/me/mailFolders/{}/childFolders?$top=100&$select=id,displayName,childFolderCount,totalItemCount",
                     escape_path(&id)
                 ),
                 roles,

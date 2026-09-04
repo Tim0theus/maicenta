@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../../l10n/app_localizations.dart';
+import 'folder_tree.dart';
 import 'mail_data.dart';
 
 String mailboxDisplayName(BuildContext context, MailFolder folder) {
@@ -12,15 +13,6 @@ String mailboxDisplayName(BuildContext context, MailFolder folder) {
     'archive' => localizations.mailboxArchive,
     'trash' => localizations.mailboxTrash,
     'junk' => localizations.mailboxJunk,
-    _ => _customMailboxDisplayName(folder.displayName),
+    _ => customFolderPath(folder.displayName).leaf,
   };
-}
-
-String _customMailboxDisplayName(String serverName) {
-  for (final prefix in const ['INBOX.', 'INBOX/', 'INBOX\\']) {
-    if (serverName.toUpperCase().startsWith(prefix)) {
-      return serverName.substring(prefix.length);
-    }
-  }
-  return serverName;
 }

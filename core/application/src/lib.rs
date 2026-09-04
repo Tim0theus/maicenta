@@ -580,6 +580,24 @@ pub trait WorkspaceStore: Send + Sync {
         mailbox_ids: &[MailboxId],
     ) -> Result<(), ApplicationError>;
 
+    /// Loads the mailboxes whose folder subtree the user collapsed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the preference cannot be read or decoded.
+    fn collapsed_mailbox_ids(&self) -> Result<Vec<MailboxId>, ApplicationError>;
+
+    /// Replaces the set of collapsed mailboxes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or storage error when the set is too large,
+    /// contains duplicates, or cannot be committed.
+    fn save_collapsed_mailbox_ids(
+        &mut self,
+        mailbox_ids: &[MailboxId],
+    ) -> Result<(), ApplicationError>;
+
     /// Loads calendar events ordered by their start time.
     ///
     /// # Errors

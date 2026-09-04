@@ -4,6 +4,7 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import '../frb_generated.dart';
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `attachment_content_type`, `attachment_object_path`, `cache_remote_message`, `calendar_event_dto`, `cleanup_import_backups`, `compact_preview`, `connector_credential`, `contact_dto`, `copy_local_attachment`, `current_timestamp_ms`, `draft_recipient_list`, `imap_identities`, `import_backup_path`, `install_staged_profile`, `load_account_credential`, `load_outgoing_attachments`, `load_snapshot`, `load_stored_outgoing_attachments`, `mail_account_dto`, `mail_account_from_input`, `mail_provider_name`, `mailbox_dto`, `mailbox_role_name`, `message_dto`, `message_dtos`, `migrate_legacy_credentials`, `oauth_access_token`, `open_profile_store`, `parse_mail_provider`, `parse_transport_security`, `persist_attachment_objects`, `plain_text_as_html`, `profile_object_root`, `profile_vault`, `prototype_body`, `prototype_mailbox`, `prototype_messages`, `remote_mailbox_id`, `remote_message_id`, `remove_attachment_objects`, `remove_oauth_secrets`, `replace_cached_vault`, `required_secret`, `rollback_imported_profile`, `seed_prototype`, `synchronize_account`, `synchronize_graph_account`, `synchronize_imap_account`, `synchronize_pending_drafts`, `synchronized_draft_ids`, `task_dto`, `transport_security_name`, `upgrade_prototype_content`, `validate_combined_outgoing_attachments`, `validate_draft_metadata`, `validate_oauth_provider_for_account`, `validate_oauth_token_endpoint`, `validate_oauth_token_input`, `validate_outgoing_attachment_set`, `validated_display_name`, `validated_server_name`, `validated_text`, `write_exported_attachment`
@@ -255,6 +256,21 @@ Future<void> saveFavoriteMailboxes({
   required String databasePath,
   required List<String> mailboxIds,
 }) => RustLib.instance.api.crateApiWorkspaceSaveFavoriteMailboxes(
+  databasePath: databasePath,
+  mailboxIds: mailboxIds,
+);
+
+/// Replaces the set of collapsed folder subtrees stored in the encrypted
+/// profile.
+///
+/// # Errors
+///
+/// Returns an error when an identifier is invalid or duplicated, or the
+/// encrypted preference cannot be committed.
+Future<void> saveCollapsedMailboxes({
+  required String databasePath,
+  required List<String> mailboxIds,
+}) => RustLib.instance.api.crateApiWorkspaceSaveCollapsedMailboxes(
   databasePath: databasePath,
   mailboxIds: mailboxIds,
 );
@@ -1176,6 +1192,9 @@ class TaskDto {
 class WorkspaceSnapshot {
   final List<MailboxDto> mailboxes;
   final List<String> favoriteMailboxIds;
+
+  /// Mailboxes whose folder subtree is collapsed in the folder pane.
+  final List<String> collapsedMailboxIds;
   final bool darkModeEnabled;
   final List<MessageDto> messages;
   final List<CalendarEventDto> calendarEvents;
@@ -1195,6 +1214,7 @@ class WorkspaceSnapshot {
   const WorkspaceSnapshot({
     required this.mailboxes,
     required this.favoriteMailboxIds,
+    required this.collapsedMailboxIds,
     required this.darkModeEnabled,
     required this.messages,
     required this.calendarEvents,
@@ -1213,6 +1233,7 @@ class WorkspaceSnapshot {
   int get hashCode =>
       mailboxes.hashCode ^
       favoriteMailboxIds.hashCode ^
+      collapsedMailboxIds.hashCode ^
       darkModeEnabled.hashCode ^
       messages.hashCode ^
       calendarEvents.hashCode ^
@@ -1233,6 +1254,7 @@ class WorkspaceSnapshot {
           runtimeType == other.runtimeType &&
           mailboxes == other.mailboxes &&
           favoriteMailboxIds == other.favoriteMailboxIds &&
+          collapsedMailboxIds == other.collapsedMailboxIds &&
           darkModeEnabled == other.darkModeEnabled &&
           messages == other.messages &&
           calendarEvents == other.calendarEvents &&
