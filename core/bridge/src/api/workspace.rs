@@ -2505,7 +2505,10 @@ async fn synchronize_graph_account(
                 folder_id: metadata.remote_mailbox,
                 id,
                 needs_catalog_refresh: !metadata.catalog_complete,
-                needs_body_refresh: metadata.body_requested && !metadata.body_complete,
+                // Header-only catalogue entries count as well: Graph passes
+                // fill recent bodies progressively instead of only retrying
+                // incomplete downloads.
+                needs_body_refresh: !metadata.body_complete,
             })
         })
         .collect::<Vec<_>>();

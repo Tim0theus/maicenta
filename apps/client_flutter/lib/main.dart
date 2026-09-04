@@ -1288,7 +1288,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   Future<void> synchronize({bool automatic = false}) async {
     if (synchronizing) {
       if (!automatic) {
-        showNotice('Die IMAP-Synchronisierung läuft bereits.');
+        showNotice('Die Synchronisierung läuft bereits.');
       }
       return;
     }
@@ -1302,13 +1302,13 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     }
     if (mailAccounts.isEmpty) {
       if (!automatic) {
-        showNotice('Bitte zuerst ein IMAP-/SMTP-Konto einrichten.');
+        showNotice('Bitte zuerst ein E-Mail-Konto einrichten.');
         await showAccountSettings();
       }
       return;
     }
     setState(() => synchronizing = true);
-    if (!automatic) showNotice('IMAP-Synchronisierung läuft …');
+    if (!automatic) showNotice('Synchronisierung läuft …');
     final warnings = <String>{};
     int? previousRemaining;
     try {
@@ -1321,7 +1321,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         if (remaining == 0) break;
         if (previousRemaining != null && remaining >= previousRemaining) {
           warnings.add(
-            'Der IMAP-Katalog macht momentan keinen weiteren Fortschritt. '
+            'Der Nachrichtenkatalog macht momentan keinen weiteren Fortschritt. '
             'Er wird beim nächsten Abgleich erneut versucht.',
           );
           break;
@@ -2137,7 +2137,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
                   pendingMailOperations == 0
                       ? 'Keine ausstehenden Serveränderungen.'
                       : '$pendingMailOperations Serveränderungen warten auf den nächsten IMAP-Abgleich.',
-                  if (synchronizing) 'Der IMAP-Abgleich läuft.',
+                  if (synchronizing) 'Der Abgleich mit den Konten läuft.',
                   if (catalogMessagesRemaining > 0)
                     '$catalogMessagesRemaining Nachrichtenmetadaten werden noch katalogisiert.',
                   if (deltaMailboxesSynchronized > 0 ||
