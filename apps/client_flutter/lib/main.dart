@@ -2191,6 +2191,8 @@ class _WorkspaceShellState extends State<WorkspaceShell>
                 .where((message) => message.unread && !message.draft)
                 .length,
             pendingMailOperations: pendingMailOperations,
+            synchronizing: synchronizing,
+            catalogMessagesRemaining: catalogMessagesRemaining,
             offlineMode: offlineMode,
             zoom: readingZoom,
           ),
@@ -4557,6 +4559,12 @@ class FolderPane extends StatelessWidget {
     final connectionLabel = accounts.isEmpty
         ? localizations.localDemoMode
         : localizations.mailAccountsConnected(accounts.length);
+    // Group headers share the collapsed-folder preference under a reserved
+    // `group.` prefix so the whole pane state survives a restart together.
+    const favoritesGroupId = 'group.favorites';
+    final favoritesCollapsed = collapsedFolderIds.contains(favoritesGroupId);
+    bool accountCollapsed(String groupId) =>
+        collapsedFolderIds.contains('group.$groupId');
     final foldersById = {for (final folder in folders) folder.id: folder};
     final favoriteFolders = favoriteFolderIds
         .map((id) => foldersById[id])
@@ -4612,42 +4620,49 @@ class FolderPane extends StatelessWidget {
                     child: _FolderGroupLabel(
                       label: localizations.favorites,
                       trailing: candidates.isEmpty ? null : Icons.add,
+                      collapsed: favoritesCollapsed,
+                      toggleKey: const Key('group-toggle-favorites'),
+                      onToggle: onToggleFolderCollapsed == null
+                          ? null
+                          : () => onToggleFolderCollapsed!(favoritesGroupId),
                     ),
                   ),
                 ),
-                for (final folder in favoriteFolders)
-                  _favoriteFolderTile(
-                    context,
-                    folder: folder,
-                    secondaryLabel:
-                        favoriteLabelCounts[mailboxDisplayName(
-                              context,
-                              folder,
-                            ).trim().toLowerCase()]! >
-                            1
-                        ? _accountQualifier(folder, accountLabels)
-                        : null,
+                if (!favoritesCollapsed) ...[
+                  for (final folder in favoriteFolders)
+                    _favoriteFolderTile(
+                      context,
+                      folder: folder,
+                      secondaryLabel:
+                          favoriteLabelCounts[mailboxDisplayName(
+                                context,
+                                folder,
+                              ).trim().toLowerCase()]! >
+                              1
+                          ? _accountQualifier(folder, accountLabels)
+                          : null,
+                    ),
+                  FolderTile(
+                    id: 'virtual.unread',
+                    label: localizations.unreadEmails,
+                    icon: Icons.mark_email_unread_outlined,
+                    count: folders.fold<int>(
+                      0,
+                      (count, folder) =>
+                          count +
+                          (folder.role == 'drafts' ? 0 : folder.unreadCount),
+                    ),
+                    selected: selectedFolder == 'virtual.unread',
+                    onTap: onSelected,
                   ),
-                FolderTile(
-                  id: 'virtual.unread',
-                  label: localizations.unreadEmails,
-                  icon: Icons.mark_email_unread_outlined,
-                  count: folders.fold<int>(
-                    0,
-                    (count, folder) =>
-                        count +
-                        (folder.role == 'drafts' ? 0 : folder.unreadCount),
+                  FolderTile(
+                    id: 'virtual.flagged',
+                    label: localizations.followUp,
+                    icon: Icons.flag_outlined,
+                    selected: selectedFolder == 'virtual.flagged',
+                    onTap: onSelected,
                   ),
-                  selected: selectedFolder == 'virtual.unread',
-                  onTap: onSelected,
-                ),
-                FolderTile(
-                  id: 'virtual.flagged',
-                  label: localizations.followUp,
-                  icon: Icons.flag_outlined,
-                  selected: selectedFolder == 'virtual.flagged',
-                  onTap: onSelected,
-                ),
+                ],
                 const Divider(height: 11, indent: 10, endIndent: 10),
                 for (final groupId in groupIds) ...[
                   DragTarget<MailFolder>(
@@ -4669,20 +4684,36 @@ class FolderPane extends StatelessWidget {
                           : MaicentaPalette.of(context).dangerTint,
                       child: Row(
                         children: [
-                          Icon(
-                            candidates.isEmpty
-                                ? Icons.keyboard_arrow_down
-                                : Icons.remove_circle_outline,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 2),
                           Expanded(
-                            child: Text(
-                              accountLabels[groupId] ?? groupId,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
+                            child: InkWell(
+                              key: Key('group-toggle-$groupId'),
+                              onTap: onToggleFolderCollapsed == null
+                                  ? null
+                                  : () => onToggleFolderCollapsed!(
+                                      'group.$groupId',
+                                    ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    candidates.isNotEmpty
+                                        ? Icons.remove_circle_outline
+                                        : accountCollapsed(groupId)
+                                        ? Icons.keyboard_arrow_right
+                                        : Icons.keyboard_arrow_down,
+                                    size: 16,
+                                  ),
+                                  const SizedBox(width: 2),
+                                  Expanded(
+                                    child: Text(
+                                      accountLabels[groupId] ?? groupId,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
@@ -4714,7 +4745,8 @@ class FolderPane extends StatelessWidget {
                       ),
                     ),
                   ),
-                  ..._accountFolderTiles(context, groupId),
+                  if (!accountCollapsed(groupId))
+                    ..._accountFolderTiles(context, groupId),
                 ],
               ],
             ),
@@ -4897,28 +4929,46 @@ class FolderPane extends StatelessWidget {
 }
 
 class _FolderGroupLabel extends StatelessWidget {
-  const _FolderGroupLabel({required this.label, this.trailing});
+  const _FolderGroupLabel({
+    required this.label,
+    this.trailing,
+    this.collapsed = false,
+    this.onToggle,
+    this.toggleKey,
+  });
 
   final String label;
   final IconData? trailing;
+  final bool collapsed;
+  final VoidCallback? onToggle;
+  final Key? toggleKey;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 29,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      alignment: Alignment.centerLeft,
-      child: Row(
-        children: [
-          const Icon(Icons.keyboard_arrow_down, size: 16),
-          const SizedBox(width: 2),
-          Text(
-            label,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-          ),
-          const Spacer(),
-          if (trailing != null) Icon(trailing, size: 16),
-        ],
+    return InkWell(
+      key: toggleKey,
+      onTap: onToggle,
+      child: Container(
+        height: 29,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.centerLeft,
+        child: Row(
+          children: [
+            Icon(
+              collapsed
+                  ? Icons.keyboard_arrow_right
+                  : Icons.keyboard_arrow_down,
+              size: 16,
+            ),
+            const SizedBox(width: 2),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            const Spacer(),
+            if (trailing != null) Icon(trailing, size: 16),
+          ],
+        ),
       ),
     );
   }
@@ -6644,6 +6694,8 @@ class StatusBar extends StatelessWidget {
     required this.itemCount,
     required this.unreadCount,
     required this.pendingMailOperations,
+    this.synchronizing = false,
+    this.catalogMessagesRemaining = 0,
     required this.offlineMode,
     required this.zoom,
   });
@@ -6652,6 +6704,12 @@ class StatusBar extends StatelessWidget {
   final int itemCount;
   final int unreadCount;
   final int pendingMailOperations;
+
+  /// Whether an account synchronization pass is running right now.
+  final bool synchronizing;
+
+  /// Catalogue entries the running synchronization still has to fetch.
+  final int catalogMessagesRemaining;
   final bool offlineMode;
   final double zoom;
 
@@ -6665,8 +6723,15 @@ class StatusBar extends StatelessWidget {
       WorkspaceModule.tasks => '3 Aufgaben',
       WorkspaceModule.contacts => '3 Kontakte',
     };
+    final syncStatus = synchronizing
+        ? catalogMessagesRemaining > 0
+              ? 'Synchronisierung läuft · noch $catalogMessagesRemaining Nachrichten'
+              : 'Synchronisierung läuft …'
+        : offlineMode
+        ? 'Offline · lokaler Datenbestand'
+        : 'Alle Ordner sind verfügbar';
     final primaryStatus = module == WorkspaceModule.mail
-        ? '$label   |   Alle Ordner sind verfügbar'
+        ? '$label   |   $syncStatus'
         : label;
     return Container(
       key: const Key('classic-status-bar'),
@@ -6680,9 +6745,21 @@ class StatusBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Row(
         children: [
+          if (module == WorkspaceModule.mail && synchronizing) ...[
+            SizedBox.square(
+              key: const Key('status-sync-indicator'),
+              dimension: 10,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                color: MaicentaPalette.of(context).mutedText,
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
           Expanded(
             child: Text(
               primaryStatus,
+              key: const Key('status-primary-text'),
               overflow: TextOverflow.ellipsis,
               maxLines: 1,
               style: TextStyle(

@@ -2340,6 +2340,92 @@ void main() {
     expect(find.byKey(const Key('folder-work.trade')), findsOneWidget);
     expect(dataSource.collapsedFolderSaves.last, isEmpty);
   });
+
+  testWidgets('collapses the favorites and account groups in the folder pane', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final dataSource = RecordingMailDataSource(configuredMessages: const []);
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('folder-virtual.unread')), findsOneWidget);
+    expect(find.byKey(const Key('folder-personal.inbox')), findsOneWidget);
+
+    // Favorites: the section header toggles its whole block, including the
+    // virtual folders that belong to it.
+    await tester.tap(find.byKey(const Key('group-toggle-favorites')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('folder-virtual.unread')), findsNothing);
+    expect(
+      find.byKey(const Key('favorite-folder-personal.inbox')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('folder-personal.inbox')), findsOneWidget);
+    expect(dataSource.collapsedFolderSaves.last, ['group.favorites']);
+
+    // Account group: hides every folder row of that account only.
+    await tester.tap(find.byKey(const Key('group-toggle-personal')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('folder-personal.inbox')), findsNothing);
+    expect(
+      dataSource.collapsedFolderSaves.last,
+      unorderedEquals(['group.favorites', 'group.personal']),
+    );
+
+    await tester.tap(find.byKey(const Key('group-toggle-favorites')));
+    await tester.tap(find.byKey(const Key('group-toggle-personal')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('folder-virtual.unread')), findsOneWidget);
+    expect(find.byKey(const Key('folder-personal.inbox')), findsOneWidget);
+    expect(dataSource.collapsedFolderSaves.last, isEmpty);
+  });
+
+  testWidgets('shows synchronization progress in the status bar', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: StatusBar(
+            module: WorkspaceModule.mail,
+            itemCount: 12,
+            unreadCount: 3,
+            pendingMailOperations: 0,
+            synchronizing: true,
+            catalogMessagesRemaining: 250,
+            offlineMode: false,
+            zoom: 1,
+          ),
+        ),
+      ),
+    );
+    expect(find.byKey(const Key('status-sync-indicator')), findsOneWidget);
+    expect(
+      find.textContaining('Synchronisierung läuft · noch 250 Nachrichten'),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: StatusBar(
+            module: WorkspaceModule.mail,
+            itemCount: 12,
+            unreadCount: 3,
+            pendingMailOperations: 0,
+            offlineMode: false,
+            zoom: 1,
+          ),
+        ),
+      ),
+    );
+    expect(find.byKey(const Key('status-sync-indicator')), findsNothing);
+    expect(find.textContaining('Alle Ordner sind verfügbar'), findsOneWidget);
+  });
 }
 
 Future<void> _enterIdentity(
