@@ -3,14 +3,13 @@ title: Privacy policy
 description: How maicenta.com and the MAICENTA desktop app handle personal data.
 ---
 
-> **TODO before launch:** fill in the controller details and confirm the hosting provider section matches the actual deployment.
-
 ## Controller
 
-[Full name]
-[Street and house number]
-[Postal code and city], Germany
-Email: [contact email address]
+Timotheus Technology
+Timm Beckmann
+Mozartstraße 2
+82256 Fürstenfeldbruck, Germany
+Email: [beckmann.timm@gmx.de](mailto:beckmann.timm@gmx.de)
 
 ## The short version
 
@@ -22,7 +21,7 @@ Email: [contact email address]
 
 This website is a static site delivered by a hosting and content delivery provider:
 
-[Hosting provider, e.g. Cloudflare, Inc., 101 Townsend St, San Francisco, CA 94107, USA – Cloudflare Pages]
+Cloudflare, Inc., 101 Townsend St, San Francisco, CA 94107, USA (Cloudflare Workers)
 
 When you visit the site, the provider processes connection data that is technically necessary to deliver the pages: IP address, date and time of the request, requested URL, HTTP status, transferred data volume, referrer, browser and operating system. This data is processed to deliver the website securely and to detect abuse (Art. 6 (1) (f) GDPR). The provider stores logs for a limited period according to its own retention policy. Transfers to the USA are covered by the EU-US Data Privacy Framework and standard contractual clauses.
 
@@ -59,4 +58,4 @@ You have the right to access, rectification, erasure, restriction of processing,
 
 We update this policy when the website or the app changes. The current version is always published here.
 
-Last updated: [date]
+Last updated: 4 September 2026

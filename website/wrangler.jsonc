@@ -6,6 +6,11 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "maicenta",
   "compatibility_date": "2026-09-01",
+  // The site is served from maicenta.com only. The workers.dev hostname is
+  // disabled so search engines do not index a duplicate. Preview URLs stay on
+  // so pull-request builds can still be reviewed.
+  "workers_dev": false,
+  "preview_urls": true,
   "assets": {
     "directory": "./dist",
     "not_found_handling": "404-page",
