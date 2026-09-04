@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:maicenta/main.dart';
 import 'package:maicenta/features/mail/account_autodiscovery.dart';
+import 'package:maicenta/features/mail/account_setup_detection.dart';
 import 'package:maicenta/features/mail/mail_data.dart';
 import 'package:maicenta/features/mail/oauth_service.dart';
 import 'package:maicenta/features/mail/safe_message_html.dart';
@@ -1876,8 +1877,10 @@ void main() {
     expect(dataSource.savedTasks.last.done, isTrue);
   });
 
-  testWidgets('tests complete IMAP and SMTP account settings', (tester) async {
-    tester.view.physicalSize = const Size(1200, 1000);
+  testWidgets('enters manual server settings when nothing is detected', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1100);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -1887,6 +1890,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: AccountSetupDialog(
+            onDetect: (email) async => _manualOnlyDetection(email),
             onTest: (account, password) async {
               testedAccount = account;
               expect(password, 'app-password');
@@ -1895,16 +1899,15 @@ void main() {
         ),
       ),
     );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Kontoname'),
-      'Arbeit',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'E-Mail-Adresse'),
-      'user@example.org',
-    );
-    await tester.tap(find.text('Manuell'));
-    await tester.pump();
+    expect(find.byKey(const Key('account-identity-step')), findsOneWidget);
+    expect(find.byKey(const Key('account-password')), findsNothing);
+    await _enterIdentity(tester, 'Arbeit', 'user@example.org');
+    await tester.tap(find.byKey(const Key('account-continue')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('account-method-step')), findsOneWidget);
+    expect(find.textContaining('kein Anbieter'), findsOneWidget);
+    expect(find.byKey(const Key('account-manual-settings')), findsOneWidget);
     await tester.enterText(
       find.widgetWithText(TextField, 'Server').at(0),
       'imap.example.org',
@@ -1920,43 +1923,30 @@ void main() {
     await tester.tap(find.byKey(const Key('account-test')));
     await tester.pumpAndSettle();
 
+    expect(testedAccount?.imapHost, 'imap.example.org');
     expect(testedAccount?.imapUsername, 'user@example.org');
     expect(testedAccount?.smtpUsername, 'user@example.org');
-    expect(
-      find.text('IMAP und SMTP wurden erfolgreich geprüft.'),
-      findsOneWidget,
-    );
+    expect(testedAccount?.authentication, 'password');
+    expect(find.text('Verbindung erfolgreich geprüft.'), findsOneWidget);
   });
 
-  testWidgets('discovers and tests IMAP and SMTP settings automatically', (
+  testWidgets('recommends detected IMAP servers and asks only for a password', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.physicalSize = const Size(1200, 1100);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     MailAccountConfig? testedAccount;
-    String? discoveredAddress;
+    String? detectedAddress;
 
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: AccountSetupDialog(
-            onDiscover: (email) async {
-              discoveredAddress = email;
-              return const [
-                DiscoveredMailSettings(
-                  imapHost: 'mail.example.org',
-                  imapPort: 993,
-                  imapSecurity: 'tls',
-                  imapUsername: 'user@example.org',
-                  smtpHost: 'mail.example.org',
-                  smtpPort: 587,
-                  smtpSecurity: 'starttls',
-                  smtpUsername: 'user@example.org',
-                  source: 'DNS-SRV',
-                ),
-              ];
+            onDetect: (email) async {
+              detectedAddress = email;
+              return _imapDetection(email);
             },
             onTest: (account, password) async {
               testedAccount = account;
@@ -1966,40 +1956,34 @@ void main() {
         ),
       ),
     );
-    expect(find.byKey(const Key('account-automatic-settings')), findsOneWidget);
+    await _enterIdentity(tester, 'Arbeit', 'user@example.org');
+    await tester.tap(find.byKey(const Key('account-continue')));
+    await tester.pumpAndSettle();
+
+    expect(detectedAddress, 'user@example.org');
+    expect(
+      find.byKey(const Key('account-method-imapPassword')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('account-detected-servers')), findsOneWidget);
     expect(find.byKey(const Key('account-manual-settings')), findsNothing);
+    expect(find.text('Empfohlen'), findsOneWidget);
     await tester.enterText(
-      find.widgetWithText(TextField, 'Kontoname'),
-      'Arbeit',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'E-Mail-Adresse'),
-      'user@example.org',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Passwort oder App-Passwort'),
+      find.widgetWithText(TextField, 'Passwort deines E-Mail-Postfachs'),
       'app-password',
     );
     await tester.tap(find.byKey(const Key('account-test')));
     await tester.pumpAndSettle();
 
-    expect(discoveredAddress, 'user@example.org');
     expect(testedAccount?.imapHost, 'mail.example.org');
     expect(testedAccount?.imapPort, 993);
     expect(testedAccount?.smtpHost, 'mail.example.org');
     expect(testedAccount?.smtpPort, 587);
-    expect(
-      find.text(
-        'Konto automatisch erkannt. IMAP und SMTP wurden erfolgreich geprüft.',
-      ),
-      findsOneWidget,
-    );
+    expect(find.text('Verbindung erfolgreich geprüft.'), findsOneWidget);
   });
 
-  testWidgets('saves a newly auto-discovered account in one step', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1200, 1000);
+  testWidgets('saves a newly detected account in one step', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1100);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -2015,19 +1999,7 @@ void main() {
               result = await showDialog<AccountSetupResult>(
                 context: context,
                 builder: (_) => AccountSetupDialog(
-                  onDiscover: (_) async => const [
-                    DiscoveredMailSettings(
-                      imapHost: 'mail.example.org',
-                      imapPort: 993,
-                      imapSecurity: 'tls',
-                      imapUsername: 'user@example.org',
-                      smtpHost: 'mail.example.org',
-                      smtpPort: 587,
-                      smtpSecurity: 'starttls',
-                      smtpUsername: 'user@example.org',
-                      source: 'DNS-SRV',
-                    ),
-                  ],
+                  onDetect: (email) async => _imapDetection(email),
                   onTest: (_, password) async {
                     connectionTests += 1;
                     expect(password, 'app-password');
@@ -2042,16 +2014,11 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('open-auto-account')));
     await tester.pumpAndSettle();
+    await _enterIdentity(tester, 'Arbeit', 'user@example.org');
+    await tester.tap(find.byKey(const Key('account-continue')));
+    await tester.pumpAndSettle();
     await tester.enterText(
-      find.widgetWithText(TextField, 'Kontoname'),
-      'Arbeit',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'E-Mail-Adresse'),
-      'user@example.org',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Passwort oder App-Passwort'),
+      find.widgetWithText(TextField, 'Passwort deines E-Mail-Postfachs'),
       'app-password',
     );
     await tester.tap(find.byKey(const Key('account-save')));
@@ -2060,13 +2027,14 @@ void main() {
     expect(connectionTests, 1);
     expect(result?.account.imapHost, 'mail.example.org');
     expect(result?.account.smtpPort, 587);
+    expect(result?.account.provider, 'imap');
     expect(result?.password, 'app-password');
   });
 
-  testWidgets('opens manual settings when automatic discovery finds nothing', (
+  testWidgets('lets the user override the recommendation with manual servers', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.physicalSize = const Size(1200, 1100);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -2075,33 +2043,34 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: AccountSetupDialog(
-            onDiscover: (_) async => const [],
+            onDetect: (email) async => _imapDetection(email),
             onTest: (_, _) async {},
           ),
         ),
       ),
     );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Kontoname'),
-      'Arbeit',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'E-Mail-Adresse'),
-      'user@example.org',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Passwort oder App-Passwort'),
-      'app-password',
-    );
-    await tester.tap(find.byKey(const Key('account-test')));
+    await _enterIdentity(tester, 'Arbeit', 'user@example.org');
+    await tester.tap(find.byKey(const Key('account-continue')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('account-manual-settings')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('account-method-manual')));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('account-manual-settings')), findsOneWidget);
     expect(find.byKey(const Key('account-imap-host')), findsOneWidget);
-    expect(
-      find.textContaining('keine vollständigen IMAP-/SMTP-Daten'),
-      findsOneWidget,
+    // The detected servers are prefilled so the user only adjusts what differs.
+    final imapHostField = tester.widget<TextField>(
+      find.descendant(
+        of: find.byKey(const Key('account-imap-host')),
+        matching: find.byType(TextField),
+      ),
     );
+    expect(imapHostField.controller?.text, 'mail.example.org');
+
+    await tester.tap(find.byKey(const Key('account-back')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('account-identity-step')), findsOneWidget);
   });
 
   testWidgets('edits an existing account without re-entering its password', (
@@ -2131,6 +2100,7 @@ void main() {
                 context: context,
                 builder: (_) => AccountSetupDialog(
                   existing: account,
+                  onDetect: (_) async => fail('editing must not re-detect'),
                   onTest: (_, _) async {},
                 ),
               );
@@ -2142,14 +2112,18 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('open-existing-account')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('account-method-step')), findsOneWidget);
+    expect(find.byKey(const Key('account-back')), findsNothing);
+    expect(find.byKey(const Key('account-manual-settings')), findsOneWidget);
     await tester.tap(find.byKey(const Key('account-save')));
     await tester.pumpAndSettle();
 
     expect(result?.account.id, 'account.work');
+    expect(result?.account.imapHost, 'imap.example.org');
     expect(result?.password, isEmpty);
   });
 
-  testWidgets('connects Exchange Online through OAuth and XOAUTH2 test', (
+  testWidgets('connects Exchange Online classically through OAuth and IMAP', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1200, 1100);
@@ -2173,6 +2147,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: AccountSetupDialog(
+            onDetect: (email) async => _microsoftDetection(email),
             onTest: (_, _) async {},
             onAuthorizeOAuth: (provider, address) async {
               expect(provider, MailOAuthProvider.microsoft365);
@@ -2187,16 +2162,14 @@ void main() {
         ),
       ),
     );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Kontoname'),
-      'Exchange',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'E-Mail-Adresse'),
-      'alex@example.org',
-    );
-    await tester.tap(find.text('OAuth 2.0'));
-    await tester.pump();
+    await _enterIdentity(tester, 'Exchange', 'alex@example.org');
+    await tester.tap(find.byKey(const Key('account-continue')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Microsoft 365 registriert'), findsOneWidget);
+
+    // The user prefers the classic protocols over the recommendation.
+    await tester.tap(find.byKey(const Key('account-method-microsoftImap')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('account-oauth-login')));
     await tester.pumpAndSettle();
 
@@ -2209,7 +2182,7 @@ void main() {
     expect(find.textContaining('erfolgreich verbunden'), findsOneWidget);
   });
 
-  testWidgets('connects Exchange Online through the Microsoft Graph API', (
+  testWidgets('recommends the Microsoft Graph API for Microsoft 365 domains', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1200, 1100);
@@ -2232,6 +2205,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: AccountSetupDialog(
+            onDetect: (email) async => _microsoftDetection(email),
             onTest: (_, _) async {},
             onAuthorizeOAuth: (provider, address) async {
               expect(provider, MailOAuthProvider.microsoftGraph);
@@ -2244,26 +2218,16 @@ void main() {
         ),
       ),
     );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Kontoname'),
-      'Exchange Graph',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'E-Mail-Adresse'),
-      'alex@example.org',
-    );
-    await tester.tap(find.text('OAuth 2.0'));
-    await tester.pump();
-    await tester.tap(find.byKey(const Key('account-oauth-provider')));
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.text(MailOAuthProvider.microsoftGraph.displayName).last,
-    );
+    await _enterIdentity(tester, 'Exchange Graph', 'alex@example.org');
+    await tester.tap(find.byKey(const Key('account-continue')));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('account-graph-settings')), findsOneWidget);
+    // No protocol vocabulary in the main view; the recommendation is
+    // preselected and the sign-in button speaks plainly.
+    expect(find.text('Mit Microsoft anmelden'), findsOneWidget);
     expect(find.byKey(const Key('account-manual-settings')), findsNothing);
-    expect(find.textContaining('Microsoft Graph API'), findsOneWidget);
+    expect(find.byKey(const Key('account-password')), findsNothing);
+    expect(find.text('Empfohlen'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('account-oauth-login')));
     await tester.pumpAndSettle();
@@ -2275,6 +2239,67 @@ void main() {
     expect(find.textContaining('erfolgreich verbunden'), findsOneWidget);
   });
 }
+
+Future<void> _enterIdentity(
+  WidgetTester tester,
+  String name,
+  String address,
+) async {
+  await tester.enterText(find.widgetWithText(TextField, 'Kontoname'), name);
+  await tester.enterText(
+    find.widgetWithText(TextField, 'E-Mail-Adresse'),
+    address,
+  );
+}
+
+const _detectedServers = DiscoveredMailSettings(
+  imapHost: 'mail.example.org',
+  imapPort: 993,
+  imapSecurity: 'tls',
+  imapUsername: 'user@example.org',
+  smtpHost: 'mail.example.org',
+  smtpPort: 587,
+  smtpSecurity: 'starttls',
+  smtpUsername: 'user@example.org',
+  source: 'DNS-SRV',
+);
+
+MailSetupDetection _manualOnlyDetection(String email) => MailSetupDetection(
+  emailAddress: email,
+  suggestions: const [
+    MailSetupSuggestion(method: MailSetupMethod.manual, recommended: true),
+  ],
+  summary: 'Für example.org wurde kein Anbieter automatisch erkannt.',
+);
+
+MailSetupDetection _imapDetection(String email) => MailSetupDetection(
+  emailAddress: email,
+  suggestions: const [
+    MailSetupSuggestion(
+      method: MailSetupMethod.imapPassword,
+      settingsCandidates: [_detectedServers],
+      recommended: true,
+    ),
+    MailSetupSuggestion(
+      method: MailSetupMethod.manual,
+      settingsCandidates: [_detectedServers],
+    ),
+  ],
+  summary: 'Servereinstellungen für example.org gefunden (DNS-SRV).',
+);
+
+MailSetupDetection _microsoftDetection(String email) => MailSetupDetection(
+  emailAddress: email,
+  suggestions: const [
+    MailSetupSuggestion(
+      method: MailSetupMethod.microsoftGraph,
+      recommended: true,
+    ),
+    MailSetupSuggestion(method: MailSetupMethod.microsoftImap),
+    MailSetupSuggestion(method: MailSetupMethod.manual),
+  ],
+  summary: 'Die Domain example.org ist bei Microsoft 365 registriert.',
+);
 
 class RecordingMailDataSource implements MailDataSource {
   RecordingMailDataSource({

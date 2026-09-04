@@ -36,6 +36,22 @@ class DiscoveredMailSettings {
       '$smtpHost:$smtpPort:$smtpSecurity:$smtpUsername';
 }
 
+/// Returns the lower-cased, validated domain part of [email].
+///
+/// Throws a [FormatException] for addresses without exactly one `@` or with
+/// a domain that is not a safe host name.
+String mailDomainOf(String email) {
+  final separator = email.lastIndexOf('@');
+  if (separator < 1 || separator != email.indexOf('@')) {
+    throw const FormatException('Die E-Mail-Adresse ist ungültig.');
+  }
+  final domain = email.substring(separator + 1).toLowerCase();
+  if (!MailAccountAutoDiscovery._isSafeHost(domain)) {
+    throw const FormatException('Die E-Mail-Domain ist ungültig.');
+  }
+  return domain;
+}
+
 Future<List<DiscoveredMailSettings>> discoverMailAccountSettings(
   String emailAddress,
 ) async {
@@ -235,17 +251,7 @@ class MailAccountAutoDiscovery {
       statusCode == 307 ||
       statusCode == 308;
 
-  static String _domainFromEmail(String email) {
-    final separator = email.lastIndexOf('@');
-    if (separator < 1 || separator != email.indexOf('@')) {
-      throw const FormatException('Die E-Mail-Adresse ist ungültig.');
-    }
-    final domain = email.substring(separator + 1).toLowerCase();
-    if (!_isSafeHost(domain)) {
-      throw const FormatException('Die E-Mail-Domain ist ungültig.');
-    }
-    return domain;
-  }
+  static String _domainFromEmail(String email) => mailDomainOf(email);
 
   static List<_SrvRecord> _parseSrvRecords(
     Map<String, dynamic>? response, {

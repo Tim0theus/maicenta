@@ -185,20 +185,27 @@ flutter pub get
 flutter run -d macos    # or windows / linux
 ```
 
-Open **Datei → Kontoeinstellungen → Konto hinzufügen** to enter IMAP and SMTP
-settings, test both connections, and save the account. Saving starts the first
-synchronization. The mail reading pane renders downloaded MIME messages as
+Open **Datei → Kontoeinstellungen → Konto hinzufügen**, enter a name and the
+e-mail address, and choose **Weiter**. MAICENTA probes public, password-free
+signals for the domain and recommends a setup: Microsoft 365 when the domain is
+registered in Entra ID or its MX records point to Exchange Online, Google when
+mail is hosted by Google, otherwise the IMAP/SMTP servers found through domain
+autoconfig, DNS SRV, or the Mozilla provider database. The recommendation is
+preselected but never final: every other supported method stays one click away,
+for example when a company domain is registered with Microsoft 365 but the
+mailbox actually lives on the company's own IMAP server. Protocol details are
+shown under **Erweitert**. Saving starts the first synchronization. The mail reading pane renders downloaded MIME messages as
 sanitized HTML, blocks active and remote content, and does not automatically
 open external links. Reply and forward actions open a prefilled rich-text
 compose window.
 
-For Microsoft 365/Exchange Online and Google Workspace/Gmail, select
-**OAuth 2.0** in the account dialog. MAICENTA opens a platform authentication
-session, uses an
-Authorization Code flow with PKCE, validates IMAP and SMTP via XOAUTH2, and
-stores access and refresh tokens only in the encrypted profile. For Microsoft
-365 the provider list offers an **IMAP/SMTP** and a **Graph API** variant; pick
-the Graph variant when the tenant has disabled IMAP or SMTP AUTH. A native app
+Microsoft 365/Exchange Online and Google Workspace/Gmail accounts sign in
+through the browser. MAICENTA opens a platform authentication session, uses an
+Authorization Code flow with PKCE, validates the mailbox access, and stores
+access and refresh tokens only in the encrypted profile. For Microsoft 365 the
+recommended method uses the Graph API, which also works when the tenant has
+disabled IMAP or SMTP AUTH; the classic IMAP/SMTP variant with XOAUTH2 remains
+available as an alternative. A native app
 does not contain an OAuth client secret.
 
 Like Thunderbird or Outlook, MAICENTA identifies itself to the identity

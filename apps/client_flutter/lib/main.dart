@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'app_theme.dart';
 import 'features/compose/compose_window.dart';
 import 'features/mail/account_autodiscovery.dart';
+import 'features/mail/account_setup_detection.dart';
 import 'features/mail/mail_data.dart';
 import 'features/mail/mailbox_labels.dart';
 import 'features/mail/message_window.dart';
@@ -1683,7 +1684,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       }
       offlineMode = false;
     });
-    showNotice('Konto gespeichert. Die erste IMAP-Synchronisierung startet.');
+    showNotice('Konto gespeichert. Die erste Synchronisierung startet.');
     await synchronize();
   }
 
@@ -2382,7 +2383,7 @@ class AccountSetupDialog extends StatefulWidget {
     this.existing,
     required this.onTest,
     this.onTestOAuth,
-    this.onDiscover = discoverMailAccountSettings,
+    this.onDetect,
     this.onAuthorizeOAuth,
   });
 
@@ -2394,7 +2395,10 @@ class AccountSetupDialog extends StatefulWidget {
     MailOAuthTokens tokens,
   )?
   onTestOAuth;
-  final MailSettingsDiscovery onDiscover;
+
+  /// Probes the address for the best setup method. Defaults to the live
+  /// detection; tests inject a fake.
+  final MailSetupDetector? onDetect;
   final Future<MailOAuthTokens> Function(
     MailOAuthProvider provider,
     String email,
@@ -2404,6 +2408,8 @@ class AccountSetupDialog extends StatefulWidget {
   @override
   State<AccountSetupDialog> createState() => _AccountSetupDialogState();
 }
+
+enum _AccountSetupStep { identity, method }
 
 class _AccountSetupDialogState extends State<AccountSetupDialog> {
   late String accountId;
@@ -2418,14 +2424,19 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
   final password = TextEditingController();
   String imapSecurity = 'tls';
   String smtpSecurity = 'starttls';
-  String authentication = 'password';
-  MailOAuthProvider oauthProvider = MailOAuthProvider.microsoft365;
+  _AccountSetupStep step = _AccountSetupStep.identity;
+  MailSetupDetection? detection;
+  MailSetupSuggestion? selected;
   MailOAuthTokens? oauthTokens;
   String? status;
   bool statusSuccess = false;
   bool busy = false;
-  bool manualMode = false;
+  bool showAdvanced = false;
   int? testedConfiguration;
+
+  MailSetupMethod get method => selected?.method ?? MailSetupMethod.manual;
+
+  bool get isEditing => widget.existing != null;
 
   @override
   void initState() {
@@ -2446,20 +2457,51 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     smtpPort.text = '${account?.smtpPort ?? 587}';
     smtpSecurity = account?.smtpSecurity ?? 'starttls';
     smtpUsername.text = account?.smtpUsername ?? '';
-    authentication = account?.authentication ?? 'password';
-    oauthProvider =
-        MailOAuthProviderConfiguration.fromStorageName(
-          account?.oauthProvider,
-        ) ??
-        (account?.provider == 'microsoft_graph'
-            ? MailOAuthProvider.microsoftGraph
-            : MailOAuthProvider.microsoft365);
     oauthTokens = null;
     password.clear();
     status = null;
     statusSuccess = false;
-    manualMode = account != null || authentication == 'oauth2';
+    showAdvanced = false;
     testedConfiguration = null;
+    if (account == null) {
+      step = _AccountSetupStep.identity;
+      detection = null;
+      selected = null;
+      return;
+    }
+    // Editing never re-detects: the stored method stays the recommendation,
+    // every other supported method remains one click away.
+    detection = MailSetupDetection.forExistingAccount(
+      emailAddress: account.email,
+      method: _methodOf(account),
+      storedSettings: DiscoveredMailSettings(
+        imapHost: account.imapHost,
+        imapPort: account.imapPort,
+        imapSecurity: account.imapSecurity,
+        imapUsername: account.imapUsername,
+        smtpHost: account.smtpHost,
+        smtpPort: account.smtpPort,
+        smtpSecurity: account.smtpSecurity,
+        smtpUsername: account.smtpUsername,
+        source: 'Gespeichert',
+      ),
+    );
+    selected = detection!.recommended;
+    step = _AccountSetupStep.method;
+  }
+
+  static MailSetupMethod _methodOf(MailAccountConfig account) {
+    if (account.authentication != 'oauth2') return MailSetupMethod.manual;
+    if (account.provider == 'microsoft_graph') {
+      return MailSetupMethod.microsoftGraph;
+    }
+    return switch (MailOAuthProviderConfiguration.fromStorageName(
+      account.oauthProvider,
+    )) {
+      MailOAuthProvider.google => MailSetupMethod.google,
+      MailOAuthProvider.microsoftGraph => MailSetupMethod.microsoftGraph,
+      MailOAuthProvider.microsoft365 || null => MailSetupMethod.microsoftImap,
+    };
   }
 
   @override
@@ -2536,11 +2578,10 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
       }
       return null;
     }
+    final oauthProvider = method.oauthProvider;
     return MailAccountConfig(
       id: accountId,
-      provider: authentication == 'oauth2'
-          ? oauthProvider.mailProvider
-          : 'imap',
+      provider: method.mailProvider,
       displayName: displayName.text.trim(),
       email: email.text.trim(),
       imapHost: imapHost.text.trim(),
@@ -2551,10 +2592,8 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
       smtpPort: parsedSmtpPort,
       smtpSecurity: smtpSecurity,
       smtpUsername: smtpUsername.text.trim(),
-      authentication: authentication,
-      oauthProvider: authentication == 'oauth2'
-          ? oauthProvider.storageName
-          : null,
+      authentication: oauthProvider == null ? 'password' : 'oauth2',
+      oauthProvider: oauthProvider?.storageName,
       lastSyncAt: widget.existing?.lastSyncAt,
     );
   }
@@ -2575,7 +2614,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     password.text,
   ]);
 
-  void applyOAuthProviderSettings() {
+  void applyOAuthProviderSettings(MailOAuthProvider provider) {
     final address = email.text.trim();
     imapUsername.text = address;
     smtpUsername.text = address;
@@ -2583,7 +2622,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     imapSecurity = 'tls';
     smtpPort.text = '587';
     smtpSecurity = 'starttls';
-    switch (oauthProvider) {
+    switch (provider) {
       case MailOAuthProvider.microsoft365:
       case MailOAuthProvider.microsoftGraph:
         // Graph accounts keep the standards endpoints only as a documented
@@ -2598,28 +2637,127 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     }
   }
 
-  Future<MailOAuthTokens> authorizeOAuth() {
+  void applyDiscoveredSettings(DiscoveredMailSettings settings) {
+    imapHost.text = settings.imapHost;
+    imapPort.text = '${settings.imapPort}';
+    imapSecurity = settings.imapSecurity;
+    imapUsername.text = settings.imapUsername;
+    smtpHost.text = settings.smtpHost;
+    smtpPort.text = '${settings.smtpPort}';
+    smtpSecurity = settings.smtpSecurity;
+    smtpUsername.text = settings.smtpUsername;
+  }
+
+  void selectSuggestion(MailSetupSuggestion suggestion) {
+    if (!suggestion.method.isSupported) return;
+    setState(() {
+      selected = suggestion;
+      oauthTokens = null;
+      testedConfiguration = null;
+      status = null;
+      statusSuccess = false;
+      final provider = suggestion.method.oauthProvider;
+      if (provider != null) {
+        applyOAuthProviderSettings(provider);
+      } else {
+        final settings = suggestion.settings;
+        if (settings != null) applyDiscoveredSettings(settings);
+        final address = email.text.trim();
+        if (imapUsername.text.trim().isEmpty) imapUsername.text = address;
+        if (smtpUsername.text.trim().isEmpty) smtpUsername.text = address;
+      }
+    });
+  }
+
+  Future<void> continueToMethods() async {
+    if (!validateIdentity(requirePassword: false)) return;
+    final address = email.text.trim();
+    setState(() {
+      busy = true;
+      statusSuccess = false;
+      status = 'Anbieter für $address wird erkannt …';
+    });
+    MailSetupDetection result;
+    try {
+      result = await (widget.onDetect ?? detectMailSetup)(address);
+    } on Object catch (error) {
+      result = MailSetupDetection(
+        emailAddress: address,
+        suggestions: const [
+          MailSetupSuggestion(
+            method: MailSetupMethod.manual,
+            recommended: true,
+          ),
+        ],
+        summary:
+            'Die automatische Erkennung war nicht möglich. Bitte die '
+            'Servereinstellungen manuell eingeben.\n\n$error',
+      );
+    }
+    if (!mounted) return;
+    setState(() {
+      busy = false;
+      status = null;
+      detection = result;
+      step = _AccountSetupStep.method;
+    });
+    selectSuggestion(result.recommended);
+  }
+
+  void backToIdentity() {
+    setState(() {
+      step = _AccountSetupStep.identity;
+      status = null;
+      statusSuccess = false;
+      oauthTokens = null;
+      testedConfiguration = null;
+    });
+  }
+
+  void editServersManually() {
+    final current = selected;
+    final candidates = current?.settingsCandidates ?? const [];
+    final manual = detection?.suggestions.firstWhere(
+      (suggestion) => suggestion.method == MailSetupMethod.manual,
+      orElse: () => MailSetupSuggestion(
+        method: MailSetupMethod.manual,
+        settingsCandidates: candidates,
+      ),
+    );
+    if (manual == null) return;
+    selectSuggestion(
+      MailSetupSuggestion(
+        method: MailSetupMethod.manual,
+        settingsCandidates: candidates.isEmpty
+            ? manual.settingsCandidates
+            : candidates,
+      ),
+    );
+  }
+
+  Future<MailOAuthTokens> authorizeOAuth(MailOAuthProvider provider) {
     final callback = widget.onAuthorizeOAuth;
     if (callback != null) {
-      return callback(oauthProvider, email.text.trim());
+      return callback(provider, email.text.trim());
     }
     return MailOAuthService().authorize(
-      provider: oauthProvider,
+      provider: provider,
       loginHint: email.text.trim(),
     );
   }
 
   Future<void> connectOAuth({bool closeAfterSuccess = false}) async {
-    if (!validateIdentity(requirePassword: false)) return;
+    final provider = method.oauthProvider;
+    if (provider == null || !validateIdentity(requirePassword: false)) return;
     setState(() {
       busy = true;
       statusSuccess = false;
-      status = '${oauthProvider.displayName} wird im Browser geöffnet …';
-      applyOAuthProviderSettings();
+      status = '${provider.displayName} wird im Browser geöffnet …';
+      applyOAuthProviderSettings(provider);
     });
     var dialogClosed = false;
     try {
-      final tokens = await authorizeOAuth();
+      final tokens = await authorizeOAuth(provider);
       if (!mounted) return;
       final account = configuration(requirePassword: false);
       if (account == null) return;
@@ -2628,16 +2766,16 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
         throw StateError('OAuth-Verbindungstest ist nicht verfügbar.');
       }
       setState(() {
-        status = oauthProvider == MailOAuthProvider.microsoftGraph
-            ? 'OAuth-Anmeldung erfolgreich. Zugriff auf Microsoft Graph wird geprüft …'
-            : 'OAuth-Anmeldung erfolgreich. IMAP und SMTP werden geprüft …';
+        status = provider == MailOAuthProvider.microsoftGraph
+            ? 'Anmeldung erfolgreich. Zugriff auf das Postfach wird geprüft …'
+            : 'Anmeldung erfolgreich. Posteingang und Postausgang werden geprüft …';
       });
       await testOAuth(account, tokens);
       if (!mounted) return;
       oauthTokens = tokens;
       testedConfiguration = configurationFingerprint(account);
       setState(() {
-        status = '${oauthProvider.displayName} wurde erfolgreich verbunden.';
+        status = '${provider.displayName} wurde erfolgreich verbunden.';
         statusSuccess = true;
       });
       if (closeAfterSuccess) {
@@ -2650,7 +2788,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     } on Object catch (error) {
       if (!mounted) return;
       setState(() {
-        status = 'OAuth-Anmeldung fehlgeschlagen: $error';
+        status = 'Anmeldung fehlgeschlagen: $error';
         statusSuccess = false;
       });
     } finally {
@@ -2658,47 +2796,33 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     }
   }
 
-  void applyDiscoveredSettings(DiscoveredMailSettings settings) {
-    imapHost.text = settings.imapHost;
-    imapPort.text = '${settings.imapPort}';
-    imapSecurity = settings.imapSecurity;
-    imapUsername.text = settings.imapUsername;
-    smtpHost.text = settings.smtpHost;
-    smtpPort.text = '${settings.smtpPort}';
-    smtpSecurity = settings.smtpSecurity;
-    smtpUsername.text = settings.smtpUsername;
-  }
-
-  Future<MailAccountConfig?> discoverAndTest({
+  /// Verifies the detected server candidates in order with the password.
+  Future<MailAccountConfig?> testDetectedServers({
     required bool saveAfterSuccess,
   }) async {
     if (!validateIdentity(requirePassword: true)) return null;
+    final candidates = selected?.settingsCandidates ?? const [];
+    if (candidates.isEmpty) {
+      setState(() {
+        status =
+            'Für diese Adresse wurden keine Servereinstellungen gefunden. '
+            'Bitte die Server manuell eingeben.';
+        statusSuccess = false;
+      });
+      return null;
+    }
     setState(() {
       busy = true;
       statusSuccess = false;
-      status = 'Sichere Servereinstellungen werden aus der Domain ermittelt …';
     });
     var dialogClosed = false;
     try {
-      final discovered = await widget.onDiscover(email.text.trim());
-      if (!mounted) return null;
-      if (discovered.isEmpty) {
-        setState(() {
-          manualMode = true;
-          status =
-              'Für diese Domain wurden keine vollständigen IMAP-/SMTP-Daten '
-              'gefunden. Bitte die Servereinstellungen manuell ergänzen.';
-        });
-        return null;
-      }
-
       Object? lastError;
-      for (final settings in discovered.take(3)) {
+      for (final settings in candidates.take(3)) {
         setState(() {
           applyDiscoveredSettings(settings);
           status =
-              '${settings.source}: ${settings.imapHost}:${settings.imapPort} '
-              'und ${settings.smtpHost}:${settings.smtpPort} werden geprüft …';
+              '${settings.imapHost} und ${settings.smtpHost} werden geprüft …';
         });
         final account = configuration(
           requirePassword: true,
@@ -2710,8 +2834,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
           if (!mounted) return null;
           testedConfiguration = configurationFingerprint(account);
           setState(() {
-            status =
-                'Konto automatisch erkannt. IMAP und SMTP wurden erfolgreich geprüft.';
+            status = 'Verbindung erfolgreich geprüft.';
             statusSuccess = true;
           });
           if (saveAfterSuccess) {
@@ -2735,19 +2858,9 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
       }
       if (!mounted) return null;
       setState(() {
-        manualMode = true;
         status =
-            'Die automatisch gefundenen Daten konnten nicht bestätigt werden. '
-            'Bitte Serverdaten oder Zugangsdaten prüfen.\n\n$lastError';
-        statusSuccess = false;
-      });
-    } on Object catch (error) {
-      if (!mounted) return null;
-      setState(() {
-        manualMode = true;
-        status =
-            'Die automatische Erkennung ist fehlgeschlagen. Die manuelle '
-            'Einrichtung wurde geöffnet.\n\n$error';
+            'Die erkannten Server haben die Anmeldung nicht bestätigt. Bitte '
+            'Passwort prüfen oder die Server manuell eingeben.\n\n$lastError';
         statusSuccess = false;
       });
     } finally {
@@ -2756,20 +2869,12 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     return null;
   }
 
-  Future<void> testConnection() async {
-    if (authentication == 'oauth2') {
-      await connectOAuth();
-      return;
-    }
-    if (!manualMode) {
-      await discoverAndTest(saveAfterSuccess: false);
-      return;
-    }
+  Future<void> testManualServers() async {
     final account = configuration(requirePassword: true);
     if (account == null) return;
     setState(() {
       busy = true;
-      status = 'IMAP-Anmeldung und SMTP-Verbindung werden geprüft …';
+      status = 'Posteingang und Postausgang werden geprüft …';
       statusSuccess = false;
     });
     try {
@@ -2777,7 +2882,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
       if (!mounted) return;
       testedConfiguration = configurationFingerprint(account);
       setState(() {
-        status = 'IMAP und SMTP wurden erfolgreich geprüft.';
+        status = 'Verbindung erfolgreich geprüft.';
         statusSuccess = true;
       });
     } on Object catch (error) {
@@ -2791,8 +2896,24 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     }
   }
 
+  Future<void> testConnection() async {
+    switch (method) {
+      case MailSetupMethod.microsoftGraph:
+      case MailSetupMethod.microsoftImap:
+      case MailSetupMethod.google:
+        await connectOAuth();
+      case MailSetupMethod.imapPassword:
+        await testDetectedServers(saveAfterSuccess: false);
+      case MailSetupMethod.manual:
+        await testManualServers();
+      case MailSetupMethod.exchangeOnPremises:
+        break;
+    }
+  }
+
   Future<void> save() async {
-    if (authentication == 'oauth2') {
+    final provider = method.oauthProvider;
+    if (provider != null) {
       final account = configuration(requirePassword: false);
       if (account == null) return;
       if (oauthTokens != null &&
@@ -2804,14 +2925,15 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
         return;
       }
       if (widget.existing?.authentication == 'oauth2' &&
-          widget.existing?.oauthProvider == oauthProvider.storageName) {
+          widget.existing?.oauthProvider == provider.storageName &&
+          widget.existing?.provider == account.provider) {
         Navigator.pop(context, AccountSetupResult(account: account));
         return;
       }
       await connectOAuth(closeAfterSuccess: true);
       return;
     }
-    if (!manualMode) {
+    if (method == MailSetupMethod.imapPassword) {
       final configured = configuration(
         requirePassword: true,
         reportErrors: false,
@@ -2824,7 +2946,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
         );
         return;
       }
-      await discoverAndTest(saveAfterSuccess: true);
+      await testDetectedServers(saveAfterSuccess: true);
       return;
     }
     final account = configuration(
@@ -2841,298 +2963,430 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final graphAccount =
-        authentication == 'oauth2' &&
-        oauthProvider == MailOAuthProvider.microsoftGraph;
+    final identityStep = step == _AccountSetupStep.identity;
     return AlertDialog(
-      title: Text(
-        graphAccount ? 'Microsoft-365-Konto (Graph)' : 'E-Mail-Konto',
-      ),
+      title: Text(isEditing ? 'Konto bearbeiten' : 'E-Mail-Konto hinzufügen'),
       content: SizedBox(
         width: 650,
         child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                authentication == 'oauth2'
-                    ? 'Access- und Refresh-Token werden im verschlüsselten Profil '
-                          'gespeichert. MAICENTA verwendet OAuth mit PKCE und kein '
-                          'Client-Secret.'
-                    : 'Das Passwort wird im verschlüsselten Profil gespeichert; '
-                          'der Betriebssystem-Schlüsselbund schützt nur den '
-                          'Profilschlüssel. Beim Bearbeiten kann das Passwort leer bleiben.',
+          child: identityStep ? buildIdentityStep() : buildMethodStep(),
+        ),
+      ),
+      actions: identityStep
+          ? [
+              TextButton(
+                onPressed: busy ? null : () => Navigator.pop(context),
+                child: const Text('Abbrechen'),
+              ),
+              FilledButton(
+                key: const Key('account-continue'),
+                onPressed: busy ? null : continueToMethods,
+                child: const Text('Weiter'),
+              ),
+            ]
+          : [
+              TextButton(
+                onPressed: busy ? null : () => Navigator.pop(context),
+                child: const Text('Abbrechen'),
+              ),
+              if (!isEditing)
+                TextButton(
+                  key: const Key('account-back'),
+                  onPressed: busy ? null : backToIdentity,
+                  child: const Text('Zurück'),
+                ),
+              OutlinedButton(
+                key: const Key('account-test'),
+                onPressed: busy ? null : testConnection,
+                child: Text(
+                  method.usesOAuth
+                      ? 'Anmelden und testen'
+                      : 'Verbindung testen',
+                ),
+              ),
+              FilledButton(
+                key: const Key('account-save'),
+                onPressed: busy ? null : save,
+                child: Text(
+                  isEditing
+                      ? 'Speichern'
+                      : method.usesOAuth
+                      ? 'Anmelden und hinzufügen'
+                      : 'Konto hinzufügen',
+                ),
+              ),
+            ],
+    );
+  }
+
+  Widget buildIdentityStep() {
+    return Column(
+      key: const Key('account-identity-step'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Gib deine E-Mail-Adresse ein. MAICENTA erkennt den passenden '
+          'Zugang automatisch und schlägt ihn dir vor. Du kannst die Auswahl '
+          'danach jederzeit ändern.',
+          style: TextStyle(fontSize: 12),
+        ),
+        const SizedBox(height: 14),
+        _AccountField(
+          key: const Key('account-display-name'),
+          label: 'Kontoname',
+          controller: displayName,
+        ),
+        _AccountField(
+          key: const Key('account-email'),
+          label: 'E-Mail-Adresse',
+          controller: email,
+          onChanged: (value) {
+            imapUsername.text = value;
+            smtpUsername.text = value;
+          },
+        ),
+        if (busy) ...[
+          const SizedBox(height: 10),
+          const LinearProgressIndicator(),
+        ],
+        if (status != null) ...[
+          const SizedBox(height: 10),
+          Text(
+            status!,
+            key: const Key('account-status'),
+            style: TextStyle(
+              fontSize: 12,
+              color: statusSuccess ? Colors.green.shade700 : null,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget buildMethodStep() {
+    final detected = detection;
+    final suggestions = detected?.suggestions ?? const <MailSetupSuggestion>[];
+    return Column(
+      key: const Key('account-method-step'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          email.text.trim(),
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        if (detected != null) ...[
+          const SizedBox(height: 2),
+          Text(
+            detected.summary,
+            key: const Key('account-detection-summary'),
+            style: const TextStyle(fontSize: 12),
+          ),
+        ],
+        const SizedBox(height: 12),
+        for (final suggestion in suggestions)
+          if (suggestion.method.isSupported)
+            _MethodChoice(
+              key: Key('account-method-${suggestion.method.name}'),
+              suggestion: suggestion,
+              selected: selected?.method == suggestion.method,
+              enabled: !busy,
+              onSelected: () => selectSuggestion(suggestion),
+            )
+          else
+            _MethodNotice(
+              key: Key('account-method-${suggestion.method.name}'),
+              suggestion: suggestion,
+            ),
+        const SizedBox(height: 10),
+        ...buildMethodDetails(),
+        const SizedBox(height: 6),
+        ExpansionTile(
+          key: const Key('account-advanced'),
+          title: const Text('Erweitert', style: TextStyle(fontSize: 13)),
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          initiallyExpanded: showAdvanced,
+          onExpansionChanged: (expanded) =>
+              setState(() => showAdvanced = expanded),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                method.technicalSummary,
+                key: const Key('account-technical-summary'),
                 style: const TextStyle(fontSize: 12),
               ),
-              const SizedBox(height: 14),
-              _AccountField(
-                key: const Key('account-display-name'),
-                label: 'Kontoname',
-                controller: displayName,
+            ),
+            if (method == MailSetupMethod.imapPassword)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  key: const Key('account-edit-servers'),
+                  onPressed: busy ? null : editServersManually,
+                  child: const Text('Server manuell anpassen'),
+                ),
               ),
-              _AccountField(
-                key: const Key('account-email'),
-                label: 'E-Mail-Adresse',
-                controller: email,
-                onChanged: (value) {
-                  if (authentication == 'oauth2' ||
-                      !manualMode ||
-                      imapUsername.text.isEmpty) {
-                    imapUsername.text = value;
-                  }
-                  if (authentication == 'oauth2' ||
-                      !manualMode ||
-                      smtpUsername.text.isEmpty) {
-                    smtpUsername.text = value;
-                  }
-                },
+          ],
+        ),
+        if (busy) ...[
+          const SizedBox(height: 10),
+          const LinearProgressIndicator(),
+        ],
+        if (status != null) ...[
+          const SizedBox(height: 10),
+          Text(
+            status!,
+            key: const Key('account-status'),
+            style: TextStyle(
+              fontSize: 12,
+              color: statusSuccess ? Colors.green.shade700 : null,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  List<Widget> buildMethodDetails() {
+    final provider = method.oauthProvider;
+    if (provider != null) {
+      final label = provider.usesMicrosoftIdentity
+          ? 'Mit Microsoft anmelden'
+          : 'Mit Google anmelden';
+      return [
+        FilledButton.tonalIcon(
+          key: const Key('account-oauth-login'),
+          onPressed: busy ? null : connectOAuth,
+          icon: const Icon(Icons.open_in_browser, size: 18),
+          label: Text(
+            widget.existing?.authentication == 'oauth2'
+                ? 'Erneut im Browser anmelden'
+                : label,
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Die Anmeldung öffnet den Browser deines Systems. MAICENTA sieht '
+          'dein Passwort nie; es speichert nur die Zugangsschlüssel im '
+          'verschlüsselten Profil.',
+          style: TextStyle(fontSize: 12),
+        ),
+      ];
+    }
+    if (method == MailSetupMethod.imapPassword) {
+      final settings = selected?.settings;
+      return [
+        _AccountField(
+          key: const Key('account-password'),
+          label: 'Passwort deines E-Mail-Postfachs',
+          controller: password,
+          obscureText: true,
+        ),
+        if (settings != null)
+          Text(
+            'Posteingang ${settings.imapHost}, Postausgang ${settings.smtpHost} '
+            '(${settings.source}). Das Passwort wird nur an diese Server '
+            'gesendet und im verschlüsselten Profil gespeichert.',
+            key: const Key('account-detected-servers'),
+            style: const TextStyle(fontSize: 12),
+          ),
+      ];
+    }
+    return [
+      _AccountField(
+        key: const Key('account-password'),
+        label: 'Passwort oder App-Passwort',
+        controller: password,
+        obscureText: true,
+      ),
+      if (isEditing)
+        const Padding(
+          padding: EdgeInsets.only(bottom: 8),
+          child: Text(
+            'Beim Bearbeiten kann das Passwort leer bleiben; das gespeicherte '
+            'bleibt dann erhalten.',
+            style: TextStyle(fontSize: 12),
+          ),
+        ),
+      Column(
+        key: const Key('account-manual-settings'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Posteingang (IMAP)',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          _ServerRow(
+            hostKey: const Key('account-imap-host'),
+            host: imapHost,
+            port: imapPort,
+            security: imapSecurity,
+            onSecurityChanged: (value) => setState(() {
+              imapSecurity = value;
+              imapPort.text = value == 'tls' ? '993' : '143';
+              testedConfiguration = null;
+            }),
+          ),
+          _AccountField(label: 'IMAP-Benutzername', controller: imapUsername),
+          const SizedBox(height: 10),
+          const Text(
+            'Postausgang (SMTP)',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          _ServerRow(
+            hostKey: const Key('account-smtp-host'),
+            host: smtpHost,
+            port: smtpPort,
+            security: smtpSecurity,
+            onSecurityChanged: (value) => setState(() {
+              smtpSecurity = value;
+              smtpPort.text = value == 'tls' ? '465' : '587';
+              testedConfiguration = null;
+            }),
+          ),
+          _AccountField(label: 'SMTP-Benutzername', controller: smtpUsername),
+        ],
+      ),
+    ];
+  }
+}
+
+class _MethodChoice extends StatelessWidget {
+  const _MethodChoice({
+    super.key,
+    required this.suggestion,
+    required this.selected,
+    required this.enabled,
+    required this.onSelected,
+  });
+
+  final MailSetupSuggestion suggestion;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: InkWell(
+        onTap: enabled ? onSelected : null,
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(6, 8, 12, 8),
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: selected ? scheme.primary : scheme.outlineVariant,
+              width: selected ? 1.5 : 1,
+            ),
+            borderRadius: BorderRadius.circular(4),
+            color: selected
+                ? scheme.primaryContainer.withValues(alpha: 0.35)
+                : null,
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              IgnorePointer(
+                child: Radio<bool>(
+                  value: true,
+                  // ignore: deprecated_member_use
+                  groupValue: selected,
+                  // ignore: deprecated_member_use
+                  onChanged: (_) {},
+                ),
               ),
-              const SizedBox(height: 3),
-              SegmentedButton<String>(
-                key: const Key('account-authentication'),
-                segments: const [
-                  ButtonSegment(
-                    value: 'password',
-                    icon: Icon(Icons.password, size: 18),
-                    label: Text('Passwort'),
-                  ),
-                  ButtonSegment(
-                    value: 'oauth2',
-                    icon: Icon(Icons.verified_user_outlined, size: 18),
-                    label: Text('OAuth 2.0'),
-                  ),
-                ],
-                selected: {authentication},
-                onSelectionChanged: busy
-                    ? null
-                    : (selection) => setState(() {
-                        authentication = selection.first;
-                        manualMode =
-                            authentication == 'oauth2' ||
-                            widget.existing != null;
-                        oauthTokens = null;
-                        status = null;
-                        statusSuccess = false;
-                        testedConfiguration = null;
-                        if (authentication == 'oauth2') {
-                          applyOAuthProviderSettings();
-                        }
-                      }),
-              ),
-              const SizedBox(height: 10),
-              if (authentication == 'password') ...[
-                _AccountField(
-                  key: const Key('account-password'),
-                  label: 'Passwort oder App-Passwort',
-                  controller: password,
-                  obscureText: true,
-                ),
-                SegmentedButton<bool>(
-                  key: const Key('account-setup-mode'),
-                  segments: const [
-                    ButtonSegment(
-                      value: false,
-                      icon: Icon(Icons.auto_fix_high, size: 18),
-                      label: Text('Automatisch'),
-                    ),
-                    ButtonSegment(
-                      value: true,
-                      icon: Icon(Icons.tune, size: 18),
-                      label: Text('Manuell'),
-                    ),
-                  ],
-                  selected: {manualMode},
-                  onSelectionChanged: busy
-                      ? null
-                      : (selection) => setState(() {
-                          manualMode = selection.first;
-                          status = null;
-                          statusSuccess = false;
-                          testedConfiguration = null;
-                        }),
-                ),
-              ] else ...[
-                DropdownButtonFormField<MailOAuthProvider>(
-                  key: const Key('account-oauth-provider'),
-                  initialValue: oauthProvider,
-                  decoration: const InputDecoration(
-                    labelText: 'Anbieter',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: MailOAuthProvider.values
-                      .map(
-                        (provider) => DropdownMenuItem(
-                          value: provider,
-                          child: Text(provider.displayName),
-                        ),
-                      )
-                      .toList(growable: false),
-                  onChanged: busy
-                      ? null
-                      : (provider) {
-                          if (provider == null) return;
-                          setState(() {
-                            oauthProvider = provider;
-                            oauthTokens = null;
-                            testedConfiguration = null;
-                            status = null;
-                            applyOAuthProviderSettings();
-                          });
-                        },
-                ),
-                const SizedBox(height: 8),
-                FilledButton.tonalIcon(
-                  key: const Key('account-oauth-login'),
-                  onPressed: busy ? null : connectOAuth,
-                  icon: const Icon(Icons.open_in_browser, size: 18),
-                  label: Text(
-                    widget.existing?.authentication == 'oauth2'
-                        ? 'Erneut im Browser anmelden'
-                        : 'Im Browser anmelden',
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  graphAccount
-                      ? 'Das Postfach wird über die Microsoft Graph API '
-                            'synchronisiert. Diese Variante funktioniert auch, '
-                            'wenn der Tenant IMAP und SMTP AUTH deaktiviert hat. '
-                            'Push-Benachrichtigungen sind nicht verfügbar; '
-                            'MAICENTA gleicht regelmäßig ab.'
-                      : 'Exchange Online wird über Microsoft 365 mit XOAUTH2 für '
-                            'IMAP und SMTP angebunden. Ist IMAP im Tenant '
-                            'deaktiviert, wähle die Graph-API-Variante. Lokales '
-                            'Exchange/EWS ist in dieser Ausbaustufe noch nicht '
-                            'enthalten.',
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ],
-              const SizedBox(height: 12),
-              if (graphAccount)
-                const SizedBox.shrink(key: Key('account-graph-settings'))
-              else if (authentication == 'password' && !manualMode)
-                Container(
-                  key: const Key('account-automatic-settings'),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.dns_outlined, size: 20),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'MAICENTA ermittelt IMAP und SMTP automatisch über '
-                          'sichere Domain-Autokonfiguration, DNS-SRV und '
-                          'bekannte Providerdaten. Das Passwort wird dabei '
-                          'nicht an den Konfigurationsdienst übertragen.',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              else
-                Column(
-                  key: const Key('account-manual-settings'),
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Posteingang (IMAP)',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 2,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          suggestion.method.title,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        if (suggestion.recommended)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: scheme.primary,
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                            child: Text(
+                              'Empfohlen',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: scheme.onPrimary,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
-                    const SizedBox(height: 6),
-                    _ServerRow(
-                      hostKey: const Key('account-imap-host'),
-                      host: imapHost,
-                      port: imapPort,
-                      security: imapSecurity,
-                      onSecurityChanged: (value) => setState(() {
-                        imapSecurity = value;
-                        imapPort.text = value == 'tls' ? '993' : '143';
-                        testedConfiguration = null;
-                      }),
-                    ),
-                    _AccountField(
-                      label: 'IMAP-Benutzername',
-                      controller: imapUsername,
-                    ),
-                    const SizedBox(height: 10),
-                    const Text(
-                      'Postausgang (SMTP)',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 6),
-                    _ServerRow(
-                      hostKey: const Key('account-smtp-host'),
-                      host: smtpHost,
-                      port: smtpPort,
-                      security: smtpSecurity,
-                      onSecurityChanged: (value) => setState(() {
-                        smtpSecurity = value;
-                        smtpPort.text = value == 'tls' ? '465' : '587';
-                        testedConfiguration = null;
-                      }),
-                    ),
-                    _AccountField(
-                      label: 'SMTP-Benutzername',
-                      controller: smtpUsername,
+                    const SizedBox(height: 2),
+                    Text(
+                      suggestion.method.description,
+                      style: const TextStyle(fontSize: 12),
                     ),
                   ],
                 ),
-              if (busy) ...[
-                const SizedBox(height: 10),
-                const LinearProgressIndicator(),
-              ],
-              if (status != null) ...[
-                const SizedBox(height: 10),
-                Text(
-                  status!,
-                  key: const Key('account-status'),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: statusSuccess ? Colors.green.shade700 : null,
-                  ),
-                ),
-              ],
+              ),
             ],
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: busy ? null : () => Navigator.pop(context),
-          child: const Text('Abbrechen'),
-        ),
-        OutlinedButton(
-          key: const Key('account-test'),
-          onPressed: busy ? null : testConnection,
-          child: Text(
-            authentication == 'oauth2'
-                ? 'Anmelden und testen'
-                : manualMode
-                ? 'Verbindung testen'
-                : 'Automatisch erkennen',
+    );
+  }
+}
+
+class _MethodNotice extends StatelessWidget {
+  const _MethodNotice({super.key, required this.suggestion});
+
+  final MailSetupSuggestion suggestion;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.info_outline, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  suggestion.method.title,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  suggestion.method.description,
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
           ),
-        ),
-        FilledButton(
-          key: const Key('account-save'),
-          onPressed: busy ? null : save,
-          child: Text(
-            authentication == 'oauth2' && widget.existing == null
-                ? 'Anmelden und hinzufügen'
-                : !manualMode && widget.existing == null
-                ? 'Konto hinzufügen'
-                : 'Speichern',
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
