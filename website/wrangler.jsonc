@@ -1,0 +1,14 @@
+// Cloudflare Workers configuration for the static site.
+// Cloudflare's Git integration builds `npm run build` in this directory and
+// deploys the `dist/` folder as static assets. `_headers` and `_redirects`
+// inside `dist/` are honoured.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "maicenta",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page",
+    "html_handling": "auto-trailing-slash"
+  }
+}
