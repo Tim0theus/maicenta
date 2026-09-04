@@ -8,9 +8,13 @@ class FolderTreeEntry {
     required this.depth,
     required this.leafName,
     required this.path,
+    this.parentId,
   });
 
   final MailFolder folder;
+
+  /// Folder this entry is nested under, or `null` for top-level rows.
+  final String? parentId;
 
   /// 0 for top-level folders, 1 for direct children, and so on.
   final int depth;
@@ -74,34 +78,62 @@ CustomFolderPath customFolderPath(String serverName, {String? inboxName}) {
 
 /// Orders one account's folders as a tree: standard folders first in their
 /// given order, custom folders below the inbox directly after it, remaining
-/// custom folders afterwards, each sorted by path and indented by depth.
+/// custom folders afterwards, each sorted by path and nested under the
+/// nearest existing ancestor.
 List<FolderTreeEntry> buildFolderTree(List<MailFolder> accountFolders) {
   final inbox = accountFolders
       .where((folder) => folder.role == 'inbox')
       .firstOrNull;
-  final inboxChildren = <(FolderTreeEntry, String)>[];
-  final others = <(FolderTreeEntry, String)>[];
+  final inboxChildren = <(MailFolder, CustomFolderPath)>[];
+  final others = <(MailFolder, CustomFolderPath)>[];
   for (final folder in accountFolders) {
     if (folder.role != 'custom') continue;
     final path = customFolderPath(
       folder.displayName,
       inboxName: inbox?.displayName,
     );
-    final entry = FolderTreeEntry(
-      folder: folder,
-      depth: (path.underInbox ? 1 : 0) + path.segments.length - 1,
-      leafName: path.leaf,
-      path: path.joined,
-    );
-    (path.underInbox ? inboxChildren : others).add((
-      entry,
-      path.joined.toLowerCase(),
-    ));
+    (path.underInbox ? inboxChildren : others).add((folder, path));
   }
-  int byPath((FolderTreeEntry, String) left, (FolderTreeEntry, String) right) =>
-      left.$2.compareTo(right.$2);
+  int byPath(
+    (MailFolder, CustomFolderPath) left,
+    (MailFolder, CustomFolderPath) right,
+  ) => left.$2.joined.toLowerCase().compareTo(right.$2.joined.toLowerCase());
   inboxChildren.sort(byPath);
   others.sort(byPath);
+
+  List<FolderTreeEntry> nest(
+    List<(MailFolder, CustomFolderPath)> group, {
+    String? rootId,
+    required int rootDepth,
+  }) {
+    final byLowerPath = <String, FolderTreeEntry>{};
+    final entries = <FolderTreeEntry>[];
+    for (final (folder, path) in group) {
+      FolderTreeEntry? parent;
+      for (var length = path.segments.length - 1; length > 0; length -= 1) {
+        parent =
+            byLowerPath[path.segments.take(length).join('/').toLowerCase()];
+        if (parent != null) break;
+      }
+      final entry = FolderTreeEntry(
+        folder: folder,
+        depth: parent == null ? rootDepth : parent.depth + 1,
+        leafName: path.leaf,
+        path: path.joined,
+        parentId: parent?.folder.id ?? rootId,
+      );
+      byLowerPath.putIfAbsent(path.joined.toLowerCase(), () => entry);
+      entries.add(entry);
+    }
+    return entries;
+  }
+
+  final nestedInboxChildren = nest(
+    inboxChildren,
+    rootId: inbox?.id,
+    rootDepth: inbox == null ? 0 : 1,
+  );
+  final nestedOthers = nest(others, rootDepth: 0);
 
   final tree = <FolderTreeEntry>[];
   for (final folder in accountFolders) {
@@ -114,13 +146,39 @@ List<FolderTreeEntry> buildFolderTree(List<MailFolder> accountFolders) {
         path: folder.displayName,
       ),
     );
-    if (folder.role == 'inbox') {
-      tree.addAll(inboxChildren.map((entry) => entry.$1));
-    }
+    if (folder.role == 'inbox') tree.addAll(nestedInboxChildren);
   }
-  if (inbox == null) {
-    tree.addAll(inboxChildren.map((entry) => entry.$1));
-  }
-  tree.addAll(others.map((entry) => entry.$1));
+  if (inbox == null) tree.addAll(nestedInboxChildren);
+  tree.addAll(nestedOthers);
   return tree;
+}
+
+/// Identifiers of every folder that has at least one nested child.
+Set<String> folderTreeParentIds(List<FolderTreeEntry> tree) => {
+  for (final entry in tree)
+    if (entry.parentId != null) entry.parentId!,
+};
+
+/// Rows that remain visible when the given folders are collapsed: an entry is
+/// hidden as soon as any of its ancestors is collapsed.
+List<FolderTreeEntry> visibleFolderTree(
+  List<FolderTreeEntry> tree,
+  Set<String> collapsedFolderIds,
+) {
+  if (collapsedFolderIds.isEmpty) return tree;
+  final parents = {for (final entry in tree) entry.folder.id: entry.parentId};
+  bool hiddenByAncestor(FolderTreeEntry entry) {
+    var parentId = entry.parentId;
+    var guard = 0;
+    while (parentId != null && guard < 64) {
+      if (collapsedFolderIds.contains(parentId)) return true;
+      parentId = parents[parentId];
+      guard += 1;
+    }
+    return false;
+  }
+
+  return tree
+      .where((entry) => !hiddenByAncestor(entry))
+      .toList(growable: false);
 }

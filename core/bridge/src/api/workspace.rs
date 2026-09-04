@@ -416,6 +416,8 @@ pub struct MessageAttachmentDto {
 pub struct WorkspaceSnapshot {
     pub mailboxes: Vec<MailboxDto>,
     pub favorite_mailbox_ids: Vec<String>,
+    /// Mailboxes whose folder subtree is collapsed in the folder pane.
+    pub collapsed_mailbox_ids: Vec<String>,
     pub dark_mode_enabled: bool,
     pub messages: Vec<MessageDto>,
     pub calendar_events: Vec<CalendarEventDto>,
@@ -1527,6 +1529,26 @@ pub fn save_favorite_mailboxes(
         .collect::<Result<Vec<_>, _>>()?;
     open_profile_store(Path::new(&database_path))?
         .save_favorite_mailbox_ids(&mailbox_ids)
+        .map_err(|error| error.to_string())
+}
+
+/// Replaces the set of collapsed folder subtrees stored in the encrypted
+/// profile.
+///
+/// # Errors
+///
+/// Returns an error when an identifier is invalid or duplicated, or the
+/// encrypted preference cannot be committed.
+pub fn save_collapsed_mailboxes(
+    database_path: String,
+    mailbox_ids: Vec<String>,
+) -> Result<(), String> {
+    let mailbox_ids = mailbox_ids
+        .into_iter()
+        .map(|id| MailboxId::parse(id).map_err(|error| error.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    open_profile_store(Path::new(&database_path))?
+        .save_collapsed_mailbox_ids(&mailbox_ids)
         .map_err(|error| error.to_string())
 }
 
@@ -3265,6 +3287,13 @@ fn load_snapshot(store: &SqliteMailStore) -> Result<WorkspaceSnapshot, String> {
             .map(|mailbox| mailbox.id.to_string())
             .collect(),
     };
+    let collapsed_mailbox_ids = store
+        .collapsed_mailbox_ids()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|id| known_mailbox_ids.contains(id.as_str()))
+        .map(|id| id.to_string())
+        .collect();
     let mut messages = Vec::new();
 
     for mailbox in &mailboxes {
@@ -3279,6 +3308,7 @@ fn load_snapshot(store: &SqliteMailStore) -> Result<WorkspaceSnapshot, String> {
             .dark_mode_enabled()
             .map_err(|error| error.to_string())?,
         favorite_mailbox_ids,
+        collapsed_mailbox_ids,
         mailboxes: mailboxes.into_iter().map(mailbox_dto).collect(),
         messages,
         calendar_events: store
@@ -3781,9 +3811,9 @@ mod tests {
         create_local_mailbox, delete_local_mailbox, export_local_attachment, export_profile,
         import_profile, load_mailbox_messages, load_outgoing_attachments, mail_account_from_input,
         open_profile_store, open_workspace, remote_mailbox_id, remote_message_id,
-        rename_local_mailbox, save_dark_mode, save_favorite_mailboxes, save_local_calendar_event,
-        save_local_contact, save_local_message, save_local_task, save_mail_account,
-        save_oauth_mail_account, search_profile_messages, update_local_message,
+        rename_local_mailbox, save_collapsed_mailboxes, save_dark_mode, save_favorite_mailboxes,
+        save_local_calendar_event, save_local_contact, save_local_message, save_local_task,
+        save_mail_account, save_oauth_mail_account, search_profile_messages, update_local_message,
     };
     use maicenta_application::{MailAccountStore, MailStore, SecretStore};
     use maicenta_domain::{AccountId, Mailbox, MailboxRole, MessageBody, MessageId};
@@ -3876,6 +3906,13 @@ mod tests {
             reordered.favorite_mailbox_ids,
             ["personal.archive", "personal.inbox"]
         );
+        save_collapsed_mailboxes(
+            path.to_string_lossy().into_owned(),
+            vec!["personal.inbox".into(), "unknown.folder".into()],
+        )
+        .expect("save collapsed folders");
+        let collapsed = open_workspace(path.to_string_lossy().into_owned()).expect("reopen");
+        assert_eq!(collapsed.collapsed_mailbox_ids, ["personal.inbox"]);
         save_dark_mode(path.to_string_lossy().into_owned(), true).expect("save dark mode");
         assert!(
             open_workspace(path.to_string_lossy().into_owned())

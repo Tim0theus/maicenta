@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -217916187;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1418696153;
 
 // Section: executor
 
@@ -463,6 +463,43 @@ fn wire__crate__api__workspace__rename_local_mailbox_impl(
                         api_database_path,
                         api_mailbox_id,
                         api_display_name,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__workspace__save_collapsed_mailboxes_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "save_collapsed_mailboxes",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_database_path = <String>::sse_decode(&mut deserializer);
+            let api_mailbox_ids = <Vec<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::workspace::save_collapsed_mailboxes(
+                        api_database_path,
+                        api_mailbox_ids,
                     )?;
                     Ok(output_ok)
                 })())
@@ -1696,6 +1733,7 @@ impl SseDecode for crate::api::workspace::WorkspaceSnapshot {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_mailboxes = <Vec<crate::api::workspace::MailboxDto>>::sse_decode(deserializer);
         let mut var_favoriteMailboxIds = <Vec<String>>::sse_decode(deserializer);
+        let mut var_collapsedMailboxIds = <Vec<String>>::sse_decode(deserializer);
         let mut var_darkModeEnabled = <bool>::sse_decode(deserializer);
         let mut var_messages = <Vec<crate::api::workspace::MessageDto>>::sse_decode(deserializer);
         let mut var_calendarEvents =
@@ -1713,6 +1751,7 @@ impl SseDecode for crate::api::workspace::WorkspaceSnapshot {
         return crate::api::workspace::WorkspaceSnapshot {
             mailboxes: var_mailboxes,
             favorite_mailbox_ids: var_favoriteMailboxIds,
+            collapsed_mailbox_ids: var_collapsedMailboxIds,
             dark_mode_enabled: var_darkModeEnabled,
             messages: var_messages,
             calendar_events: var_calendarEvents,
@@ -1783,78 +1822,84 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        12 => wire__crate__api__workspace__save_dark_mode_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__workspace__save_favorite_mailboxes_impl(
+        12 => wire__crate__api__workspace__save_collapsed_mailboxes_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        14 => wire__crate__api__workspace__save_local_calendar_event_impl(
+        13 => wire__crate__api__workspace__save_dark_mode_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__workspace__save_favorite_mailboxes_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        15 => {
+        15 => wire__crate__api__workspace__save_local_calendar_event_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        16 => {
             wire__crate__api__workspace__save_local_contact_impl(port, ptr, rust_vec_len, data_len)
         }
-        16 => {
+        17 => {
             wire__crate__api__workspace__save_local_message_impl(port, ptr, rust_vec_len, data_len)
         }
-        17 => wire__crate__api__workspace__save_local_task_impl(port, ptr, rust_vec_len, data_len),
-        18 => {
+        18 => wire__crate__api__workspace__save_local_task_impl(port, ptr, rust_vec_len, data_len),
+        19 => {
             wire__crate__api__workspace__save_mail_account_impl(port, ptr, rust_vec_len, data_len)
         }
-        19 => wire__crate__api__workspace__save_oauth_mail_account_impl(
+        20 => wire__crate__api__workspace__save_oauth_mail_account_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        20 => wire__crate__api__workspace__search_profile_messages_impl(
+        21 => wire__crate__api__workspace__search_profile_messages_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        21 => wire__crate__api__workspace__send_account_message_impl(
+        22 => wire__crate__api__workspace__send_account_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        22 => wire__crate__api__workspace__synchronize_mail_account_drafts_impl(
+        23 => wire__crate__api__workspace__synchronize_mail_account_drafts_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        23 => wire__crate__api__workspace__synchronize_mail_accounts_impl(
+        24 => wire__crate__api__workspace__synchronize_mail_accounts_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        24 => wire__crate__api__workspace__test_mail_account_connection_impl(
+        25 => wire__crate__api__workspace__test_mail_account_connection_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        25 => wire__crate__api__workspace__test_oauth_mail_account_connection_impl(
+        26 => wire__crate__api__workspace__test_oauth_mail_account_connection_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        26 => wire__crate__api__workspace__update_local_message_impl(
+        27 => wire__crate__api__workspace__update_local_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        27 => wire__crate__api__workspace__wait_for_mailbox_idle_change_impl(
+        28 => wire__crate__api__workspace__wait_for_mailbox_idle_change_impl(
             port,
             ptr,
             rust_vec_len,
@@ -2316,6 +2361,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::workspace::WorkspaceSnapshot 
         [
             self.mailboxes.into_into_dart().into_dart(),
             self.favorite_mailbox_ids.into_into_dart().into_dart(),
+            self.collapsed_mailbox_ids.into_into_dart().into_dart(),
             self.dark_mode_enabled.into_into_dart().into_dart(),
             self.messages.into_into_dart().into_dart(),
             self.calendar_events.into_into_dart().into_dart(),
@@ -2747,6 +2793,7 @@ impl SseEncode for crate::api::workspace::WorkspaceSnapshot {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<crate::api::workspace::MailboxDto>>::sse_encode(self.mailboxes, serializer);
         <Vec<String>>::sse_encode(self.favorite_mailbox_ids, serializer);
+        <Vec<String>>::sse_encode(self.collapsed_mailbox_ids, serializer);
         <bool>::sse_encode(self.dark_mode_enabled, serializer);
         <Vec<crate::api::workspace::MessageDto>>::sse_encode(self.messages, serializer);
         <Vec<crate::api::workspace::CalendarEventDto>>::sse_encode(

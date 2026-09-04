@@ -254,6 +254,7 @@ class WorkspaceDataSnapshot {
   const WorkspaceDataSnapshot({
     required this.folders,
     this.favoriteFolderIds = const [],
+    this.collapsedFolderIds = const [],
     this.darkModeEnabled = false,
     required this.messages,
     required this.calendarEvents,
@@ -270,6 +271,9 @@ class WorkspaceDataSnapshot {
 
   final List<MailFolder> folders;
   final List<String> favoriteFolderIds;
+
+  /// Folders whose subtree is collapsed in the folder pane.
+  final List<String> collapsedFolderIds;
   final bool darkModeEnabled;
   final List<DemoMessage> messages;
   final List<LocalCalendarItem> calendarEvents;
@@ -312,6 +316,7 @@ abstract interface class MailDataSource {
 
   List<MailFolder> get folders;
   List<String> get favoriteFolderIds;
+  List<String> get collapsedFolderIds;
   bool get darkModeEnabled;
   List<DemoMessage> get messages;
   List<LocalCalendarItem> get calendarEvents;
@@ -364,6 +369,7 @@ abstract interface class MailDataSource {
   Future<void> renameFolder(MailFolder folder);
   Future<void> deleteFolder(String folderId, String fallbackFolderId);
   Future<void> saveFavoriteFolders(List<String> folderIds);
+  Future<void> saveCollapsedFolders(List<String> folderIds);
   Future<void> saveDarkMode(bool enabled);
   Future<void> saveCalendarEvent(LocalCalendarItem event);
   Future<void> saveTask(LocalTaskItem task);
@@ -410,6 +416,9 @@ class DemoMailDataSource implements MailDataSource {
       .take(3)
       .map((folder) => folder.id)
       .toList(growable: false);
+
+  @override
+  List<String> get collapsedFolderIds => const [];
 
   @override
   bool get darkModeEnabled => false;
@@ -544,6 +553,9 @@ class DemoMailDataSource implements MailDataSource {
   Future<void> saveFavoriteFolders(List<String> folderIds) async {}
 
   @override
+  Future<void> saveCollapsedFolders(List<String> folderIds) async {}
+
+  @override
   Future<void> saveDarkMode(bool enabled) async {}
 
   @override
@@ -628,6 +640,7 @@ class RustMailDataSource implements MailDataSource {
     required this.databasePath,
     required this.folders,
     required this.favoriteFolderIds,
+    required this.collapsedFolderIds,
     required this.darkModeEnabled,
     required this.messages,
     required this.calendarEvents,
@@ -644,6 +657,7 @@ class RustMailDataSource implements MailDataSource {
       databasePath: databasePath,
       folders: data.folders,
       favoriteFolderIds: data.favoriteFolderIds,
+      collapsedFolderIds: data.collapsedFolderIds,
       darkModeEnabled: data.darkModeEnabled,
       messages: data.messages,
       calendarEvents: data.calendarEvents,
@@ -659,6 +673,9 @@ class RustMailDataSource implements MailDataSource {
 
   @override
   final List<String> favoriteFolderIds;
+
+  @override
+  final List<String> collapsedFolderIds;
 
   @override
   final bool darkModeEnabled;
@@ -862,6 +879,14 @@ class RustMailDataSource implements MailDataSource {
   }
 
   @override
+  Future<void> saveCollapsedFolders(List<String> folderIds) {
+    return rust.saveCollapsedMailboxes(
+      databasePath: databasePath,
+      mailboxIds: folderIds,
+    );
+  }
+
+  @override
   Future<void> saveDarkMode(bool enabled) {
     return rust.saveDarkMode(databasePath: databasePath, enabled: enabled);
   }
@@ -1029,6 +1054,7 @@ WorkspaceDataSnapshot _workspaceData(rust.WorkspaceSnapshot snapshot) {
         )
         .toList(growable: false),
     favoriteFolderIds: snapshot.favoriteMailboxIds,
+    collapsedFolderIds: snapshot.collapsedMailboxIds,
     darkModeEnabled: snapshot.darkModeEnabled,
     messages: snapshot.messages.map(_messageData).toList(growable: false),
     calendarEvents: snapshot.calendarEvents

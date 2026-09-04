@@ -2269,6 +2269,77 @@ void main() {
     expect(result?.account.provider, 'microsoft_graph');
     expect(result?.oauthTokens, same(tokens));
   });
+  testWidgets('collapses and expands nested folders and persists the state', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const folders = [
+      MailFolder(
+        id: 'work.inbox',
+        accountId: 'work',
+        displayName: 'Posteingang',
+        role: 'inbox',
+        unreadCount: 0,
+        totalCount: 0,
+      ),
+      MailFolder(
+        id: 'work.trade',
+        accountId: 'work',
+        displayName: 'Posteingang/12 Level Trade',
+        role: 'custom',
+        unreadCount: 0,
+        totalCount: 0,
+      ),
+      MailFolder(
+        id: 'work.sync',
+        accountId: 'work',
+        displayName: 'Synchronisierungsprobleme',
+        role: 'custom',
+        unreadCount: 0,
+        totalCount: 0,
+      ),
+      MailFolder(
+        id: 'work.sync.conflicts',
+        accountId: 'work',
+        displayName: 'Synchronisierungsprobleme/Konflikte',
+        role: 'custom',
+        unreadCount: 0,
+        totalCount: 0,
+      ),
+    ];
+    final dataSource = RecordingMailDataSource(
+      configuredFolders: folders,
+      configuredFavoriteFolderIds: const [],
+      configuredMessages: const [],
+    );
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.pumpAndSettle();
+
+    // Nested folders are visible and indented below their parents.
+    expect(find.byKey(const Key('folder-work.trade')), findsOneWidget);
+    expect(find.byKey(const Key('folder-work.sync.conflicts')), findsOneWidget);
+    expect(find.text('12 Level Trade'), findsOneWidget);
+    expect(find.text('Konflikte'), findsOneWidget);
+    expect(find.byKey(const Key('folder-toggle-work.inbox')), findsOneWidget);
+    expect(find.byKey(const Key('folder-toggle-work.sync')), findsOneWidget);
+    expect(find.byKey(const Key('folder-toggle-work.trade')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('folder-toggle-work.inbox')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('folder-work.trade')), findsNothing);
+    expect(find.byKey(const Key('folder-work.sync.conflicts')), findsOneWidget);
+    expect(dataSource.collapsedFolderSaves, [
+      ['work.inbox'],
+    ]);
+
+    await tester.tap(find.byKey(const Key('folder-toggle-work.inbox')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('folder-work.trade')), findsOneWidget);
+    expect(dataSource.collapsedFolderSaves.last, isEmpty);
+  });
 }
 
 Future<void> _enterIdentity(
@@ -2424,6 +2495,11 @@ class RecordingMailDataSource implements MailDataSource {
 
   @override
   List<String> get favoriteFolderIds => configuredFavoriteFolderIds;
+
+  @override
+  List<String> get collapsedFolderIds => const [];
+
+  final collapsedFolderSaves = <List<String>>[];
 
   @override
   bool get darkModeEnabled => configuredDarkModeEnabled;
@@ -2592,6 +2668,11 @@ class RecordingMailDataSource implements MailDataSource {
   @override
   Future<void> saveFavoriteFolders(List<String> folderIds) async {
     favoriteFolderSaves.add(List<String>.of(folderIds));
+  }
+
+  @override
+  Future<void> saveCollapsedFolders(List<String> folderIds) async {
+    collapsedFolderSaves.add(List<String>.of(folderIds));
   }
 
   @override

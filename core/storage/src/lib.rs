@@ -26,6 +26,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 const CURRENT_SCHEMA_VERSION: u32 = 15;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const FAVORITE_MAILBOXES_KEY: &str = "favorite_mailbox_ids";
+const COLLAPSED_MAILBOXES_KEY: &str = "collapsed_mailbox_ids";
 const DARK_MODE_KEY: &str = "dark_mode_enabled";
 
 static DATABASE_OPERATION_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
@@ -1585,6 +1586,61 @@ impl WorkspaceStore for SqliteMailStore {
             )
             .map_err(storage_error)?;
         transaction.commit().map_err(storage_error)
+    }
+
+    fn collapsed_mailbox_ids(&self) -> Result<Vec<MailboxId>, ApplicationError> {
+        let connection = self.connection()?;
+        let value = connection
+            .query_row(
+                "SELECT value FROM workspace_preferences WHERE key = ?1",
+                [COLLAPSED_MAILBOXES_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        value
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|id| MailboxId::parse(id).map_err(invalid_data))
+            .collect()
+    }
+
+    fn save_collapsed_mailbox_ids(
+        &mut self,
+        mailbox_ids: &[MailboxId],
+    ) -> Result<(), ApplicationError> {
+        if mailbox_ids.len() > 1_000 {
+            return Err(ApplicationError::Storage(
+                "collapsed mailbox count exceeds 1000".into(),
+            ));
+        }
+        let unique = mailbox_ids
+            .iter()
+            .map(MailboxId::as_str)
+            .collect::<HashSet<_>>();
+        if unique.len() != mailbox_ids.len() {
+            return Err(ApplicationError::Storage(
+                "collapsed mailboxes contain a duplicate".into(),
+            ));
+        }
+        // Unknown identifiers are tolerated: a folder may disappear from the
+        // server while its collapsed state is still stored. The bridge filters
+        // the set against the current mailbox list when loading a snapshot.
+        let value = mailbox_ids
+            .iter()
+            .map(MailboxId::as_str)
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.connection()?
+            .execute(
+                "INSERT INTO workspace_preferences (key, value)
+                 VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![COLLAPSED_MAILBOXES_KEY, value],
+            )
+            .map_err(storage_error)?;
+        Ok(())
     }
 
     fn list_calendar_events(&self) -> Result<Vec<CalendarEvent>, ApplicationError> {
@@ -5305,6 +5361,30 @@ mod tests {
             ]),
             Err(ApplicationError::NotFound)
         );
+    }
+
+    #[test]
+    fn persists_collapsed_mailboxes_inside_workspace_preferences() {
+        let mut store = SqliteMailStore::open_in_memory().expect("profile");
+        assert_eq!(store.collapsed_mailbox_ids(), Ok(Vec::new()));
+        let inbox = MailboxId::parse("work.inbox").expect("id");
+        let sync = MailboxId::parse("work.sync").expect("id");
+        store
+            .save_collapsed_mailbox_ids(&[inbox.clone(), sync.clone()])
+            .expect("save collapsed");
+        assert_eq!(
+            store.collapsed_mailbox_ids(),
+            Ok(vec![inbox.clone(), sync.clone()])
+        );
+        assert!(
+            store
+                .save_collapsed_mailbox_ids(&[inbox.clone(), inbox.clone()])
+                .is_err()
+        );
+        store
+            .save_collapsed_mailbox_ids(&[])
+            .expect("clear collapsed");
+        assert_eq!(store.collapsed_mailbox_ids(), Ok(Vec::new()));
     }
 
     #[test]

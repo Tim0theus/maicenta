@@ -4,11 +4,14 @@
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
 import 'api/workspace.dart';
+
 import 'dart:async';
 import 'dart:convert';
+
 import 'frb_generated.dart';
 import 'frb_generated.io.dart'
     if (dart.library.js_interop) 'frb_generated.web.dart';
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 /// Main entrypoint of the Rust API
@@ -66,7 +69,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -217916187;
+  int get rustContentHash => -1418696153;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -135,6 +138,11 @@ abstract class RustLibApi extends BaseApi {
     required String databasePath,
     required String mailboxId,
     required String displayName,
+  });
+
+  Future<void> crateApiWorkspaceSaveCollapsedMailboxes({
+    required String databasePath,
+    required List<String> mailboxIds,
   });
 
   Future<void> crateApiWorkspaceSaveDarkMode({
@@ -625,6 +633,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiWorkspaceSaveCollapsedMailboxes({
+    required String databasePath,
+    required List<String> mailboxIds,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(databasePath, serializer);
+          sse_encode_list_String(mailboxIds, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWorkspaceSaveCollapsedMailboxesConstMeta,
+        argValues: [databasePath, mailboxIds],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWorkspaceSaveCollapsedMailboxesConstMeta =>
+      const TaskConstMeta(
+        debugName: "save_collapsed_mailboxes",
+        argNames: ["databasePath", "mailboxIds"],
+      );
+
+  @override
   Future<void> crateApiWorkspaceSaveDarkMode({
     required String databasePath,
     required bool enabled,
@@ -638,7 +681,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 13,
             port: port_,
           );
         },
@@ -673,7 +716,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 14,
             port: port_,
           );
         },
@@ -708,7 +751,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 15,
             port: port_,
           );
         },
@@ -743,7 +786,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 16,
             port: port_,
           );
         },
@@ -778,7 +821,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 17,
             port: port_,
           );
         },
@@ -813,7 +856,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 18,
             port: port_,
           );
         },
@@ -850,7 +893,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 19,
             port: port_,
           );
         },
@@ -887,7 +930,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 20,
             port: port_,
           );
         },
@@ -926,7 +969,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 21,
             port: port_,
           );
         },
@@ -961,7 +1004,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 22,
             port: port_,
           );
         },
@@ -996,7 +1039,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 23,
             port: port_,
           );
         },
@@ -1029,7 +1072,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 24,
             port: port_,
           );
         },
@@ -1064,7 +1107,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1099,7 +1142,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1140,7 +1183,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 27,
             port: port_,
           );
         },
@@ -1183,7 +1226,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1672,23 +1715,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   WorkspaceSnapshot dco_decode_workspace_snapshot(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 14)
-      throw Exception('unexpected arr length: expect 14 but see ${arr.length}');
+    if (arr.length != 15)
+      throw Exception('unexpected arr length: expect 15 but see ${arr.length}');
     return WorkspaceSnapshot(
       mailboxes: dco_decode_list_mailbox_dto(arr[0]),
       favoriteMailboxIds: dco_decode_list_String(arr[1]),
-      darkModeEnabled: dco_decode_bool(arr[2]),
-      messages: dco_decode_list_message_dto(arr[3]),
-      calendarEvents: dco_decode_list_calendar_event_dto(arr[4]),
-      tasks: dco_decode_list_task_dto(arr[5]),
-      contacts: dco_decode_list_contact_dto(arr[6]),
-      mailAccounts: dco_decode_list_mail_account_dto(arr[7]),
-      syncWarnings: dco_decode_list_String(arr[8]),
-      catalogMessagesRemaining: dco_decode_u_32(arr[9]),
-      deltaMailboxesSynchronized: dco_decode_u_32(arr[10]),
-      fullMailboxesReconciled: dco_decode_u_32(arr[11]),
-      qresyncMailboxesSynchronized: dco_decode_u_32(arr[12]),
-      pendingMailOperations: dco_decode_u_32(arr[13]),
+      collapsedMailboxIds: dco_decode_list_String(arr[2]),
+      darkModeEnabled: dco_decode_bool(arr[3]),
+      messages: dco_decode_list_message_dto(arr[4]),
+      calendarEvents: dco_decode_list_calendar_event_dto(arr[5]),
+      tasks: dco_decode_list_task_dto(arr[6]),
+      contacts: dco_decode_list_contact_dto(arr[7]),
+      mailAccounts: dco_decode_list_mail_account_dto(arr[8]),
+      syncWarnings: dco_decode_list_String(arr[9]),
+      catalogMessagesRemaining: dco_decode_u_32(arr[10]),
+      deltaMailboxesSynchronized: dco_decode_u_32(arr[11]),
+      fullMailboxesReconciled: dco_decode_u_32(arr[12]),
+      qresyncMailboxesSynchronized: dco_decode_u_32(arr[13]),
+      pendingMailOperations: dco_decode_u_32(arr[14]),
     );
   }
 
@@ -2323,6 +2367,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_mailboxes = sse_decode_list_mailbox_dto(deserializer);
     var var_favoriteMailboxIds = sse_decode_list_String(deserializer);
+    var var_collapsedMailboxIds = sse_decode_list_String(deserializer);
     var var_darkModeEnabled = sse_decode_bool(deserializer);
     var var_messages = sse_decode_list_message_dto(deserializer);
     var var_calendarEvents = sse_decode_list_calendar_event_dto(deserializer);
@@ -2338,6 +2383,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return WorkspaceSnapshot(
       mailboxes: var_mailboxes,
       favoriteMailboxIds: var_favoriteMailboxIds,
+      collapsedMailboxIds: var_collapsedMailboxIds,
       darkModeEnabled: var_darkModeEnabled,
       messages: var_messages,
       calendarEvents: var_calendarEvents,
@@ -2866,6 +2912,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_mailbox_dto(self.mailboxes, serializer);
     sse_encode_list_String(self.favoriteMailboxIds, serializer);
+    sse_encode_list_String(self.collapsedMailboxIds, serializer);
     sse_encode_bool(self.darkModeEnabled, serializer);
     sse_encode_list_message_dto(self.messages, serializer);
     sse_encode_list_calendar_event_dto(self.calendarEvents, serializer);

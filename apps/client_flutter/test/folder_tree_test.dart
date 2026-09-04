@@ -75,12 +75,52 @@ void main() {
     expect(tree[7].path, 'Synchronisierungsprobleme/Konflikte');
   });
 
+  test('links children to their parent and hides collapsed subtrees', () {
+    final tree = buildFolderTree([
+      _folder('inbox', 'Posteingang', role: 'inbox'),
+      _folder('trade', 'Posteingang/12 Level Trade'),
+      _folder('deep', 'Posteingang/12 Level Trade/2026'),
+      _folder('sync', 'Synchronisierungsprobleme'),
+      _folder('sync-conflicts', 'Synchronisierungsprobleme/Konflikte'),
+      _folder('orphan', 'Reports/Weekly/Archive'),
+    ]);
+    final byId = {for (final entry in tree) entry.folder.id: entry};
+
+    expect(byId['trade']!.parentId, 'inbox');
+    expect(byId['deep']!.parentId, 'trade');
+    expect(byId['deep']!.depth, 2);
+    expect(byId['sync-conflicts']!.parentId, 'sync');
+    // A missing intermediate level does not orphan the folder into the void.
+    expect(byId['orphan']!.parentId, isNull);
+    expect(byId['orphan']!.depth, 0);
+    expect(byId['orphan']!.leafName, 'Archive');
+    expect(folderTreeParentIds(tree), {'inbox', 'trade', 'sync'});
+
+    final collapsedInbox = visibleFolderTree(tree, {'inbox'});
+    // Top-level custom folders sort by path, so "Reports/…" precedes "Sync…".
+    expect(collapsedInbox.map((entry) => entry.folder.id), [
+      'inbox',
+      'orphan',
+      'sync',
+      'sync-conflicts',
+    ]);
+    final collapsedTrade = visibleFolderTree(tree, {'trade'});
+    expect(collapsedTrade.map((entry) => entry.folder.id), contains('trade'));
+    expect(
+      collapsedTrade.map((entry) => entry.folder.id),
+      isNot(contains('deep')),
+    );
+    expect(visibleFolderTree(tree, const {}), same(tree));
+  });
+
   test('keeps custom folders visible when the account has no inbox', () {
     final tree = buildFolderTree([
       _folder('a', 'INBOX/Alpha'),
       _folder('b', 'Beta'),
     ]);
     expect(tree.map((entry) => entry.folder.id).toList(), ['a', 'b']);
-    expect(tree.first.depth, 1);
+    // Without an inbox row there is nothing to nest under.
+    expect(tree.first.depth, 0);
+    expect(tree.first.parentId, isNull);
   });
 }
