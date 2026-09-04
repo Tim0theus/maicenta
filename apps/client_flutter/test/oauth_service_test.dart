@@ -76,7 +76,9 @@ void main() {
       expect(redirect.port, 43821);
     } else {
       expect(redirect.scheme, 'com.maicenta.app');
-      expect(redirect.path, '/oauth2redirect');
+      // Entra ID accepts custom schemes only as `scheme://host`.
+      expect(redirect.host, 'oauth2redirect');
+      expect(redirect.toString(), 'com.maicenta.app://oauth2redirect');
     }
   });
 }

@@ -141,7 +141,7 @@ are also still pending.
 
 MAICENTA is a native public client and therefore never embeds an OAuth client
 secret. Register native applications with Microsoft Entra and Google. Use
-`com.maicenta.app:/oauth2redirect` on macOS and Android and
+`com.maicenta.app://oauth2redirect` on macOS and Android and
 `http://localhost:43821/oauth2redirect` on Windows and Linux, then provide the
 public client IDs at build or run time:
 

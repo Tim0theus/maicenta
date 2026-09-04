@@ -226,7 +226,7 @@ flutter run -d macos \
   --dart-define=MAICENTA_GOOGLE_OAUTH_CLIENT_ID=<public-client-id>
 ```
 
-Register `com.maicenta.app:/oauth2redirect` for macOS and Android builds. On
+Register `com.maicenta.app://oauth2redirect` for macOS and Android builds. On
 Windows and Linux, register `http://localhost:43821/oauth2redirect`; those
 targets use the external browser and a temporary loopback listener instead of
 an embedded WebView. A provider-specific URI can be passed with

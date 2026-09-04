@@ -11,7 +11,7 @@
 ///
 /// Microsoft: one multi-tenant registration in Microsoft Entra ID ("Accounts
 /// in any organizational directory and personal Microsoft accounts") with the
-/// redirect URIs `com.maicenta.app:/oauth2redirect` and
+/// redirect URIs `com.maicenta.app://oauth2redirect` and
 /// `http://localhost:43821/oauth2redirect`, public client flows enabled, and
 /// the delegated permissions `Mail.ReadWrite`, `Mail.Send`, `offline_access`,
 /// `openid`, `profile`, `email` (Microsoft Graph) plus

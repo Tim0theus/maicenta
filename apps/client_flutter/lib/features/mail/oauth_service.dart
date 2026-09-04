@@ -144,7 +144,7 @@ class MailOAuthService {
     if (Platform.isWindows || Platform.isLinux) {
       return 'http://localhost:43821/oauth2redirect';
     }
-    return 'com.maicenta.app:/oauth2redirect';
+    return 'com.maicenta.app://oauth2redirect';
   }
 
   final http.Client _client;
@@ -205,11 +205,14 @@ class MailOAuthService {
       options: FlutterWebAuth2Options(useWebview: !loopbackCallback),
     );
     final returned = Uri.parse(result);
+    // Entra ID requires custom schemes in the form `scheme://host`, so the
+    // callback carries its path segment as the URI host. Compare scheme,
+    // host, and path so a provider response for another registration is
+    // rejected even when it shares the scheme.
     if (returned.scheme != callback.scheme ||
+        returned.host != callback.host ||
         returned.path != callback.path ||
-        (loopbackCallback &&
-            (returned.host != callback.host ||
-                returned.port != callback.port))) {
+        (loopbackCallback && returned.port != callback.port)) {
       throw StateError(
         'Die OAuth-Antwort verwendete einen ungültigen Rücksprung.',
       );
