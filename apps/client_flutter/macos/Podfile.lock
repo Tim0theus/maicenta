@@ -53,12 +53,12 @@ SPEC CHECKSUMS:
   desktop_webview_window: 07ec5b575166556b3b9c96c5b7c962b2c044b452
   file_selector_macos: 9e9e068e90ebee155097d00e89ae91edb2374db7
   flutter_web_auth_2: 7fe624ff12ddcb4c19e5dbcd56c9e9ea4899d967
-  FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
+  FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
   maicenta_bridge: 42f260a6e69cc2559436cad308ec06d378c23163
   quill_native_bridge_macos: 2b005cb56902bb740e0cd9620aa399dfac6b4882
   url_launcher_macos: f87a979182d112f911de6820aefddaf56ee9fbfd
   window_to_front: 2d7d31f268d0b13b7e63b26e31eb0a2e9612239e
 
-PODFILE CHECKSUM: 54d867c82ac51cbd61b565781b9fada492027009
+PODFILE CHECKSUM: 1e95c36afbfd1cb6423ceca4de7a8e1b256fb6ac
 
 COCOAPODS: 1.16.2
