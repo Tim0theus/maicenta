@@ -68,6 +68,38 @@ void main() {
     );
   });
 
+  test('accepts provider-normalized callbacks and rejects foreign ones', () {
+    final callback = Uri.parse('com.maicenta.app://oauth2redirect');
+    expect(
+      MailOAuthService.callbackLocationMatches(
+        Uri.parse('com.maicenta.app://oauth2redirect/?code=x&state=y'),
+        callback,
+      ),
+      isTrue,
+    );
+    expect(
+      MailOAuthService.callbackLocationMatches(
+        Uri.parse('COM.MAICENTA.APP://OAuth2Redirect?code=x'),
+        callback,
+      ),
+      isTrue,
+    );
+    expect(
+      MailOAuthService.callbackLocationMatches(
+        Uri.parse('com.maicenta.app://other?code=x'),
+        callback,
+      ),
+      isFalse,
+    );
+    expect(
+      MailOAuthService.callbackLocationMatches(
+        Uri.parse('https://oauth2redirect/?code=x'),
+        callback,
+      ),
+      isFalse,
+    );
+  });
+
   test('uses loopback only on Windows and Linux desktop', () {
     final redirect = Uri.parse(MailOAuthService.redirectUri);
     if (Platform.isWindows || Platform.isLinux) {
