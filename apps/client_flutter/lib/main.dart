@@ -12,6 +12,7 @@ import 'app_theme.dart';
 import 'features/compose/compose_window.dart';
 import 'features/mail/account_autodiscovery.dart';
 import 'features/mail/account_setup_detection.dart';
+import 'features/mail/folder_tree.dart';
 import 'features/mail/mail_data.dart';
 import 'features/mail/mailbox_labels.dart';
 import 'features/mail/message_window.dart';
@@ -4681,10 +4682,19 @@ class FolderPane extends StatelessWidget {
                       ),
                     ),
                   ),
-                  for (final folder in folders.where(
-                    (folder) => folder.accountId == groupId,
+                  for (final entry in buildFolderTree(
+                    folders
+                        .where((folder) => folder.accountId == groupId)
+                        .toList(growable: false),
                   ))
-                    _draggableFolderTile(context, folder: folder),
+                    _draggableFolderTile(
+                      context,
+                      folder: entry.folder,
+                      depth: entry.depth,
+                      tooltip: entry.folder.role == 'custom'
+                          ? entry.path
+                          : null,
+                    ),
                 ],
               ],
             ),
@@ -4770,6 +4780,8 @@ class FolderPane extends StatelessWidget {
     required MailFolder folder,
     String keyPrefix = 'folder',
     String? secondaryLabel,
+    int depth = 0,
+    String? tooltip,
   }) {
     final label = mailboxDisplayName(context, folder);
     final tile = DragTarget<DemoMessage>(
@@ -4794,6 +4806,8 @@ class FolderPane extends StatelessWidget {
           keyPrefix: keyPrefix,
           label: label,
           secondaryLabel: secondaryLabel,
+          tooltip: tooltip,
+          depth: depth,
           icon: folderIcon(folder.role),
           count: _folderBadgeCount(folder),
           selected: selectedFolder == folder.id,
@@ -4910,6 +4924,8 @@ class FolderTile extends StatelessWidget {
     required this.onTap,
     this.count,
     this.secondaryLabel,
+    this.tooltip,
+    this.depth = 0,
     this.keyPrefix = 'folder',
   });
 
@@ -4920,6 +4936,12 @@ class FolderTile extends StatelessWidget {
   final ValueChanged<String> onTap;
   final int? count;
   final String? secondaryLabel;
+
+  /// Full folder path for nested custom folders; defaults to the label.
+  final String? tooltip;
+
+  /// Nesting level; each level indents the row like a classic folder tree.
+  final int depth;
   final String keyPrefix;
 
   @override
@@ -4940,7 +4962,7 @@ class FolderTile extends StatelessWidget {
             ),
           ),
         ),
-        padding: const EdgeInsets.only(left: 27, right: 12),
+        padding: EdgeInsets.only(left: 27.0 + depth * 14, right: 12),
         child: Row(
           children: [
             Icon(
@@ -4952,8 +4974,8 @@ class FolderTile extends StatelessWidget {
             Expanded(
               child: Tooltip(
                 message: secondaryLabel == null
-                    ? label
-                    : '$label — $secondaryLabel',
+                    ? (tooltip ?? label)
+                    : '${tooltip ?? label} — $secondaryLabel',
                 child: Text.rich(
                   TextSpan(
                     text: label,
