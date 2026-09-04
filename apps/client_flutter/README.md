@@ -151,6 +151,10 @@ flutter run -d macos \
   --dart-define=MAICENTA_GOOGLE_OAUTH_CLIENT_ID=<public-client-id>
 ```
 
+These defines override the project's built-in public client IDs in
+`lib/features/mail/oauth_client_ids.dart`; they are only needed for forks or
+when no project registration is compiled in yet.
+
 The callback can be overridden with `MAICENTA_OAUTH_REDIRECT_URI`. Custom app
 schemes must also be registered in the corresponding Android manifest or Apple
 URL types; localhost loopback callbacks need the matching fixed port in the

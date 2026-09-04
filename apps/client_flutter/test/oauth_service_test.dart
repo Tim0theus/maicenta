@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:maicenta/features/mail/oauth_client_ids.dart';
 import 'package:maicenta/features/mail/oauth_service.dart';
 
 void main() {
@@ -49,6 +50,22 @@ void main() {
       MailOAuthProvider.microsoftGraph,
     );
     expect(MailOAuthProviderConfiguration.fromStorageName('unknown'), isNull);
+  });
+
+  test('falls back to the built-in project client ID without a define', () {
+    // Tests run without --dart-define, so the built-in registration applies.
+    expect(
+      MailOAuthProvider.microsoftGraph.configuredClientId,
+      builtInMicrosoftOAuthClientId,
+    );
+    expect(
+      MailOAuthProvider.microsoft365.configuredClientId,
+      builtInMicrosoftOAuthClientId,
+    );
+    expect(
+      MailOAuthProvider.google.configuredClientId,
+      builtInGoogleOAuthClientId,
+    );
   });
 
   test('uses loopback only on Windows and Linux desktop', () {

@@ -199,8 +199,26 @@ Authorization Code flow with PKCE, validates IMAP and SMTP via XOAUTH2, and
 stores access and refresh tokens only in the encrypted profile. For Microsoft
 365 the provider list offers an **IMAP/SMTP** and a **Graph API** variant; pick
 the Graph variant when the tenant has disabled IMAP or SMTP AUTH. A native app
-does not contain an OAuth client secret. Development builds require public
-client registrations and can receive their client IDs as follows:
+does not contain an OAuth client secret.
+
+Like Thunderbird or Outlook, MAICENTA identifies itself to the identity
+provider with a public client ID that is compiled into the app, so users never
+create their own app registration. The project's IDs live in
+`apps/client_flutter/lib/features/mail/oauth_client_ids.dart`. The Microsoft
+registration is a single multi-tenant Entra ID app ("Accounts in any
+organizational directory and personal Microsoft accounts") with public client
+flows enabled, the redirect URIs listed below, and the delegated permissions
+`Mail.ReadWrite`, `Mail.Send`, `offline_access`, `openid`, `profile`, `email`
+(Microsoft Graph) plus `IMAP.AccessAsUser.All` and `SMTP.Send` (Office 365
+Exchange Online). Whether a work or school user may consent to these
+permissions themselves is decided by their tenant's consent policy; many
+organizations require a one-time admin consent for any third-party mail client,
+MAICENTA included. Publisher verification of the registration removes the
+"unverified publisher" notice on the consent screen and is required by tenants
+that only allow verified publishers.
+
+Forks and development builds can override the built-in IDs with their own
+registrations:
 
 ```sh
 flutter run -d macos \

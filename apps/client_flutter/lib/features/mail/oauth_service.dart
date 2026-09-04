@@ -6,6 +6,8 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:http/http.dart' as http;
 
+import 'oauth_client_ids.dart';
+
 /// OAuth providers MAICENTA can sign in to.
 ///
 /// `microsoft365` and `microsoftGraph` share the same Microsoft identity
@@ -89,13 +91,25 @@ extension MailOAuthProviderConfiguration on MailOAuthProvider {
     MailOAuthProvider.google => 'MAICENTA_GOOGLE_OAUTH_CLIENT_ID',
   };
 
-  String get configuredClientId => switch (this) {
-    MailOAuthProvider.microsoft365 || MailOAuthProvider.microsoftGraph =>
-      const String.fromEnvironment('MAICENTA_MICROSOFT_OAUTH_CLIENT_ID'),
-    MailOAuthProvider.google => const String.fromEnvironment(
-      'MAICENTA_GOOGLE_OAUTH_CLIENT_ID',
-    ),
-  };
+  /// Client ID compiled into this build.
+  ///
+  /// A `--dart-define` override wins; otherwise the project's public
+  /// registration from `oauth_client_ids.dart` is used.
+  String get configuredClientId {
+    final override = switch (this) {
+      MailOAuthProvider.microsoft365 || MailOAuthProvider.microsoftGraph =>
+        const String.fromEnvironment('MAICENTA_MICROSOFT_OAUTH_CLIENT_ID'),
+      MailOAuthProvider.google => const String.fromEnvironment(
+        'MAICENTA_GOOGLE_OAUTH_CLIENT_ID',
+      ),
+    };
+    if (override.trim().isNotEmpty) return override.trim();
+    return switch (this) {
+      MailOAuthProvider.microsoft365 ||
+      MailOAuthProvider.microsoftGraph => builtInMicrosoftOAuthClientId,
+      MailOAuthProvider.google => builtInGoogleOAuthClientId,
+    };
+  }
 }
 
 class MailOAuthTokens {
@@ -143,8 +157,10 @@ class MailOAuthService {
     if (clientId.isEmpty) {
       final defineName = provider.clientIdDefineName;
       throw StateError(
-        'Für ${provider.displayName} ist noch keine OAuth-App-ID konfiguriert. '
-        'Starte den Build mit --dart-define=$defineName=<Client-ID>.',
+        'Dieser Build enthält noch keine OAuth-App-ID für '
+        '${provider.displayName}. Offizielle Builds bringen die '
+        'MAICENTA-Registrierung mit; für einen eigenen Build starte mit '
+        '--dart-define=$defineName=<Client-ID>.',
       );
     }
 
