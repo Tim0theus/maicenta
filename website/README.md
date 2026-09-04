@@ -9,6 +9,7 @@ Static marketing and documentation site for MAICENTA, built with
 src/
   config.ts              Site URLs, contact address, launch state of MAICENTA Sync
   i18n/en.ts, de.ts      All UI copy, typed so both languages stay in sync
+  data/supporters.ts     Patreon supporters shown on /support (add with consent)
   layouts/Base.astro     Head, hreflang alternates, header and footer
   pages/index.astro      Root: picks the browser language, falls back to /en/
   pages/[lang]/          One template per page, rendered for every locale

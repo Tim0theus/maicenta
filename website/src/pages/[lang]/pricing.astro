@@ -66,6 +66,11 @@ const fmt = new Intl.NumberFormat(lang === 'de' ? 'de-DE' : 'en-IE', {
           )}
         </article>
       </div>
+
+      <p class="notice patreon">
+        {p.patreonNote}
+        <a href={site.patreon} rel="noopener" target="_blank">{p.patreonLink} →</a>
+      </p>
     </div>
   </section>
 
@@ -130,6 +135,13 @@ const fmt = new Intl.NumberFormat(lang === 'de' ? 'de-DE' : 'en-IE', {
   }
   .portal {
     font-size: 0.9rem;
+  }
+  .patreon {
+    margin-top: 1.5rem;
+  }
+  .patreon a {
+    margin-left: 0.4rem;
+    font-weight: 600;
   }
   .faq {
     display: grid;

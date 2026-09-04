@@ -10,6 +10,7 @@ export const en = {
     pricing: 'Pricing',
     download: 'Download',
     docs: 'Docs',
+    support: 'Support',
     github: 'GitHub',
     menu: 'Menu',
     language: 'Language',
@@ -26,6 +27,8 @@ export const en = {
     license: 'License',
     issues: 'Report an issue',
     releases: 'Releases',
+    patreon: 'Support on Patreon',
+    supporters: 'Supporters',
     copyright: 'MAICENTA is free and open source. The MAICENTA name and logo are not covered by the software license.',
   },
   home: {
@@ -98,6 +101,41 @@ export const en = {
     openSourceText:
       'Roadmap, architecture and security policy are public. Contributions, bug reports and feature ideas are welcome on GitHub.',
     openSourceCta: 'Read the roadmap',
+    supportTitle: 'Free for everyone. Funded by a few.',
+    supportText:
+      'MAICENTA has no ads, no telemetry and no paid features in the app. What it does have are real costs: developer accounts with Microsoft, Google and Apple, code signing certificates and, soon, sync servers. Patreon members cover them.',
+    supportCta: 'Support on Patreon',
+    supportSecondary: 'See who already does',
+  },
+  support: {
+    title: 'Support MAICENTA',
+    description:
+      'Help fund an independent, open-source workspace. Patreon memberships pay for developer accounts, code signing and sync servers.',
+    headline: 'Support MAICENTA',
+    intro:
+      'The app is free and stays free. Your membership pays for what open source alone cannot: the developer accounts that keep the official sign-in with Microsoft, Google and Apple working, code signing so installers do not trigger warnings, and later the servers for optional encrypted sync.',
+    ctaPatreon: 'Become a member on Patreon',
+    tiersTitle: 'Memberships',
+    tiersIntro: 'All memberships are billed by Patreon and can be cancelled there at any time.',
+    tiers: [
+      { name: 'Supporter', price: '1 € / month', text: 'Your name in the supporters list below, if you want, and access to members-only posts.' },
+      { name: 'Insider', price: '5 € / month', text: 'Development updates, previews and polls on priorities. MAICENTA Sync included when it launches.' },
+      { name: 'Backer', price: '12 € / month', text: 'Everything in Insider, plus your name and link on this page, a direct line for feedback and early test builds.' },
+      { name: 'Project Sponsor', price: '30 € / month', text: 'Everything in Backer, plus one reviewed feature proposal per quarter and your logo on this page. Limited to 15.' },
+    ],
+    otherTitle: 'Other ways to help',
+    other: [
+      { title: 'Test the alpha', text: 'Run MAICENTA with a non-critical account and report what breaks. Every good bug report saves hours.', cta: 'Open an issue', href: 'issues' },
+      { title: 'Improve the docs', text: 'Fix a typo, clarify a step or translate a page. The docs live in the repository next to the code.', cta: 'Read contributing', href: 'contributing' },
+      { title: 'Spread the word', text: 'Tell someone who is tired of Outlook. A star on GitHub helps other people find the project.', cta: 'Star on GitHub', href: 'github' },
+    ],
+    listTitle: 'Supporters',
+    listIntro: 'Thank you to everyone who keeps MAICENTA independent. Listed with permission.',
+    sponsors: 'Project Sponsors',
+    backers: 'Backers',
+    supporters: 'Supporters',
+    empty: 'The list is still empty. The first names will appear here soon.',
+    emptyCta: 'Be the first',
   },
   pricing: {
     title: 'Pricing',
@@ -135,6 +173,8 @@ export const en = {
     syncCta: 'Subscribe',
     syncCtaPlanned: 'Follow the launch on GitHub',
     syncPortal: 'Manage your subscription',
+    patreonNote: 'Already a Patreon member at Insider or above? MAICENTA Sync will be included in your membership when it launches.',
+    patreonLink: 'Support on Patreon',
     faqTitle: 'Questions and answers',
     faq: [
       {

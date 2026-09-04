@@ -26,11 +26,13 @@ const year = new Date().getFullYear();
         <li><a href={localePath(lang, 'download')}>{ui.nav.download}</a></li>
         <li><a href={localePath(lang, 'pricing')}>{ui.nav.pricing}</a></li>
         <li><a href={localePath(lang, 'docs')}>{ui.nav.docs}</a></li>
+        <li><a href={localePath(lang, 'support')}>{ui.footer.supporters}</a></li>
       </ul>
     </div>
     <div>
       <h4>{ui.footer.project}</h4>
       <ul>
+        <li><a href={site.patreon} rel="noopener" target="_blank">{ui.footer.patreon}</a></li>
         <li><a href={site.github} rel="noopener" target="_blank">GitHub</a></li>
         <li><a href={site.releases} rel="noopener" target="_blank">{ui.footer.releases}</a></li>
         <li><a href={site.issues} rel="noopener" target="_blank">{ui.footer.issues}</a></li>
