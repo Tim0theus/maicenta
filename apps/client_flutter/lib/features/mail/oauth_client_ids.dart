@@ -23,7 +23,8 @@
 library;
 
 /// Application (client) ID of the MAICENTA registration in Microsoft Entra ID.
-const String builtInMicrosoftOAuthClientId = '';
+const String builtInMicrosoftOAuthClientId =
+    'f54ff26f-b4e1-4e32-80a2-e196c8952496';
 
 /// OAuth client ID of the MAICENTA project in Google Cloud.
 const String builtInGoogleOAuthClientId = '';
