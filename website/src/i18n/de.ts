@@ -12,6 +12,7 @@ export const de: Translations = {
     pricing: 'Preise',
     download: 'Download',
     docs: 'Doku',
+    support: 'Unterstützen',
     github: 'GitHub',
     menu: 'Menü',
     language: 'Sprache',
@@ -28,6 +29,8 @@ export const de: Translations = {
     license: 'Lizenz',
     issues: 'Fehler melden',
     releases: 'Releases',
+    patreon: 'Auf Patreon unterstützen',
+    supporters: 'Unterstützer',
     copyright:
       'MAICENTA ist frei und Open Source. Name und Logo von MAICENTA sind nicht Teil der Softwarelizenz.',
   },
@@ -101,6 +104,41 @@ export const de: Translations = {
     openSourceText:
       'Roadmap, Architektur und Sicherheitsrichtlinie sind öffentlich. Beiträge, Fehlerberichte und Ideen sind auf GitHub willkommen.',
     openSourceCta: 'Roadmap lesen',
+    supportTitle: 'Kostenlos für alle. Finanziert von wenigen.',
+    supportText:
+      'MAICENTA hat keine Werbung, keine Telemetrie und keine Bezahlfunktionen in der App. Was es hat, sind echte Kosten: Entwicklerkonten bei Microsoft, Google und Apple, Code-Signing-Zertifikate und bald Sync-Server. Patreon-Mitglieder tragen sie.',
+    supportCta: 'Auf Patreon unterstützen',
+    supportSecondary: 'Wer schon dabei ist',
+  },
+  support: {
+    title: 'MAICENTA unterstützen',
+    description:
+      'Hilf, einen unabhängigen Open-Source-Workspace zu finanzieren. Patreon-Mitgliedschaften zahlen Entwicklerkonten, Code-Signing und Sync-Server.',
+    headline: 'MAICENTA unterstützen',
+    intro:
+      'Die App ist kostenlos und bleibt es. Deine Mitgliedschaft zahlt, was Open Source allein nicht kann: die Entwicklerkonten, die die offizielle Anmeldung bei Microsoft, Google und Apple am Laufen halten, Code-Signing, damit Installer keine Warnungen auslösen, und später die Server für den optionalen verschlüsselten Sync.',
+    ctaPatreon: 'Mitglied werden auf Patreon',
+    tiersTitle: 'Mitgliedschaften',
+    tiersIntro: 'Alle Mitgliedschaften werden über Patreon abgerechnet und sind dort jederzeit kündbar.',
+    tiers: [
+      { name: 'Supporter', price: '1 € / Monat', text: 'Auf Wunsch dein Name in der Liste unten und Zugang zu Beiträgen nur für Mitglieder.' },
+      { name: 'Insider', price: '5 € / Monat', text: 'Entwicklungsberichte, Vorschauen und Umfragen zu Prioritäten. MAICENTA Sync inklusive, sobald es startet.' },
+      { name: 'Backer', price: '12 € / Monat', text: 'Alles aus Insider, dazu Name und Link auf dieser Seite, direkter Kontakt für Feedback und frühe Testbuilds.' },
+      { name: 'Project Sponsor', price: '30 € / Monat', text: 'Alles aus Backer, dazu ein geprüfter Feature-Vorschlag pro Quartal und dein Logo auf dieser Seite. Begrenzt auf 15.' },
+    ],
+    otherTitle: 'Andere Wege zu helfen',
+    other: [
+      { title: 'Alpha testen', text: 'Nutze MAICENTA mit einem unkritischen Konto und melde, was nicht funktioniert. Jeder gute Fehlerbericht spart Stunden.', cta: 'Issue eröffnen', href: 'issues' },
+      { title: 'Doku verbessern', text: 'Einen Tippfehler korrigieren, einen Schritt klarer erklären oder eine Seite übersetzen. Die Doku liegt im Repository neben dem Code.', cta: 'Contributing lesen', href: 'contributing' },
+      { title: 'Weitersagen', text: 'Erzähl es jemandem, der Outlook leid ist. Ein Stern auf GitHub hilft anderen, das Projekt zu finden.', cta: 'Auf GitHub sternen', href: 'github' },
+    ],
+    listTitle: 'Unterstützer',
+    listIntro: 'Danke an alle, die MAICENTA unabhängig halten. Genannt mit Einverständnis.',
+    sponsors: 'Project Sponsors',
+    backers: 'Backer',
+    supporters: 'Supporter',
+    empty: 'Die Liste ist noch leer. Die ersten Namen erscheinen hier bald.',
+    emptyCta: 'Sei die oder der Erste',
   },
   pricing: {
     title: 'Preise',
@@ -138,6 +176,8 @@ export const de: Translations = {
     syncCta: 'Abonnieren',
     syncCtaPlanned: 'Start auf GitHub verfolgen',
     syncPortal: 'Abo verwalten',
+    patreonNote: 'Schon Patreon-Mitglied ab Insider? MAICENTA Sync ist in deiner Mitgliedschaft enthalten, sobald es startet.',
+    patreonLink: 'Auf Patreon unterstützen',
     faqTitle: 'Fragen und Antworten',
     faq: [
       {

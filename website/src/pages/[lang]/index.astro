@@ -114,6 +114,20 @@ const principleIcons = [
       </article>
     </div>
   </section>
+
+  <section class="section support">
+    <div class="container support-inner">
+      <div>
+        <span class="eyebrow">{ui.nav.support}</span>
+        <h2>{h.supportTitle}</h2>
+        <p class="muted">{h.supportText}</p>
+      </div>
+      <div class="support-actions">
+        <a class="btn btn--primary" href={site.patreon} rel="noopener" target="_blank">{h.supportCta}</a>
+        <a class="btn btn--ghost" href={localePath(lang, 'support')}>{h.supportSecondary}</a>
+      </div>
+    </div>
+  </section>
 </Base>
 
 <style>
@@ -175,6 +189,33 @@ const principleIcons = [
   }
   .split .card h2 {
     font-size: 1.6rem;
+  }
+  .support-inner {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+    gap: 2rem;
+    align-items: center;
+  }
+  .support-inner h2 {
+    font-size: clamp(1.5rem, 3vw, 2rem);
+  }
+  .support-inner p {
+    max-width: 40rem;
+    margin: 0;
+  }
+  .support-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+    justify-content: flex-end;
+  }
+  @media (max-width: 800px) {
+    .support-inner {
+      grid-template-columns: 1fr;
+    }
+    .support-actions {
+      justify-content: flex-start;
+    }
   }
   @media (max-width: 800px) {
     .hero-grid {

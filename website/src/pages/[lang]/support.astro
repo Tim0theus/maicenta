@@ -1,0 +1,210 @@
+---
+import Base from '../../layouts/Base.astro';
+import { site, type Locale } from '../../config';
+import { getStaticLocalePaths, t } from '../../i18n';
+import { byTier } from '../../data/supporters';
+
+export const getStaticPaths = getStaticLocalePaths;
+
+const lang = Astro.params.lang as Locale;
+const ui = t(lang);
+const s = ui.support;
+
+const sponsors = byTier('sponsor');
+const backers = byTier('backer');
+const plain = byTier('supporter');
+const hasAny = sponsors.length + backers.length + plain.length > 0;
+
+const otherHref: Record<string, string> = {
+  issues: site.issues,
+  contributing: `${site.github}/blob/main/CONTRIBUTING.md`,
+  github: site.github,
+};
+---
+
+<Base lang={lang} title={`${s.title} – MAICENTA`} description={s.description} path="support">
+  <section class="section">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">{ui.nav.support}</span>
+        <h1>{s.headline}</h1>
+        <p>{s.intro}</p>
+        <a class="btn btn--primary" href={site.patreon} rel="noopener" target="_blank">{s.ctaPatreon}</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <div class="section-head">
+        <h2>{s.tiersTitle}</h2>
+        <p>{s.tiersIntro}</p>
+      </div>
+      <div class="grid grid--4">
+        {s.tiers.map((tier, i) => (
+          <a class:list={['card', 'tier', { 'card--accent': i === 1 }]} href={site.patreon} rel="noopener" target="_blank">
+            <h3>{tier.name}</h3>
+            <p class="price">{tier.price}</p>
+            <p class="muted">{tier.text}</p>
+          </a>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="supporters">
+    <div class="container">
+      <div class="section-head">
+        <h2>{s.listTitle}</h2>
+        <p>{s.listIntro}</p>
+      </div>
+
+      {hasAny ? (
+        <div class="lists">
+          {sponsors.length > 0 && (
+            <div>
+              <h3>{s.sponsors}</h3>
+              <ul class="sponsors">
+                {sponsors.map((x) => (
+                  <li>
+                    <a href={x.url} rel="noopener sponsored" target="_blank" class="sponsor">
+                      {x.logo ? <img src={x.logo} alt={x.name} loading="lazy" /> : <span>{x.name}</span>}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {backers.length > 0 && (
+            <div>
+              <h3>{s.backers}</h3>
+              <ul class="names">
+                {backers.map((x) => (
+                  <li>{x.url ? <a href={x.url} rel="noopener" target="_blank">{x.name}</a> : x.name}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {plain.length > 0 && (
+            <div>
+              <h3>{s.supporters}</h3>
+              <ul class="names">
+                {plain.map((x) => <li>{x.name}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div class="card empty">
+          <p class="muted">{s.empty}</p>
+          <a class="btn btn--ghost" href={site.patreon} rel="noopener" target="_blank">{s.emptyCta}</a>
+        </div>
+      )}
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <div class="section-head">
+        <h2>{s.otherTitle}</h2>
+      </div>
+      <div class="grid grid--3">
+        {s.other.map((o) => (
+          <article class="card other">
+            <h3>{o.title}</h3>
+            <p class="muted">{o.text}</p>
+            <a href={otherHref[o.href]} rel="noopener" target="_blank">{o.cta} →</a>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .section-head .btn {
+    margin-top: 0.5rem;
+  }
+  .tier {
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    transition: border-color 120ms ease, transform 120ms ease;
+  }
+  .tier:hover {
+    text-decoration: none;
+    border-color: var(--teal);
+    transform: translateY(-2px);
+  }
+  .tier h3 {
+    margin-bottom: 0.2rem;
+  }
+  .price {
+    color: var(--teal-soft);
+    font-weight: 600;
+    margin-bottom: 0.8rem;
+  }
+  .lists {
+    display: grid;
+    gap: 2.5rem;
+  }
+  .lists h3 {
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 1rem;
+  }
+  .sponsors {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+  .sponsor {
+    display: grid;
+    place-items: center;
+    min-width: 180px;
+    min-height: 90px;
+    padding: 1rem 1.5rem;
+    background: #fff;
+    border-radius: var(--radius-sm);
+    color: #071f4f;
+    font-weight: 700;
+  }
+  .sponsor img {
+    max-height: 56px;
+    width: auto;
+  }
+  .names {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem 1.4rem;
+    color: var(--text-muted);
+  }
+  .empty {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+  .empty p {
+    margin: 0;
+  }
+  .other {
+    display: flex;
+    flex-direction: column;
+  }
+  .other p {
+    flex: 1;
+  }
+  .other a {
+    font-weight: 600;
+  }
+</style>
