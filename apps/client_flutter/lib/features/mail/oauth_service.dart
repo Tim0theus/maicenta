@@ -206,15 +206,16 @@ class MailOAuthService {
     );
     final returned = Uri.parse(result);
     // Entra ID requires custom schemes in the form `scheme://host`, so the
-    // callback carries its path segment as the URI host. Compare scheme,
-    // host, and path so a provider response for another registration is
-    // rejected even when it shares the scheme.
-    if (returned.scheme != callback.scheme ||
-        returned.host != callback.host ||
-        returned.path != callback.path ||
+    // callback carries its path segment as the URI host. Providers may
+    // normalize the redirect (for example by appending a trailing slash or
+    // changing letter case), so compare the canonical location rather than
+    // the raw components. Query and fragment are deliberately ignored here;
+    // they carry the code and state that are validated below.
+    if (!callbackLocationMatches(returned, callback) ||
         (loopbackCallback && returned.port != callback.port)) {
       throw StateError(
-        'Die OAuth-Antwort verwendete einen ungültigen Rücksprung.',
+        'Die OAuth-Antwort verwendete einen ungültigen Rücksprung '
+        '(${_describeLocation(returned)} statt ${_describeLocation(callback)}).',
       );
     }
     if (returned.queryParameters['state'] != state) {
@@ -271,6 +272,22 @@ class MailOAuthService {
       scopes: scope,
     );
   }
+
+  /// Whether [returned] points to the same scheme, host, and path as
+  /// [callback], ignoring letter case and a trailing slash.
+  static bool callbackLocationMatches(Uri returned, Uri callback) {
+    String canonical(Uri uri) {
+      final path = uri.path.endsWith('/')
+          ? uri.path.substring(0, uri.path.length - 1)
+          : uri.path;
+      return '${uri.scheme.toLowerCase()}://${uri.host.toLowerCase()}$path';
+    }
+
+    return canonical(returned) == canonical(callback);
+  }
+
+  static String _describeLocation(Uri uri) =>
+      uri.replace(query: null, fragment: null).toString();
 
   static Map<String, dynamic> _jsonObject(String value) {
     try {
