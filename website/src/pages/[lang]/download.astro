@@ -1,0 +1,66 @@
+---
+import Base from '../../layouts/Base.astro';
+import { site, type Locale } from '../../config';
+import { getStaticLocalePaths, t } from '../../i18n';
+
+export const getStaticPaths = getStaticLocalePaths;
+
+const lang = Astro.params.lang as Locale;
+const ui = t(lang);
+const d = ui.download;
+---
+
+<Base lang={lang} title={`${d.title} – MAICENTA`} description={d.description} path="download">
+  <section class="section">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">{d.title}</span>
+        <h1>{d.headline}</h1>
+        <p>{d.intro}</p>
+      </div>
+
+      <div class="grid grid--3">
+        {d.platforms.map((p) => (
+          <article class="card platform">
+            <h2>{p.name}</h2>
+            <p class="muted">{p.text}</p>
+            <a class="btn btn--primary" href={site.releases} rel="noopener" target="_blank">{d.releaseCta}</a>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container grid grid--2">
+      <article class="card">
+        <h2>{d.sourceTitle}</h2>
+        <p class="muted">{d.sourceText}</p>
+        <a class="btn btn--ghost" href={site.github} rel="noopener" target="_blank">{d.sourceCta}</a>
+      </article>
+      <article class="card">
+        <h2>{d.alphaTitle}</h2>
+        <ul class="checklist">
+          {d.alphaPoints.map((pt) => <li>{pt}</li>)}
+        </ul>
+      </article>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .platform {
+    display: flex;
+    flex-direction: column;
+  }
+  .platform h2 {
+    font-size: 1.4rem;
+    margin-bottom: 0.3rem;
+  }
+  .platform p {
+    flex: 1;
+  }
+  .card h2 {
+    font-size: 1.4rem;
+  }
+</style>

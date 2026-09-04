@@ -1,0 +1,75 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../../layouts/Base.astro';
+import { site, type Locale } from '../../../config';
+import { getStaticLocalePaths, localePath, t } from '../../../i18n';
+
+export const getStaticPaths = getStaticLocalePaths;
+
+const lang = Astro.params.lang as Locale;
+const ui = t(lang);
+const entries = (await getCollection('docs', (e) => e.id.startsWith(`${lang}/`))).sort(
+  (a, b) => a.data.order - b.data.order,
+);
+---
+
+<Base lang={lang} title={`${ui.docs.title} – MAICENTA`} description={ui.docs.description} path="docs">
+  <section class="section">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">{ui.docs.title}</span>
+        <h1>{ui.docs.headline}</h1>
+        <p>{ui.docs.intro}</p>
+      </div>
+      <div class="grid grid--2">
+        {entries.map((e) => {
+          const slug = e.id.split('/').slice(1).join('/');
+          return (
+            <a class="card doc-card" href={localePath(lang, `docs/${slug}`)}>
+              <h2>{e.data.title}</h2>
+              <p class="muted">{e.data.description}</p>
+              <span class="more">{ui.docs.readMore} →</span>
+            </a>
+          );
+        })}
+      </div>
+      <p class="hint muted">
+        {ui.docs.editHint}
+        <a href={`${site.github}/tree/main/website/src/content/docs`} rel="noopener" target="_blank">GitHub</a>
+      </p>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .doc-card {
+    display: flex;
+    flex-direction: column;
+    color: var(--text);
+    transition: border-color 120ms ease, transform 120ms ease;
+  }
+  .doc-card:hover {
+    text-decoration: none;
+    border-color: var(--teal);
+    transform: translateY(-2px);
+  }
+  .doc-card h2 {
+    font-size: 1.3rem;
+    margin-bottom: 0.4rem;
+  }
+  .doc-card p {
+    flex: 1;
+  }
+  .more {
+    color: var(--teal-soft);
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  .hint {
+    margin-top: 2.5rem;
+    font-size: 0.9rem;
+  }
+  .hint a {
+    margin-left: 0.3rem;
+  }
+</style>

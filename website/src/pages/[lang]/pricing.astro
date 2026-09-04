@@ -1,0 +1,169 @@
+---
+import Base from '../../layouts/Base.astro';
+import { site, sync, type Locale } from '../../config';
+import { getStaticLocalePaths, localePath, t } from '../../i18n';
+
+export const getStaticPaths = getStaticLocalePaths;
+
+const lang = Astro.params.lang as Locale;
+const ui = t(lang);
+const p = ui.pricing;
+
+const fmt = new Intl.NumberFormat(lang === 'de' ? 'de-DE' : 'en-IE', {
+  style: 'currency',
+  currency: 'EUR',
+  minimumFractionDigits: 2,
+});
+---
+
+<Base lang={lang} title={`${p.title} – MAICENTA`} description={p.description} path="pricing">
+  <section class="section">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">{p.title}</span>
+        <h1>{p.headline}</h1>
+        <p>{p.intro}</p>
+      </div>
+
+      <div class="grid grid--2 plans">
+        <article class="card plan">
+          <h2>{p.freeName}</h2>
+          <p class="price"><strong>{p.freePrice}</strong> <span class="muted">{p.freePeriod}</span></p>
+          <ul class="checklist">
+            {p.freeFeatures.map((f) => <li>{f}</li>)}
+          </ul>
+          <a class="btn btn--ghost" href={localePath(lang, 'download')}>{p.freeCta}</a>
+        </article>
+
+        <article class="card card--accent plan">
+          <div class="plan-head">
+            <h2>{p.syncName}</h2>
+            {!sync.available && <span class="badge badge--violet">{p.syncBadgePlanned}</span>}
+          </div>
+          <p class="muted tagline">{p.syncTagline}</p>
+          {sync.priceMonthlyEur !== null ? (
+            <p class="price">
+              <strong>{fmt.format(sync.priceMonthlyEur)}</strong> <span class="muted">{p.perMonth}</span>
+              {sync.priceYearlyEur !== null && (
+                <span class="yearly muted"> · {fmt.format(sync.priceYearlyEur)} {p.perYear}</span>
+              )}
+            </p>
+          ) : (
+            <p class="price"><strong class="tba">{p.syncPriceTba}</strong></p>
+          )}
+          <ul class="checklist">
+            {p.syncFeatures.map((f) => <li>{f}</li>)}
+          </ul>
+          {sync.available && sync.checkoutUrl ? (
+            <div class="plan-actions">
+              <a class="btn btn--primary" href={sync.checkoutUrl}>{p.syncCta}</a>
+              {sync.customerPortalUrl && (
+                <a class="portal" href={sync.customerPortalUrl}>{p.syncPortal}</a>
+              )}
+            </div>
+          ) : (
+            <a class="btn btn--primary" href={site.github} rel="noopener" target="_blank">{p.syncCtaPlanned}</a>
+          )}
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container narrow">
+      <h2>{p.faqTitle}</h2>
+      <div class="faq">
+        {p.faq.map((item) => (
+          <details>
+            <summary>{item.q}</summary>
+            <p class="muted">{item.a}</p>
+          </details>
+        ))}
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .plans {
+    align-items: stretch;
+  }
+  .plan {
+    display: flex;
+    flex-direction: column;
+    padding: 2rem;
+  }
+  .plan h2 {
+    font-size: 1.5rem;
+    margin-bottom: 0.4rem;
+  }
+  .plan-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+  .tagline {
+    margin-bottom: 0.8rem;
+  }
+  .price {
+    font-size: 1.1rem;
+    margin-bottom: 1.4rem;
+  }
+  .price strong {
+    font-size: 2.2rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+  .price strong.tba {
+    font-size: 1.15rem;
+    color: var(--violet-soft);
+  }
+  .checklist {
+    flex: 1;
+  }
+  .plan-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    align-items: flex-start;
+  }
+  .portal {
+    font-size: 0.9rem;
+  }
+  .faq {
+    display: grid;
+    gap: 0.6rem;
+    margin-top: 1.5rem;
+  }
+  details {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    padding: 0.9rem 1.1rem;
+  }
+  summary {
+    cursor: pointer;
+    font-weight: 600;
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary::after {
+    content: '+';
+    color: var(--teal-soft);
+    font-size: 1.3rem;
+    line-height: 1;
+  }
+  details[open] summary::after {
+    content: '−';
+  }
+  details p {
+    margin: 0.8rem 0 0;
+  }
+</style>

@@ -1,0 +1,190 @@
+---
+import Base from '../../layouts/Base.astro';
+import { site, type Locale } from '../../config';
+import { getStaticLocalePaths, localePath, t } from '../../i18n';
+
+export const getStaticPaths = getStaticLocalePaths;
+
+const lang = Astro.params.lang as Locale;
+const ui = t(lang);
+const h = ui.home;
+
+const principleIcons = [
+  'M12 2 3 7v6c0 5 4 8 9 9 5-1 9-4 9-9V7l-9-5Z',
+  'M4 6h16v10H4zM2 20h20',
+  'M12 3a4 4 0 0 1 4 4v3H8V7a4 4 0 0 1 4-4Zm-6 7h12v11H6z',
+  'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 9a7 7 0 0 1 14 0',
+  'M4 7h16M4 12h16M4 17h10',
+  'M12 3v3M12 18v3M3 12h3M18 12h3M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z',
+];
+---
+
+<Base lang={lang} title={h.title} description={h.description} path="">
+  <section class="hero">
+    <div class="container hero-grid">
+      <div>
+        <span class="badge badge--accent">{h.badge}</span>
+        <h1>{h.headline}</h1>
+        <p class="lead">{h.subline}</p>
+        <div class="actions">
+          <a class="btn btn--primary" href={localePath(lang, 'download')}>{h.ctaDownload}</a>
+          <a class="btn btn--ghost" href={site.github} rel="noopener" target="_blank">{h.ctaGithub}</a>
+        </div>
+        <p class="alpha muted">{h.alphaNote}</p>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <img src="/branding/maicenta-symbol.svg" alt="" width="360" height="317" loading="eager" />
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="features">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">{ui.nav.features}</span>
+        <h2>{h.principlesTitle}</h2>
+        <p>{h.principlesIntro}</p>
+      </div>
+      <div class="grid grid--3">
+        {h.principles.map((p, i) => (
+          <article class="card">
+            <div class="card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d={principleIcons[i % principleIcons.length]} />
+              </svg>
+            </div>
+            <h3>{p.title}</h3>
+            <p class="muted">{p.text}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="modules">
+    <div class="container">
+      <div class="section-head">
+        <h2>{h.modulesTitle}</h2>
+        <p>{h.modulesIntro}</p>
+      </div>
+      <div class="grid grid--4">
+        {h.modules.map((m) => (
+          <article class="card module">
+            <div class="module-head">
+              <h3>{m.name}</h3>
+              <span class:list={['badge', { 'badge--accent': m.phase === h.modules[0].phase }]}>{m.phase}</span>
+            </div>
+            <p class="muted">{m.text}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="providers">
+    <div class="container">
+      <div class="section-head">
+        <h2>{h.providersTitle}</h2>
+        <p>{h.providersIntro}</p>
+      </div>
+      <div class="grid grid--3">
+        {h.providers.map((p) => (
+          <article class="card">
+            <h3>{p.name}</h3>
+            <p class="muted">{p.text}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container grid grid--2 split">
+      <article class="card card--accent">
+        <span class="eyebrow">MAICENTA Sync</span>
+        <h2>{h.syncTitle}</h2>
+        <p class="muted">{h.syncText}</p>
+        <a class="btn btn--primary" href={localePath(lang, 'pricing')}>{h.syncCta}</a>
+      </article>
+      <article class="card">
+        <span class="eyebrow">Open Source</span>
+        <h2>{h.openSourceTitle}</h2>
+        <p class="muted">{h.openSourceText}</p>
+        <a class="btn btn--ghost" href={`${site.github}/blob/main/ROADMAP.md`} rel="noopener" target="_blank">{h.openSourceCta}</a>
+      </article>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .hero {
+    padding-block: clamp(3rem, 9vw, 7rem) clamp(2rem, 6vw, 5rem);
+  }
+  .hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    align-items: center;
+    gap: clamp(2rem, 5vw, 4rem);
+  }
+  .hero h1 {
+    margin-top: 1.2rem;
+  }
+  .lead {
+    font-size: clamp(1.05rem, 1.8vw, 1.25rem);
+    color: var(--text-muted);
+    max-width: 38rem;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+    margin: 1.8rem 0 1.2rem;
+  }
+  .alpha {
+    font-size: 0.9rem;
+    max-width: 36rem;
+  }
+  .hero-art {
+    display: grid;
+    place-items: center;
+    position: relative;
+  }
+  .hero-art::before {
+    content: '';
+    position: absolute;
+    inset: 10%;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(17, 178, 171, 0.35), rgba(88, 88, 213, 0.15) 55%, transparent 75%);
+    filter: blur(20px);
+  }
+  .hero-art img {
+    position: relative;
+    width: min(100%, 360px);
+    height: auto;
+    filter: drop-shadow(0 30px 40px rgba(0, 0, 0, 0.45));
+  }
+  .module-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+  }
+  .module-head h3 {
+    margin: 0;
+  }
+  .split .card h2 {
+    font-size: 1.6rem;
+  }
+  @media (max-width: 800px) {
+    .hero-grid {
+      grid-template-columns: 1fr;
+    }
+    .hero-art {
+      order: -1;
+    }
+    .hero-art img {
+      width: 180px;
+    }
+  }
+</style>

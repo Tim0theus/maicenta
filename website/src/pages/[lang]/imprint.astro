@@ -1,0 +1,25 @@
+---
+import { getEntry, render } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import type { Locale } from '../../config';
+import { getStaticLocalePaths, t } from '../../i18n';
+
+export const getStaticPaths = getStaticLocalePaths;
+
+const lang = Astro.params.lang as Locale;
+const ui = t(lang);
+const entry = await getEntry('legal', `${lang}/imprint`);
+if (!entry) throw new Error(`Missing legal/${lang}/imprint.md`);
+const { Content } = await render(entry);
+---
+
+<Base lang={lang} title={`${entry.data.title} – MAICENTA`} description={entry.data.description} path="imprint">
+  <section class="section">
+    <div class="container">
+      <article class="prose">
+        <h1>{ui.legal.imprintTitle}</h1>
+        <Content />
+      </article>
+    </div>
+  </section>
+</Base>

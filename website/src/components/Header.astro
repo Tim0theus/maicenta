@@ -1,0 +1,170 @@
+---
+import { site, locales, type Locale } from '../config';
+import { localeNames, localePath, stripLocale, t } from '../i18n';
+
+interface Props {
+  lang: Locale;
+}
+
+const { lang } = Astro.props;
+const ui = t(lang);
+const rel = stripLocale(Astro.url.pathname);
+const current = (path: string) => (rel === path ? 'page' : undefined);
+
+const links = [
+  { href: localePath(lang, 'pricing'), label: ui.nav.pricing, path: 'pricing' },
+  { href: localePath(lang, 'download'), label: ui.nav.download, path: 'download' },
+  { href: localePath(lang, 'docs'), label: ui.nav.docs, path: 'docs' },
+];
+---
+
+<header class="site-header">
+  <div class="container bar">
+    <a class="brand" href={localePath(lang)} aria-label="MAICENTA">
+      <img src="/branding/maicenta-symbol.svg" alt="" width="34" height="30" />
+      <span>MAICENTA</span>
+    </a>
+
+    <input type="checkbox" id="nav-toggle" class="nav-toggle visually-hidden" />
+    <label for="nav-toggle" class="nav-burger" aria-label={ui.nav.menu}>
+      <span></span><span></span><span></span>
+    </label>
+
+    <nav class="nav" aria-label="Main">
+      <ul>
+        {links.map((l) => (
+          <li><a href={l.href} aria-current={current(l.path)}>{l.label}</a></li>
+        ))}
+        <li>
+          <a href={site.github} rel="noopener" target="_blank">
+            {ui.nav.github}<span class="visually-hidden"> ({ui.common.external})</span>
+          </a>
+        </li>
+      </ul>
+      <div class="lang" aria-label={ui.nav.language}>
+        {locales.map((l) => (
+          <a
+            href={localePath(l, rel)}
+            hreflang={l}
+            lang={l}
+            aria-current={l === lang ? 'true' : undefined}
+            class:list={{ active: l === lang }}
+          >
+            {l.toUpperCase()}<span class="visually-hidden"> – {localeNames[l]}</span>
+          </a>
+        ))}
+      </div>
+    </nav>
+  </div>
+</header>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(3, 11, 31, 0.75);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  .bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+    min-height: 4rem;
+    flex-wrap: wrap;
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--text);
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    font-size: 1.05rem;
+    text-decoration: none;
+  }
+  .brand img {
+    width: 34px;
+    height: auto;
+  }
+  .nav {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .nav ul {
+    list-style: none;
+    display: flex;
+    gap: 1.4rem;
+    margin: 0;
+    padding: 0;
+  }
+  .nav ul a {
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 0.95rem;
+  }
+  .nav ul a:hover,
+  .nav ul a[aria-current='page'] {
+    color: var(--text);
+    text-decoration: none;
+  }
+  .nav ul a[aria-current='page'] {
+    color: var(--teal-soft);
+  }
+  .lang {
+    display: inline-flex;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    overflow: hidden;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+  .lang a {
+    padding: 0.3rem 0.7rem;
+    color: var(--text-muted);
+  }
+  .lang a.active {
+    background: var(--bg-elevated);
+    color: var(--text);
+  }
+  .lang a:hover {
+    text-decoration: none;
+    color: var(--text);
+  }
+  .nav-burger {
+    display: none;
+    flex-direction: column;
+    gap: 5px;
+    padding: 0.5rem;
+    cursor: pointer;
+  }
+  .nav-burger span {
+    display: block;
+    width: 22px;
+    height: 2px;
+    background: var(--text);
+    border-radius: 2px;
+  }
+  @media (max-width: 720px) {
+    .nav-burger {
+      display: flex;
+    }
+    .nav {
+      display: none;
+      width: 100%;
+      flex-direction: column;
+      align-items: flex-start;
+      padding-bottom: 1rem;
+    }
+    .nav ul {
+      flex-direction: column;
+      gap: 0.8rem;
+    }
+    .nav-toggle:checked ~ .nav {
+      display: flex;
+    }
+  }
+</style>

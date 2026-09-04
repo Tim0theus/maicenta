@@ -39,6 +39,36 @@ new parsing, storage, or interaction behavior. Generated Flutter/Rust bridge
 files are committed and must be regenerated whenever the public bridge API
 changes.
 
+## Website, documentation and translations
+
+The public website for maicenta.com lives in `website/` and is built with
+Astro. Fixing typos, improving the guides, or translating pages is one of the
+easiest ways to help.
+
+- Interface text is in `website/src/i18n/en.ts` and `website/src/i18n/de.ts`.
+  English is the reference; the German file is type-checked against it, so a
+  missing key fails the build.
+- Documentation articles are Markdown files under
+  `website/src/content/docs/<lang>/`. Keep the same file name in every
+  language folder so the language switcher can pair the pages.
+- Legal pages live in `website/src/content/legal/`. Do not change wording
+  there without discussing it in an issue first.
+- Adding a language is described in `website/README.md`.
+
+Before opening a pull request for the website, run from the repository root:
+
+```sh
+cd website
+npm ci
+npm run check
+npm run build
+```
+
+Website changes are deployed automatically after they are merged into `main`;
+pull requests only build the site as a check. Note that content and brand
+assets in `website/` are licensed differently from the code, see
+`website/LICENSE.md`.
+
 ## Security-sensitive code
 
 Treat MIME input, HTML, attachments, protocol responses, extensions, and AI

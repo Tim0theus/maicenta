@@ -1,0 +1,53 @@
+---
+// Root entry point: pick the visitor's language on the client and fall back
+// to English. Search engines get the canonical English page via the meta
+// refresh and the explicit links below.
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MAICENTA</title>
+    <meta name="robots" content="noindex" />
+    <link rel="alternate" hreflang="en" href="https://maicenta.com/en/" />
+    <link rel="alternate" hreflang="de" href="https://maicenta.com/de/" />
+    <link rel="alternate" hreflang="x-default" href="https://maicenta.com/en/" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <script is:inline>
+      (function () {
+        var supported = ['en', 'de'];
+        var langs = navigator.languages || [navigator.language || 'en'];
+        var target = 'en';
+        for (var i = 0; i < langs.length; i++) {
+          var code = String(langs[i]).toLowerCase().split('-')[0];
+          if (supported.indexOf(code) !== -1) {
+            target = code;
+            break;
+          }
+        }
+        location.replace('/' + target + '/');
+      })();
+    </script>
+    <noscript><meta http-equiv="refresh" content="0; url=/en/" /></noscript>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        background: #030b1f;
+        color: #eef2ff;
+        font-family: system-ui, sans-serif;
+      }
+      a {
+        color: #5fd6d0;
+      }
+    </style>
+  </head>
+  <body>
+    <p>
+      <a href="/en/">English</a> · <a href="/de/">Deutsch</a>
+    </p>
+  </body>
+</html>

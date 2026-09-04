@@ -610,6 +610,7 @@ platform/
   linux/
 schemas/                 Versioned data and extension schemas
 tests/                   Unit, integration, and protocol tests
+website/                 Static Astro site for maicenta.com (EN/DE), deployed by CI
 docs/                    Additional design documentation
 ```
 
