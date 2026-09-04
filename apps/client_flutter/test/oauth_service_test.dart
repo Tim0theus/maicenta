@@ -23,6 +23,34 @@ void main() {
     );
   });
 
+  test('Graph provider requests Graph mail scopes and the Graph connector', () {
+    expect(
+      MailOAuthProvider.microsoftGraph.tokenEndpoint,
+      MailOAuthProvider.microsoft365.tokenEndpoint,
+    );
+    expect(
+      MailOAuthProvider.microsoftGraph.scopes,
+      containsAll([
+        'offline_access',
+        'https://graph.microsoft.com/Mail.ReadWrite',
+        'https://graph.microsoft.com/Mail.Send',
+      ]),
+    );
+    expect(
+      MailOAuthProvider.microsoftGraph.scopes,
+      isNot(contains('https://outlook.office.com/IMAP.AccessAsUser.All')),
+    );
+    expect(MailOAuthProvider.microsoftGraph.storageName, 'microsoft_graph');
+    expect(MailOAuthProvider.microsoftGraph.mailProvider, 'microsoft_graph');
+    expect(MailOAuthProvider.microsoft365.mailProvider, 'imap');
+    expect(MailOAuthProvider.google.mailProvider, 'imap');
+    expect(
+      MailOAuthProviderConfiguration.fromStorageName('microsoft_graph'),
+      MailOAuthProvider.microsoftGraph,
+    );
+    expect(MailOAuthProviderConfiguration.fromStorageName('unknown'), isNull);
+  });
+
   test('uses loopback only on Windows and Linux desktop', () {
     final redirect = Uri.parse(MailOAuthService.redirectUri);
     if (Platform.isWindows || Platform.isLinux) {

@@ -1511,6 +1511,19 @@ name = "maicenta-domain"
 version = "0.1.0"
 
 [[package]]
+name = "maicenta-graph-connector"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "maicenta-domain",
+ "maicenta-mail-connector",
+ "maicenta-rendering",
+ "reqwest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "maicenta-mail-connector"
 version = "0.1.0"
 dependencies = [
@@ -1568,6 +1581,7 @@ dependencies = [
  "flutter_rust_bridge",
  "maicenta-application",
  "maicenta-domain",
+ "maicenta-graph-connector",
  "maicenta-mail-connector",
  "maicenta-rendering",
  "maicenta-storage",

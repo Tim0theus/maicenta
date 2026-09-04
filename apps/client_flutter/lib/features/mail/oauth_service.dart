@@ -6,27 +6,55 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:http/http.dart' as http;
 
-enum MailOAuthProvider { microsoft365, google }
+/// OAuth providers MAICENTA can sign in to.
+///
+/// `microsoft365` and `microsoftGraph` share the same Microsoft identity
+/// platform and app registration but request tokens for different resources:
+/// the IMAP/SMTP scopes of Exchange Online versus the Microsoft Graph mail
+/// API. A token for one resource cannot be used for the other.
+enum MailOAuthProvider { microsoft365, microsoftGraph, google }
 
 extension MailOAuthProviderConfiguration on MailOAuthProvider {
   String get storageName => switch (this) {
     MailOAuthProvider.microsoft365 => 'microsoft365',
+    MailOAuthProvider.microsoftGraph => 'microsoft_graph',
     MailOAuthProvider.google => 'google',
   };
 
+  static MailOAuthProvider? fromStorageName(String? value) => switch (value) {
+    'microsoft365' => MailOAuthProvider.microsoft365,
+    'microsoft_graph' => MailOAuthProvider.microsoftGraph,
+    'google' => MailOAuthProvider.google,
+    _ => null,
+  };
+
   String get displayName => switch (this) {
-    MailOAuthProvider.microsoft365 => 'Microsoft 365 / Exchange Online',
+    MailOAuthProvider.microsoft365 =>
+      'Microsoft 365 / Exchange Online (IMAP/SMTP)',
+    MailOAuthProvider.microsoftGraph =>
+      'Microsoft 365 / Exchange Online (Graph API)',
     MailOAuthProvider.google => 'Google Workspace / Gmail',
   };
 
+  /// Mail connector the Rust core uses for accounts signed in with this
+  /// provider.
+  String get mailProvider => switch (this) {
+    MailOAuthProvider.microsoftGraph => 'microsoft_graph',
+    MailOAuthProvider.microsoft365 || MailOAuthProvider.google => 'imap',
+  };
+
+  bool get usesMicrosoftIdentity =>
+      this == MailOAuthProvider.microsoft365 ||
+      this == MailOAuthProvider.microsoftGraph;
+
   String get authorizationEndpoint => switch (this) {
-    MailOAuthProvider.microsoft365 =>
+    MailOAuthProvider.microsoft365 || MailOAuthProvider.microsoftGraph =>
       'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
     MailOAuthProvider.google => 'https://accounts.google.com/o/oauth2/v2/auth',
   };
 
   String get tokenEndpoint => switch (this) {
-    MailOAuthProvider.microsoft365 =>
+    MailOAuthProvider.microsoft365 || MailOAuthProvider.microsoftGraph =>
       'https://login.microsoftonline.com/common/oauth2/v2.0/token',
     MailOAuthProvider.google => 'https://oauth2.googleapis.com/token',
   };
@@ -40,6 +68,14 @@ extension MailOAuthProviderConfiguration on MailOAuthProvider {
       'https://outlook.office.com/IMAP.AccessAsUser.All',
       'https://outlook.office.com/SMTP.Send',
     ],
+    MailOAuthProvider.microsoftGraph => const [
+      'openid',
+      'profile',
+      'email',
+      'offline_access',
+      'https://graph.microsoft.com/Mail.ReadWrite',
+      'https://graph.microsoft.com/Mail.Send',
+    ],
     MailOAuthProvider.google => const [
       'openid',
       'email',
@@ -47,10 +83,15 @@ extension MailOAuthProviderConfiguration on MailOAuthProvider {
     ],
   };
 
+  String get clientIdDefineName => switch (this) {
+    MailOAuthProvider.microsoft365 ||
+    MailOAuthProvider.microsoftGraph => 'MAICENTA_MICROSOFT_OAUTH_CLIENT_ID',
+    MailOAuthProvider.google => 'MAICENTA_GOOGLE_OAUTH_CLIENT_ID',
+  };
+
   String get configuredClientId => switch (this) {
-    MailOAuthProvider.microsoft365 => const String.fromEnvironment(
-      'MAICENTA_MICROSOFT_OAUTH_CLIENT_ID',
-    ),
+    MailOAuthProvider.microsoft365 || MailOAuthProvider.microsoftGraph =>
+      const String.fromEnvironment('MAICENTA_MICROSOFT_OAUTH_CLIENT_ID'),
     MailOAuthProvider.google => const String.fromEnvironment(
       'MAICENTA_GOOGLE_OAUTH_CLIENT_ID',
     ),
@@ -100,9 +141,7 @@ class MailOAuthService {
   }) async {
     final clientId = provider.configuredClientId.trim();
     if (clientId.isEmpty) {
-      final defineName = provider == MailOAuthProvider.microsoft365
-          ? 'MAICENTA_MICROSOFT_OAUTH_CLIENT_ID'
-          : 'MAICENTA_GOOGLE_OAUTH_CLIENT_ID';
+      final defineName = provider.clientIdDefineName;
       throw StateError(
         'Für ${provider.displayName} ist noch keine OAuth-App-ID konfiguriert. '
         'Starte den Build mit --dart-define=$defineName=<Client-ID>.',

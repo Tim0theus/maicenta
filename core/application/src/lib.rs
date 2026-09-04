@@ -8,14 +8,58 @@ use maicenta_domain::{
     TaskItem,
 };
 
-/// Stable IMAP identity attached to one locally cached message.
+/// Provider-side identity of one message inside its remote mailbox.
+///
+/// IMAP addresses a message by its UID, which is only meaningful together with
+/// the mailbox UIDVALIDITY generation. API-based providers such as Microsoft
+/// Graph assign an opaque, stable string identifier instead. Storage and
+/// synchronization treat both forms as one value so a connector never has to
+/// emulate the other's numbering.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum RemoteMessageIdentity {
+    /// IMAP UID inside one UIDVALIDITY generation.
+    ImapUid { uid_validity: u32, uid: u32 },
+    /// Opaque provider-assigned identifier (for example a Graph message ID).
+    ProviderId(String),
+}
+
+impl RemoteMessageIdentity {
+    /// Whether the identity carries enough information to address a message.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        match self {
+            Self::ImapUid { uid, .. } => *uid != 0,
+            Self::ProviderId(id) => !id.trim().is_empty() && id.len() <= 1_024,
+        }
+    }
+
+    /// Returns the IMAP UID pair when this is an IMAP identity.
+    #[must_use]
+    pub fn imap_uid(&self) -> Option<(u32, u32)> {
+        match self {
+            Self::ImapUid { uid_validity, uid } => Some((*uid_validity, *uid)),
+            Self::ProviderId(_) => None,
+        }
+    }
+
+    /// Returns the opaque provider identifier when this is an API identity.
+    #[must_use]
+    pub fn provider_id(&self) -> Option<&str> {
+        match self {
+            Self::ProviderId(id) => Some(id),
+            Self::ImapUid { .. } => None,
+        }
+    }
+}
+
+/// Stable remote identity attached to one locally cached message.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteMessageMetadata {
     pub message_id: MessageId,
     pub account_id: AccountId,
+    /// IMAP mailbox name or opaque provider folder ID.
     pub remote_mailbox: String,
-    pub uid_validity: u32,
-    pub remote_uid: u32,
+    pub identity: RemoteMessageIdentity,
     /// Whether sender, recipients, subject, and attachment metadata were
     /// obtained from a complete bounded header/BODYSTRUCTURE fetch.
     pub catalog_complete: bool,
@@ -26,7 +70,11 @@ pub struct RemoteMessageMetadata {
     pub body_complete: bool,
 }
 
-/// Persistent incremental state for one remote IMAP mailbox.
+/// Persistent incremental state for one remote mailbox.
+///
+/// IMAP mailboxes use the UIDVALIDITY/UIDNEXT/HIGHESTMODSEQ triple. API-based
+/// providers keep an opaque delta cursor instead and leave the IMAP fields at
+/// their neutral values.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteMailboxSyncState {
     pub account_id: AccountId,
@@ -34,6 +82,9 @@ pub struct RemoteMailboxSyncState {
     pub uid_validity: u32,
     pub uid_next: Option<u32>,
     pub highest_modseq: Option<u64>,
+    /// Opaque provider continuation cursor, for example a Graph `deltaLink`
+    /// or the `nextLink` of an unfinished initial delta round.
+    pub delta_cursor: Option<String>,
     pub catalog_complete: bool,
     pub last_full_reconcile_at_ms: i64,
 }
@@ -56,13 +107,12 @@ pub struct PendingMailMutation {
     pub account_id: AccountId,
     pub source_mailbox: String,
     pub target_mailbox: Option<String>,
-    pub uid_validity: u32,
-    pub remote_uid: u32,
+    pub identity: RemoteMessageIdentity,
     pub seen: bool,
     pub flagged: bool,
 }
 
-/// Remote work retained for a locally editable IMAP draft.
+/// Remote work retained for a locally editable server draft.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PendingDraftAction {
     Upsert,
@@ -408,10 +458,12 @@ pub trait MailSyncStore: Send + Sync {
         flags: &[MessageFlag],
     ) -> Result<(), ApplicationError>;
 
-    /// Removes cached remote messages whose UID identity is no longer present
-    /// in the selected mailbox snapshot.
+    /// Removes cached remote messages whose identity is no longer present in
+    /// the complete mailbox snapshot.
     ///
-    /// Returns attachment metadata for object cleanup after the transaction.
+    /// An IMAP row from another UIDVALIDITY generation never equals an active
+    /// identity and is therefore removed as well. Returns attachment metadata
+    /// for object cleanup after the transaction.
     ///
     /// # Errors
     ///
@@ -420,14 +472,14 @@ pub trait MailSyncStore: Send + Sync {
         &mut self,
         account_id: &AccountId,
         remote_mailbox: &str,
-        uid_validity: u32,
-        active_uids: &[u32],
+        active_identities: &[RemoteMessageIdentity],
     ) -> Result<Vec<MessageAttachment>, ApplicationError>;
 
-    /// Removes exact remote UIDs confirmed as vanished by QRESYNC.
+    /// Removes exact remote identities confirmed as vanished by the provider,
+    /// for example through QRESYNC `VANISHED` or a Graph delta removal.
     ///
     /// Returns attachment metadata for object cleanup after the transaction.
-    /// UIDs from another UIDVALIDITY generation are never matched.
+    /// Identities from another UIDVALIDITY generation are never matched.
     ///
     /// # Errors
     ///
@@ -437,8 +489,7 @@ pub trait MailSyncStore: Send + Sync {
         &mut self,
         account_id: &AccountId,
         remote_mailbox: &str,
-        uid_validity: u32,
-        vanished_uids: &[u32],
+        vanished_identities: &[RemoteMessageIdentity],
     ) -> Result<Vec<MessageAttachment>, ApplicationError>;
 
     /// Lists compacted pending mutations for one account.
@@ -577,7 +628,7 @@ pub trait WorkspaceStore: Send + Sync {
 /// Secrets remain behind [`SecretStore`] and are never exposed through account
 /// snapshots, even when both are backed by the same encrypted profile vault.
 pub trait MailAccountStore: Send + Sync {
-    /// Lists configured IMAP/SMTP accounts.
+    /// Lists configured mail accounts.
     ///
     /// # Errors
     ///
@@ -818,6 +869,7 @@ mod tests {
                 id: MailboxId::parse("inbox").expect("valid id"),
                 account_id: account.clone(),
                 display_name: "Inbox".into(),
+                remote_name: Some("INBOX".into()),
                 role: MailboxRole::Inbox,
                 unread_count: 0,
                 total_count: 0,

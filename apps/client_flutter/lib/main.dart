@@ -2447,9 +2447,13 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     smtpSecurity = account?.smtpSecurity ?? 'starttls';
     smtpUsername.text = account?.smtpUsername ?? '';
     authentication = account?.authentication ?? 'password';
-    oauthProvider = account?.oauthProvider == 'google'
-        ? MailOAuthProvider.google
-        : MailOAuthProvider.microsoft365;
+    oauthProvider =
+        MailOAuthProviderConfiguration.fromStorageName(
+          account?.oauthProvider,
+        ) ??
+        (account?.provider == 'microsoft_graph'
+            ? MailOAuthProvider.microsoftGraph
+            : MailOAuthProvider.microsoft365);
     oauthTokens = null;
     password.clear();
     status = null;
@@ -2534,6 +2538,9 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     }
     return MailAccountConfig(
       id: accountId,
+      provider: authentication == 'oauth2'
+          ? oauthProvider.mailProvider
+          : 'imap',
       displayName: displayName.text.trim(),
       email: email.text.trim(),
       imapHost: imapHost.text.trim(),
@@ -2553,6 +2560,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
   }
 
   int configurationFingerprint(MailAccountConfig account) => Object.hashAll([
+    account.provider,
     account.email,
     account.imapHost,
     account.imapPort,
@@ -2577,6 +2585,9 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     smtpSecurity = 'starttls';
     switch (oauthProvider) {
       case MailOAuthProvider.microsoft365:
+      case MailOAuthProvider.microsoftGraph:
+        // Graph accounts keep the standards endpoints only as a documented
+        // fallback description; synchronization runs through the Graph API.
         imapHost.text = 'outlook.office365.com';
         smtpHost.text = 'smtp.office365.com';
         break;
@@ -2617,7 +2628,9 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
         throw StateError('OAuth-Verbindungstest ist nicht verfügbar.');
       }
       setState(() {
-        status = 'OAuth-Anmeldung erfolgreich. IMAP und SMTP werden geprüft …';
+        status = oauthProvider == MailOAuthProvider.microsoftGraph
+            ? 'OAuth-Anmeldung erfolgreich. Zugriff auf Microsoft Graph wird geprüft …'
+            : 'OAuth-Anmeldung erfolgreich. IMAP und SMTP werden geprüft …';
       });
       await testOAuth(account, tokens);
       if (!mounted) return;
@@ -2828,8 +2841,13 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final graphAccount =
+        authentication == 'oauth2' &&
+        oauthProvider == MailOAuthProvider.microsoftGraph;
     return AlertDialog(
-      title: const Text('IMAP-/SMTP-Konto'),
+      title: Text(
+        graphAccount ? 'Microsoft-365-Konto (Graph)' : 'E-Mail-Konto',
+      ),
       content: SizedBox(
         width: 650,
         child: SingleChildScrollView(
@@ -2975,15 +2993,25 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  'Exchange Online wird über Microsoft 365 mit XOAUTH2 für '
-                  'IMAP und SMTP angebunden. Lokales Exchange/EWS ist in '
-                  'dieser Ausbaustufe noch nicht enthalten.',
-                  style: TextStyle(fontSize: 12),
+                Text(
+                  graphAccount
+                      ? 'Das Postfach wird über die Microsoft Graph API '
+                            'synchronisiert. Diese Variante funktioniert auch, '
+                            'wenn der Tenant IMAP und SMTP AUTH deaktiviert hat. '
+                            'Push-Benachrichtigungen sind nicht verfügbar; '
+                            'MAICENTA gleicht regelmäßig ab.'
+                      : 'Exchange Online wird über Microsoft 365 mit XOAUTH2 für '
+                            'IMAP und SMTP angebunden. Ist IMAP im Tenant '
+                            'deaktiviert, wähle die Graph-API-Variante. Lokales '
+                            'Exchange/EWS ist in dieser Ausbaustufe noch nicht '
+                            'enthalten.',
+                  style: const TextStyle(fontSize: 12),
                 ),
               ],
               const SizedBox(height: 12),
-              if (authentication == 'password' && !manualMode)
+              if (graphAccount)
+                const SizedBox.shrink(key: Key('account-graph-settings'))
+              else if (authentication == 'password' && !manualMode)
                 Container(
                   key: const Key('account-automatic-settings'),
                   padding: const EdgeInsets.all(12),

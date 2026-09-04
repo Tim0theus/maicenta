@@ -1391,6 +1391,7 @@ impl SseDecode for crate::api::workspace::MailAccountDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_provider = <String>::sse_decode(deserializer);
         let mut var_displayName = <String>::sse_decode(deserializer);
         let mut var_email = <String>::sse_decode(deserializer);
         let mut var_imapHost = <String>::sse_decode(deserializer);
@@ -1406,6 +1407,7 @@ impl SseDecode for crate::api::workspace::MailAccountDto {
         let mut var_lastSyncAtMs = <Option<i64>>::sse_decode(deserializer);
         return crate::api::workspace::MailAccountDto {
             id: var_id,
+            provider: var_provider,
             display_name: var_displayName,
             email: var_email,
             imap_host: var_imapHost,
@@ -1427,6 +1429,7 @@ impl SseDecode for crate::api::workspace::MailAccountInput {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_provider = <String>::sse_decode(deserializer);
         let mut var_displayName = <String>::sse_decode(deserializer);
         let mut var_email = <String>::sse_decode(deserializer);
         let mut var_imapHost = <String>::sse_decode(deserializer);
@@ -1439,6 +1442,7 @@ impl SseDecode for crate::api::workspace::MailAccountInput {
         let mut var_smtpUsername = <String>::sse_decode(deserializer);
         return crate::api::workspace::MailAccountInput {
             id: var_id,
+            provider: var_provider,
             display_name: var_displayName,
             email: var_email,
             imap_host: var_imapHost,
@@ -2055,6 +2059,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::workspace::MailAccountDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.id.into_into_dart().into_dart(),
+            self.provider.into_into_dart().into_dart(),
             self.display_name.into_into_dart().into_dart(),
             self.email.into_into_dart().into_dart(),
             self.imap_host.into_into_dart().into_dart(),
@@ -2088,6 +2093,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::workspace::MailAccountInput {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.id.into_into_dart().into_dart(),
+            self.provider.into_into_dart().into_dart(),
             self.display_name.into_into_dart().into_dart(),
             self.email.into_into_dart().into_dart(),
             self.imap_host.into_into_dart().into_dart(),
@@ -2542,6 +2548,7 @@ impl SseEncode for crate::api::workspace::MailAccountDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.provider, serializer);
         <String>::sse_encode(self.display_name, serializer);
         <String>::sse_encode(self.email, serializer);
         <String>::sse_encode(self.imap_host, serializer);
@@ -2562,6 +2569,7 @@ impl SseEncode for crate::api::workspace::MailAccountInput {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.provider, serializer);
         <String>::sse_encode(self.display_name, serializer);
         <String>::sse_encode(self.email, serializer);
         <String>::sse_encode(self.imap_host, serializer);

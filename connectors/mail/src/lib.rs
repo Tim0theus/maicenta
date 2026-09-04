@@ -953,6 +953,27 @@ fn build_message(
     build_content_message(account, outgoing, None, true)
 }
 
+/// Serializes one outgoing message to RFC 5322 bytes without submitting it.
+///
+/// API-based connectors reuse the exact MIME structure produced for SMTP and
+/// IMAP so drafts and sent messages look identical regardless of transport.
+/// A draft may omit recipients; a message intended for delivery must name at
+/// least one `To` recipient.
+///
+/// # Errors
+///
+/// Returns [`ConnectorError::InvalidConfiguration`] or
+/// [`ConnectorError::Message`] when an address or MIME part is invalid.
+pub fn render_outgoing_message(
+    account: &MailAccount,
+    outgoing: &OutgoingMessage,
+    message_id: Option<&str>,
+    require_to_recipient: bool,
+) -> Result<Vec<u8>, ConnectorError> {
+    build_content_message(account, outgoing, message_id, require_to_recipient)
+        .map(|message| message.formatted())
+}
+
 fn build_draft_message(
     account: &MailAccount,
     outgoing: &OutgoingMessage,
@@ -2786,7 +2807,9 @@ mod tests {
         parser::parse_response,
         types::{AttributeValue, Response},
     };
-    use maicenta_domain::{AccountId, MailAccount, MailAddress, MailboxRole, TransportSecurity};
+    use maicenta_domain::{
+        AccountId, MailAccount, MailAddress, MailProvider, MailboxRole, TransportSecurity,
+    };
     use maicenta_rendering::{MessageRenderer, RenderPolicy};
 
     use super::{
@@ -2802,6 +2825,7 @@ mod tests {
     fn mail_account() -> MailAccount {
         MailAccount {
             id: AccountId::parse("work").expect("account id"),
+            provider: MailProvider::ImapSmtp,
             display_name: "MAICENTA User".into(),
             email: MailAddress::new("user@example.org", Some("MAICENTA User".into()))
                 .expect("mail address"),

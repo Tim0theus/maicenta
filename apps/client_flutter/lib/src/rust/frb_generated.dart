@@ -1455,23 +1455,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MailAccountDto dco_decode_mail_account_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 14)
-      throw Exception('unexpected arr length: expect 14 but see ${arr.length}');
+    if (arr.length != 15)
+      throw Exception('unexpected arr length: expect 15 but see ${arr.length}');
     return MailAccountDto(
       id: dco_decode_String(arr[0]),
-      displayName: dco_decode_String(arr[1]),
-      email: dco_decode_String(arr[2]),
-      imapHost: dco_decode_String(arr[3]),
-      imapPort: dco_decode_u_16(arr[4]),
-      imapSecurity: dco_decode_String(arr[5]),
-      imapUsername: dco_decode_String(arr[6]),
-      smtpHost: dco_decode_String(arr[7]),
-      smtpPort: dco_decode_u_16(arr[8]),
-      smtpSecurity: dco_decode_String(arr[9]),
-      smtpUsername: dco_decode_String(arr[10]),
-      authentication: dco_decode_String(arr[11]),
-      oauthProvider: dco_decode_opt_String(arr[12]),
-      lastSyncAtMs: dco_decode_opt_box_autoadd_i_64(arr[13]),
+      provider: dco_decode_String(arr[1]),
+      displayName: dco_decode_String(arr[2]),
+      email: dco_decode_String(arr[3]),
+      imapHost: dco_decode_String(arr[4]),
+      imapPort: dco_decode_u_16(arr[5]),
+      imapSecurity: dco_decode_String(arr[6]),
+      imapUsername: dco_decode_String(arr[7]),
+      smtpHost: dco_decode_String(arr[8]),
+      smtpPort: dco_decode_u_16(arr[9]),
+      smtpSecurity: dco_decode_String(arr[10]),
+      smtpUsername: dco_decode_String(arr[11]),
+      authentication: dco_decode_String(arr[12]),
+      oauthProvider: dco_decode_opt_String(arr[13]),
+      lastSyncAtMs: dco_decode_opt_box_autoadd_i_64(arr[14]),
     );
   }
 
@@ -1479,20 +1480,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MailAccountInput dco_decode_mail_account_input(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 11)
-      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
+    if (arr.length != 12)
+      throw Exception('unexpected arr length: expect 12 but see ${arr.length}');
     return MailAccountInput(
       id: dco_decode_String(arr[0]),
-      displayName: dco_decode_String(arr[1]),
-      email: dco_decode_String(arr[2]),
-      imapHost: dco_decode_String(arr[3]),
-      imapPort: dco_decode_u_16(arr[4]),
-      imapSecurity: dco_decode_String(arr[5]),
-      imapUsername: dco_decode_String(arr[6]),
-      smtpHost: dco_decode_String(arr[7]),
-      smtpPort: dco_decode_u_16(arr[8]),
-      smtpSecurity: dco_decode_String(arr[9]),
-      smtpUsername: dco_decode_String(arr[10]),
+      provider: dco_decode_String(arr[1]),
+      displayName: dco_decode_String(arr[2]),
+      email: dco_decode_String(arr[3]),
+      imapHost: dco_decode_String(arr[4]),
+      imapPort: dco_decode_u_16(arr[5]),
+      imapSecurity: dco_decode_String(arr[6]),
+      imapUsername: dco_decode_String(arr[7]),
+      smtpHost: dco_decode_String(arr[8]),
+      smtpPort: dco_decode_u_16(arr[9]),
+      smtpSecurity: dco_decode_String(arr[10]),
+      smtpUsername: dco_decode_String(arr[11]),
     );
   }
 
@@ -2023,6 +2025,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MailAccountDto sse_decode_mail_account_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_String(deserializer);
+    var var_provider = sse_decode_String(deserializer);
     var var_displayName = sse_decode_String(deserializer);
     var var_email = sse_decode_String(deserializer);
     var var_imapHost = sse_decode_String(deserializer);
@@ -2038,6 +2041,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_lastSyncAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     return MailAccountDto(
       id: var_id,
+      provider: var_provider,
       displayName: var_displayName,
       email: var_email,
       imapHost: var_imapHost,
@@ -2058,6 +2062,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MailAccountInput sse_decode_mail_account_input(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_String(deserializer);
+    var var_provider = sse_decode_String(deserializer);
     var var_displayName = sse_decode_String(deserializer);
     var var_email = sse_decode_String(deserializer);
     var var_imapHost = sse_decode_String(deserializer);
@@ -2070,6 +2075,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_smtpUsername = sse_decode_String(deserializer);
     return MailAccountInput(
       id: var_id,
+      provider: var_provider,
       displayName: var_displayName,
       email: var_email,
       imapHost: var_imapHost,
@@ -2652,6 +2658,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.id, serializer);
+    sse_encode_String(self.provider, serializer);
     sse_encode_String(self.displayName, serializer);
     sse_encode_String(self.email, serializer);
     sse_encode_String(self.imapHost, serializer);
@@ -2674,6 +2681,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.id, serializer);
+    sse_encode_String(self.provider, serializer);
     sse_encode_String(self.displayName, serializer);
     sse_encode_String(self.email, serializer);
     sse_encode_String(self.imapHost, serializer);

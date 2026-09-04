@@ -9,17 +9,22 @@ use std::{
 
 use maicenta_application::{
     LocalDraftMetadata, LocalDraftStore, MailAccountStore, MailStore, MailSyncStore,
-    PendingDraftAction, RemoteMailboxSyncState, RemoteMessageMetadata, SecretStore, WorkspaceStore,
+    PendingDraftAction, RemoteMailboxSyncState, RemoteMessageIdentity, RemoteMessageMetadata,
+    SecretStore, WorkspaceStore,
 };
 use maicenta_domain::{
-    AccountId, AttachmentId, CalendarEvent, Contact, MailAccount, MailAddress, Mailbox, MailboxId,
-    MailboxRole, MessageAttachment, MessageBody, MessageFlag, MessageId, MessageRecipients,
-    MessageSummary, TaskItem, TransportSecurity, WorkspaceItemId,
+    AccountId, AttachmentId, CalendarEvent, Contact, MailAccount, MailAddress, MailProvider,
+    Mailbox, MailboxId, MailboxRole, MessageAttachment, MessageBody, MessageFlag, MessageId,
+    MessageRecipients, MessageSummary, TaskItem, TransportSecurity, WorkspaceItemId,
+};
+use maicenta_graph_connector::{
+    GraphDraftIdentity, GraphDraftOperation, GraphMailboxCheckpoint, GraphMessage, GraphMutation,
+    KnownGraphMessage,
 };
 use maicenta_mail_connector::{
     ConnectorError, KnownRemoteMessage, MailCredential, OutgoingAttachment, OutgoingMessage,
-    RemoteDraftIdentity, RemoteDraftOperation, RemoteMailboxCheckpoint, RemoteMutation,
-    apply_draft_operations, apply_mailbox_mutations, delete_legacy_password,
+    RemoteDraftIdentity, RemoteDraftOperation, RemoteMailboxCheckpoint, RemoteMessage,
+    RemoteMutation, apply_draft_operations, apply_mailbox_mutations, delete_legacy_password,
     download_attachment_part, download_message_content, load_legacy_password,
     send_message as send_smtp_message, stable_remote_key, synchronize_mailboxes, test_account,
     wait_for_mailbox_change,
@@ -54,6 +59,12 @@ const OAUTH_SCOPES_KEY: &str = "oauth.scopes";
 const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const MICROSOFT_TOKEN_ENDPOINT: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const OAUTH_REFRESH_SKEW_MS: i64 = 120_000;
+const PROVIDER_IMAP: &str = "imap";
+const PROVIDER_MICROSOFT_GRAPH: &str = "microsoft_graph";
+const OAUTH_PROVIDER_MICROSOFT_GRAPH: &str = "microsoft_graph";
+/// Graph attachment bytes arrive already decoded; the renderer treats this
+/// transfer encoding as identity.
+const GRAPH_ATTACHMENT_TRANSFER_ENCODING: &str = "binary";
 
 static PROFILE_VAULTS: OnceLock<Mutex<HashMap<PathBuf, Arc<ProfileVault>>>> = OnceLock::new();
 
@@ -119,6 +130,96 @@ impl StoredMailCredential {
         match self {
             Self::Password(password) => MailCredential::Password(password.as_str()),
             Self::OAuth2(access_token) => MailCredential::OAuth2AccessToken(access_token.as_str()),
+        }
+    }
+
+    /// Returns the OAuth access token an API-based connector requires.
+    fn oauth_access_token(&self) -> Result<&str, String> {
+        match self {
+            Self::OAuth2(access_token) => Ok(access_token.as_str()),
+            Self::Password(_) => Err(
+                "this account is configured for Microsoft Graph but has no OAuth token; sign in again"
+                    .into(),
+            ),
+        }
+    }
+}
+
+/// Provider-neutral view of one synchronized remote message before it is
+/// rendered and cached locally.
+struct CachedRemoteInput {
+    remote_mailbox: String,
+    mailbox_role: MailboxRole,
+    identity: RemoteMessageIdentity,
+    flags: Vec<MessageFlag>,
+    renderable_message: Vec<u8>,
+    attachments: Vec<RemoteAttachmentDescriptor>,
+    catalog_complete: bool,
+    body_requested: bool,
+    body_complete: bool,
+}
+
+/// One server-side attachment that can be fetched later by its section or ID.
+#[derive(Clone)]
+struct RemoteAttachmentDescriptor {
+    section: String,
+    file_name: String,
+    content_type: String,
+    decoded_size_hint: u64,
+    transfer_encoding: String,
+}
+
+impl From<RemoteMessage> for CachedRemoteInput {
+    fn from(remote: RemoteMessage) -> Self {
+        Self {
+            remote_mailbox: remote.remote_mailbox,
+            mailbox_role: remote.mailbox_role,
+            identity: RemoteMessageIdentity::ImapUid {
+                uid_validity: remote.uid_validity,
+                uid: remote.uid,
+            },
+            flags: remote.flags,
+            renderable_message: remote.renderable_message,
+            attachments: remote
+                .attachments
+                .into_iter()
+                .map(|part| RemoteAttachmentDescriptor {
+                    section: part.section,
+                    file_name: part.file_name,
+                    content_type: part.content_type,
+                    decoded_size_hint: part.decoded_size_hint,
+                    transfer_encoding: part.transfer_encoding,
+                })
+                .collect(),
+            catalog_complete: remote.catalog_complete,
+            body_requested: remote.body_requested,
+            body_complete: remote.body_complete,
+        }
+    }
+}
+
+impl From<GraphMessage> for CachedRemoteInput {
+    fn from(remote: GraphMessage) -> Self {
+        Self {
+            remote_mailbox: remote.folder_id,
+            mailbox_role: remote.mailbox_role,
+            identity: RemoteMessageIdentity::ProviderId(remote.id),
+            flags: remote.flags,
+            renderable_message: remote.renderable_message,
+            attachments: remote
+                .attachments
+                .into_iter()
+                .map(|part| RemoteAttachmentDescriptor {
+                    section: part.attachment_id,
+                    file_name: part.file_name,
+                    content_type: part.content_type,
+                    decoded_size_hint: part.size_bytes,
+                    transfer_encoding: GRAPH_ATTACHMENT_TRANSFER_ENCODING.into(),
+                })
+                .collect(),
+            catalog_complete: remote.catalog_complete,
+            body_requested: remote.body_requested,
+            body_complete: remote.body_complete,
         }
     }
 }
@@ -367,6 +468,8 @@ pub struct ContactDto {
 
 pub struct MailAccountDto {
     pub id: String,
+    /// `imap` for the standards connector or `microsoft_graph`.
+    pub provider: String,
     pub display_name: String,
     pub email: String,
     pub imap_host: String,
@@ -427,10 +530,15 @@ pub struct LocalContactInput {
     pub email: String,
 }
 
-/// Complete user-supplied IMAP/SMTP configuration. `password` is accepted only
+/// Complete user-supplied account configuration. `password` is accepted only
 /// by credential-related functions and is never included in snapshots.
+///
+/// `provider` selects the connector: `imap` uses the IMAP/SMTP endpoints,
+/// `microsoft_graph` synchronizes through the Graph API and keeps the endpoint
+/// fields only as a documented fallback description.
 pub struct MailAccountInput {
     pub id: String,
+    pub provider: String,
     pub display_name: String,
     pub email: String,
     pub imap_host: String,
@@ -723,18 +831,53 @@ pub async fn load_remote_message_content(
         .into_iter()
         .find(|account| account.id == metadata.account_id)
         .ok_or_else(|| "mail account for this message no longer exists".to_owned())?;
+    let known_mailbox_ids = store
+        .list_mailboxes(&account.id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|mailbox| mailbox.id)
+        .collect::<HashSet<_>>();
     drop(store);
     let credential = load_account_credential(Path::new(&database_path), &account.id).await?;
 
-    let remote = match download_message_content(
-        &account,
-        credential.connector_credential(),
-        &metadata.remote_mailbox,
-        metadata.uid_validity,
-        metadata.remote_uid,
-    )
-    .await
-    {
+    let downloaded = match (account.provider, &metadata.identity) {
+        (MailProvider::ImapSmtp, RemoteMessageIdentity::ImapUid { uid_validity, uid }) => {
+            download_message_content(
+                &account,
+                credential.connector_credential(),
+                &metadata.remote_mailbox,
+                *uid_validity,
+                *uid,
+            )
+            .await
+            .map(CachedRemoteInput::from)
+        }
+        (MailProvider::MicrosoftGraph, RemoteMessageIdentity::ProviderId(id)) => {
+            maicenta_graph_connector::download_message_content(
+                credential.oauth_access_token()?,
+                &metadata.remote_mailbox,
+                id,
+                MailboxRole::Custom,
+            )
+            .await
+            .map(|remote| {
+                let mut input = CachedRemoteInput::from(remote);
+                // A message moved on the server into a folder that is not
+                // catalogued locally yet keeps its known mailbox until the
+                // next synchronization pass discovers the folder.
+                let known = remote_mailbox_id(&account, &input.remote_mailbox)
+                    .is_ok_and(|id| known_mailbox_ids.contains(&id));
+                if !known {
+                    input.remote_mailbox.clone_from(&metadata.remote_mailbox);
+                }
+                input
+            })
+        }
+        _ => {
+            return Err("the stored remote identity does not match the account's provider".into());
+        }
+    };
+    let remote = match downloaded {
         Ok(remote) => remote,
         Err(ConnectorError::RemoteMessageMissing(_)) => {
             let mut store = open_profile_store(&database_path)?;
@@ -742,8 +885,7 @@ pub async fn load_remote_message_content(
                 .remove_vanished_remote_messages(
                     &metadata.account_id,
                     &metadata.remote_mailbox,
-                    metadata.uid_validity,
-                    &[metadata.remote_uid],
+                    std::slice::from_ref(&metadata.identity),
                 )
                 .map_err(|error| error.to_string())?;
             remove_attachment_objects(Path::new(&database_path), &removed_attachments);
@@ -793,7 +935,8 @@ pub async fn wait_for_mailbox_idle_change(
             .into_iter()
             .find(|mailbox| mailbox.id == mailbox_id);
         if let Some(mailbox) = mailbox {
-            selected = Some((account, mailbox.display_name));
+            let remote_name = mailbox.remote_name.unwrap_or(mailbox.display_name);
+            selected = Some((account, remote_name));
             break;
         }
     }
@@ -804,6 +947,14 @@ pub async fn wait_for_mailbox_idle_change(
         });
     };
     drop(store);
+    if account.provider == MailProvider::MicrosoftGraph {
+        // Graph change notifications require a publicly reachable webhook,
+        // which a local desktop client does not provide. Polling remains.
+        return Ok(MailboxIdleDto {
+            idle_supported: false,
+            changed: false,
+        });
+    }
 
     let credential = load_account_credential(Path::new(&database_path), &account.id).await?;
     let result = wait_for_mailbox_change(
@@ -879,15 +1030,31 @@ pub async fn export_attachment(
         .ok_or_else(|| "mail account for this attachment no longer exists".to_owned())?;
     drop(store);
     let credential = load_account_credential(&database_path, &account.id).await?;
-    let encoded = download_attachment_part(
-        &account,
-        credential.connector_credential(),
-        &metadata.remote_mailbox,
-        metadata.uid_validity,
-        metadata.remote_uid,
-        &remote_section,
-    )
-    .await
+    let encoded = match (account.provider, &metadata.identity) {
+        (MailProvider::ImapSmtp, RemoteMessageIdentity::ImapUid { uid_validity, uid }) => {
+            download_attachment_part(
+                &account,
+                credential.connector_credential(),
+                &metadata.remote_mailbox,
+                *uid_validity,
+                *uid,
+                &remote_section,
+            )
+            .await
+        }
+        (MailProvider::MicrosoftGraph, RemoteMessageIdentity::ProviderId(id)) => {
+            maicenta_graph_connector::download_attachment(
+                credential.oauth_access_token()?,
+                id,
+                &remote_section,
+                MAX_ON_DEMAND_ATTACHMENT_BYTES,
+            )
+            .await
+        }
+        _ => {
+            return Err("the stored remote identity does not match the account's provider".into());
+        }
+    }
     .map_err(|error| error.to_string())?;
     let decoded =
         decode_attachment_part(&encoded, &transfer_encoding, MAX_ON_DEMAND_ATTACHMENT_BYTES)
@@ -1284,6 +1451,7 @@ pub fn create_local_mailbox(
             id: MailboxId::parse(mailbox_id).map_err(|error| error.to_string())?,
             account_id: AccountId::parse(DEMO_ACCOUNT_ID).map_err(|error| error.to_string())?,
             display_name,
+            remote_name: None,
             role: MailboxRole::Custom,
             unread_count: 0,
             total_count: 0,
@@ -1445,6 +1613,9 @@ pub fn save_mail_account(
 ) -> Result<(), String> {
     let password = Zeroizing::new(password);
     let mut account = mail_account_from_input(input)?;
+    if account.provider == MailProvider::MicrosoftGraph {
+        return Err("a Microsoft Graph account requires OAuth 2.0 sign-in".into());
+    }
     let mut store = open_profile_store(database_path)?;
     let existing = store
         .list_mail_accounts()
@@ -1491,6 +1662,7 @@ pub fn save_oauth_mail_account(
         &tokens.scopes,
     )?;
     let mut account = mail_account_from_input(input)?;
+    validate_oauth_provider_for_account(&account, &tokens.provider)?;
     let mut store = open_profile_store(database_path)?;
     if let Some(existing) = store
         .list_mail_accounts()
@@ -1536,8 +1708,11 @@ fn validate_oauth_token_input(
     token_endpoint: &str,
     scopes: &str,
 ) -> Result<(), String> {
-    if !matches!(provider, "google" | "microsoft365") {
-        return Err("OAuth provider must be google or microsoft365".into());
+    if !matches!(
+        provider,
+        "google" | "microsoft365" | OAUTH_PROVIDER_MICROSOFT_GRAPH
+    ) {
+        return Err("OAuth provider must be google, microsoft365, or microsoft_graph".into());
     }
     if client_id.trim().is_empty()
         || access_token.is_empty()
@@ -1551,6 +1726,25 @@ fn validate_oauth_token_input(
         return Err("OAuth access token is already expired".into());
     }
     Ok(())
+}
+
+/// A Graph token has the `graph.microsoft.com` audience and cannot log in to
+/// IMAP; an IMAP/SMTP token cannot call Graph. Reject mismatched pairs early
+/// so a saved account never fails on every synchronization.
+fn validate_oauth_provider_for_account(
+    account: &MailAccount,
+    oauth_provider: &str,
+) -> Result<(), String> {
+    match (account.provider, oauth_provider) {
+        (MailProvider::MicrosoftGraph, OAUTH_PROVIDER_MICROSOFT_GRAPH)
+        | (MailProvider::ImapSmtp, "google" | "microsoft365") => Ok(()),
+        (MailProvider::MicrosoftGraph, _) => {
+            Err("a Microsoft Graph account requires a microsoft_graph OAuth token set".into())
+        }
+        (MailProvider::ImapSmtp, _) => {
+            Err("an IMAP/SMTP account cannot use a Microsoft Graph token set".into())
+        }
+    }
 }
 
 fn remove_oauth_secrets(store: &mut SqliteMailStore, account_id: &AccountId) -> Result<(), String> {
@@ -1625,6 +1819,9 @@ pub async fn test_mail_account_connection(
 ) -> Result<(), String> {
     let password = Zeroizing::new(password);
     let account = mail_account_from_input(input)?;
+    if account.provider == MailProvider::MicrosoftGraph {
+        return Err("a Microsoft Graph account requires OAuth 2.0 sign-in".into());
+    }
     test_account(&account, MailCredential::Password(password.as_str()))
         .await
         .map_err(|error| error.to_string())
@@ -1641,12 +1838,19 @@ pub async fn test_oauth_mail_account_connection(
         return Err("an OAuth access token is required".into());
     }
     let account = mail_account_from_input(input)?;
-    test_account(
-        &account,
-        MailCredential::OAuth2AccessToken(access_token.as_str()),
-    )
-    .await
-    .map_err(|error| error.to_string())
+    match account.provider {
+        MailProvider::ImapSmtp => test_account(
+            &account,
+            MailCredential::OAuth2AccessToken(access_token.as_str()),
+        )
+        .await
+        .map_err(|error| error.to_string()),
+        MailProvider::MicrosoftGraph => {
+            maicenta_graph_connector::test_account(access_token.as_str())
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
 }
 
 /// Pushes queued draft creates, edits, and removals for one account without
@@ -1670,8 +1874,7 @@ pub async fn synchronize_mail_account_drafts(
     drop(store);
     let credential = load_account_credential(Path::new(&database_path), &account.id).await?;
     let (synchronized, warnings) =
-        synchronize_pending_drafts(&database_path, &account, credential.connector_credential())
-            .await?;
+        synchronize_pending_drafts(&database_path, &account, &credential).await?;
     let pending = open_profile_store(&database_path)?
         .pending_mail_mutation_count()
         .map_err(|error| error.to_string())?;
@@ -1769,16 +1972,28 @@ pub async fn send_account_message(
         attachments,
         high_importance: input.high_importance,
     };
-    send_smtp_message(&account, credential.connector_credential(), &outgoing)
+    match account.provider {
+        MailProvider::ImapSmtp => {
+            send_smtp_message(&account, credential.connector_credential(), &outgoing)
+                .await
+                .map(|response| {
+                    format!(
+                        "{} {}",
+                        response.code(),
+                        response.first_line().unwrap_or("message accepted")
+                    )
+                })
+                .map_err(|error| error.to_string())
+        }
+        MailProvider::MicrosoftGraph => maicenta_graph_connector::send_message(
+            credential.oauth_access_token()?,
+            &account,
+            &outgoing,
+        )
         .await
-        .map(|response| {
-            format!(
-                "{} {}",
-                response.code(),
-                response.first_line().unwrap_or("message accepted")
-            )
-        })
-        .map_err(|error| error.to_string())
+        .map(|()| "202 accepted by Microsoft Graph".to_owned())
+        .map_err(|error| error.to_string()),
+    }
 }
 
 fn load_outgoing_attachments(paths: &[String]) -> Result<Vec<OutgoingAttachment>, String> {
@@ -1965,10 +2180,18 @@ struct AccountSyncReport {
     qresync_mailboxes_synchronized: u32,
 }
 
+/// One queued draft action expressed with provider-neutral identities.
+struct PendingDraftUpload {
+    local_key: String,
+    target_mailbox: String,
+    previous_remote: Option<(String, RemoteMessageIdentity)>,
+    message: Option<OutgoingMessage>,
+}
+
 async fn synchronize_pending_drafts(
     database_path: &str,
     account: &MailAccount,
-    credential: MailCredential<'_>,
+    credential: &StoredMailCredential,
 ) -> Result<(u32, Vec<String>), String> {
     let store = open_profile_store(database_path)?;
     let pending = store
@@ -1982,11 +2205,7 @@ async fn synchronize_pending_drafts(
     for pending_operation in pending {
         let previous_remote = pending_operation
             .previous_remote
-            .map(|remote| RemoteDraftIdentity {
-                remote_mailbox: remote.remote_mailbox,
-                uid_validity: remote.uid_validity,
-                remote_uid: remote.remote_uid,
-            });
+            .map(|remote| (remote.remote_mailbox, remote.identity));
         let message = match pending_operation.action {
             PendingDraftAction::Delete => None,
             PendingDraftAction::Upsert => {
@@ -2037,7 +2256,7 @@ async fn synchronize_pending_drafts(
                 }
             }
         };
-        operations.push(RemoteDraftOperation {
+        operations.push(PendingDraftUpload {
             local_key: pending_operation.message_id.to_string(),
             target_mailbox: pending_operation.target_mailbox,
             previous_remote,
@@ -2048,30 +2267,133 @@ async fn synchronize_pending_drafts(
     if operations.is_empty() {
         return Ok((0, warnings));
     }
-    let report = apply_draft_operations(account, credential, &operations)
-        .await
-        .map_err(|error| error.to_string())?;
-    let synchronized = u32::try_from(report.applied.len()).unwrap_or(u32::MAX);
+    let (applied, failed) = match account.provider {
+        MailProvider::ImapSmtp => {
+            let mut imap_operations = Vec::with_capacity(operations.len());
+            for operation in operations {
+                let previous_remote = match operation.previous_remote {
+                    None => None,
+                    Some((
+                        remote_mailbox,
+                        RemoteMessageIdentity::ImapUid { uid_validity, uid },
+                    )) => Some(RemoteDraftIdentity {
+                        remote_mailbox,
+                        uid_validity,
+                        remote_uid: uid,
+                    }),
+                    Some((_, RemoteMessageIdentity::ProviderId(_))) => {
+                        warnings.push(format!(
+                            "Entwurf {}: gespeicherte Serveridentität passt nicht zum IMAP-Konto",
+                            operation.local_key
+                        ));
+                        continue;
+                    }
+                };
+                imap_operations.push(RemoteDraftOperation {
+                    local_key: operation.local_key,
+                    target_mailbox: operation.target_mailbox,
+                    previous_remote,
+                    message: operation.message,
+                });
+            }
+            let report = apply_draft_operations(
+                account,
+                credential.connector_credential(),
+                &imap_operations,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            let applied = report
+                .applied
+                .into_iter()
+                .map(|applied| {
+                    (
+                        applied.local_key,
+                        applied.uploaded_remote.map(|remote| {
+                            (
+                                remote.remote_mailbox,
+                                RemoteMessageIdentity::ImapUid {
+                                    uid_validity: remote.uid_validity,
+                                    uid: remote.remote_uid,
+                                },
+                            )
+                        }),
+                    )
+                })
+                .collect::<Vec<_>>();
+            (applied, report.failed)
+        }
+        MailProvider::MicrosoftGraph => {
+            let mut graph_operations = Vec::with_capacity(operations.len());
+            for operation in operations {
+                let previous_remote = match operation.previous_remote {
+                    None => None,
+                    Some((folder_id, RemoteMessageIdentity::ProviderId(message_id))) => {
+                        Some(GraphDraftIdentity {
+                            folder_id,
+                            message_id,
+                        })
+                    }
+                    Some((_, RemoteMessageIdentity::ImapUid { .. })) => {
+                        warnings.push(format!(
+                            "Entwurf {}: gespeicherte Serveridentität passt nicht zum Graph-Konto",
+                            operation.local_key
+                        ));
+                        continue;
+                    }
+                };
+                graph_operations.push(GraphDraftOperation {
+                    local_key: operation.local_key,
+                    target_folder_id: operation.target_mailbox,
+                    previous_remote,
+                    message: operation.message,
+                });
+            }
+            let report = maicenta_graph_connector::apply_draft_operations(
+                credential.oauth_access_token()?,
+                account,
+                &graph_operations,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            let applied = report
+                .applied
+                .into_iter()
+                .map(|applied| {
+                    (
+                        applied.local_key,
+                        applied.uploaded_remote.map(|remote| {
+                            (
+                                remote.folder_id,
+                                RemoteMessageIdentity::ProviderId(remote.message_id),
+                            )
+                        }),
+                    )
+                })
+                .collect::<Vec<_>>();
+            (applied, report.failed)
+        }
+    };
+    let synchronized = u32::try_from(applied.len()).unwrap_or(u32::MAX);
     let mut store = open_profile_store(database_path)?;
-    for applied in report.applied {
-        let message_id = MessageId::parse(&applied.local_key).map_err(|error| error.to_string())?;
-        let uploaded_remote = applied.uploaded_remote.map(|remote| RemoteMessageMetadata {
-            message_id: message_id.clone(),
-            account_id: account.id.clone(),
-            remote_mailbox: remote.remote_mailbox,
-            uid_validity: remote.uid_validity,
-            remote_uid: remote.remote_uid,
-            catalog_complete: true,
-            body_requested: true,
-            body_complete: true,
-        });
+    for (local_key, uploaded_remote) in applied {
+        let message_id = MessageId::parse(&local_key).map_err(|error| error.to_string())?;
+        let uploaded_remote =
+            uploaded_remote.map(|(remote_mailbox, identity)| RemoteMessageMetadata {
+                message_id: message_id.clone(),
+                account_id: account.id.clone(),
+                remote_mailbox,
+                identity,
+                catalog_complete: true,
+                body_requested: true,
+                body_complete: true,
+            });
         store
             .complete_draft_operation(&message_id, uploaded_remote.as_ref())
             .map_err(|error| error.to_string())?;
     }
     warnings.extend(
-        report
-            .failed
+        failed
             .into_iter()
             .map(|failure| format!("Entwurf {}: {}", failure.local_key, failure.error)),
     );
@@ -2092,25 +2414,251 @@ async fn synchronize_account(
     account: &MailAccount,
 ) -> Result<AccountSyncReport, String> {
     let credential = load_account_credential(Path::new(database_path), &account.id).await?;
-    let (_, mut warnings) =
-        synchronize_pending_drafts(database_path, account, credential.connector_credential())
-            .await?;
+    match account.provider {
+        MailProvider::ImapSmtp => {
+            synchronize_imap_account(database_path, account, &credential).await
+        }
+        MailProvider::MicrosoftGraph => {
+            synchronize_graph_account(database_path, account, &credential).await
+        }
+    }
+}
+
+/// Synchronizes one Microsoft Graph account through per-folder delta queries.
+///
+/// Graph reports removals explicitly, so every pass is a delta pass and no
+/// periodic full reconciliation is needed. Folders are addressed by their
+/// stable IDs; display names are refreshed on every pass.
+#[allow(clippy::too_many_lines)]
+async fn synchronize_graph_account(
+    database_path: &str,
+    account: &MailAccount,
+    credential: &StoredMailCredential,
+) -> Result<AccountSyncReport, String> {
+    let access_token = credential.oauth_access_token()?;
+    let (_, mut warnings) = synchronize_pending_drafts(database_path, account, credential).await?;
     let pending = open_profile_store(database_path)?
         .pending_mail_mutations(&account.id)
         .map_err(|error| error.to_string())?;
     if !pending.is_empty() {
-        let remote_mutations = pending
-            .iter()
-            .map(|mutation| RemoteMutation {
-                local_key: mutation.message_id.to_string(),
-                source_mailbox: mutation.source_mailbox.clone(),
-                target_mailbox: mutation.target_mailbox.clone(),
-                uid_validity: mutation.uid_validity,
-                remote_uid: mutation.remote_uid,
-                seen: mutation.seen,
-                flagged: mutation.flagged,
+        let mut graph_mutations = Vec::with_capacity(pending.len());
+        for mutation in &pending {
+            match &mutation.identity {
+                RemoteMessageIdentity::ProviderId(id) => graph_mutations.push(GraphMutation {
+                    local_key: mutation.message_id.to_string(),
+                    message_id: id.clone(),
+                    target_folder_id: mutation.target_mailbox.clone(),
+                    seen: mutation.seen,
+                    flagged: mutation.flagged,
+                }),
+                RemoteMessageIdentity::ImapUid { .. } => warnings.push(format!(
+                    "Änderung {}: gespeicherte Serveridentität passt nicht zum Graph-Konto",
+                    mutation.message_id
+                )),
+            }
+        }
+        let report =
+            maicenta_graph_connector::apply_mailbox_mutations(access_token, &graph_mutations)
+                .await
+                .map_err(|error| error.to_string())?;
+        let mut store = open_profile_store(database_path)?;
+        for applied in report.applied {
+            let message_id =
+                MessageId::parse(applied.local_key).map_err(|error| error.to_string())?;
+            store
+                .complete_mail_mutation(&message_id, applied.moved)
+                .map_err(|error| error.to_string())?;
+        }
+        warnings.extend(
+            report
+                .failed
+                .into_iter()
+                .map(|failure| format!("Änderung {}: {}", failure.local_key, failure.error)),
+        );
+    }
+
+    let pending_message_ids = open_profile_store(database_path)?
+        .pending_mail_mutations(&account.id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|mutation| mutation.message_id)
+        .collect::<HashSet<_>>();
+    let now = current_timestamp_ms()?;
+    let checkpoints = open_profile_store(database_path)?
+        .remote_mailbox_sync_states(&account.id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|state| GraphMailboxCheckpoint {
+            folder_id: state.remote_mailbox,
+            delta_cursor: state.delta_cursor,
+            catalog_complete: state.catalog_complete,
+        })
+        .collect::<Vec<_>>();
+    let known_messages = open_profile_store(database_path)?
+        .remote_messages_for_account(&account.id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter_map(|metadata| {
+            let id = metadata.identity.provider_id()?.to_owned();
+            Some(KnownGraphMessage {
+                local_key: metadata.message_id.to_string(),
+                folder_id: metadata.remote_mailbox,
+                id,
+                needs_catalog_refresh: !metadata.catalog_complete,
+                needs_body_refresh: metadata.body_requested && !metadata.body_complete,
             })
-            .collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
+    let synchronized = maicenta_graph_connector::synchronize_mailboxes(
+        access_token,
+        &known_messages,
+        &checkpoints,
+        25,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let mut store = open_profile_store(database_path)?;
+    let existing_mailboxes = store
+        .list_mailboxes(&account.id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|mailbox| (mailbox.id.to_string(), mailbox))
+        .collect::<HashMap<_, _>>();
+    let mailboxes = synchronized
+        .mailboxes
+        .iter()
+        .map(|folder| {
+            let id = remote_mailbox_id(account, &folder.folder_id)?;
+            let (unread_count, total_count) = existing_mailboxes
+                .get(id.as_str())
+                .map_or((0, 0), |mailbox| {
+                    (mailbox.unread_count, mailbox.total_count)
+                });
+            Ok(Mailbox {
+                id,
+                account_id: account.id.clone(),
+                display_name: folder.display_name.clone(),
+                remote_name: Some(folder.folder_id.clone()),
+                role: folder.role,
+                unread_count,
+                total_count,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    store
+        .save_mailboxes(&mailboxes)
+        .map_err(|error| error.to_string())?;
+    let known_mailbox_ids = mailboxes
+        .iter()
+        .map(|mailbox| mailbox.id.clone())
+        .collect::<HashSet<_>>();
+    let mut catalog_messages_remaining = 0_u32;
+    for state in &synchronized.mailbox_states {
+        if !state.removed_ids.is_empty() {
+            let vanished = state
+                .removed_ids
+                .iter()
+                .cloned()
+                .map(RemoteMessageIdentity::ProviderId)
+                .collect::<Vec<_>>();
+            let removed_attachments = store
+                .remove_vanished_remote_messages(&account.id, &state.folder_id, &vanished)
+                .map_err(|error| error.to_string())?;
+            remove_attachment_objects(Path::new(database_path), &removed_attachments);
+        }
+        catalog_messages_remaining = catalog_messages_remaining
+            .saturating_add(u32::try_from(state.catalog_remaining).unwrap_or(u32::MAX));
+    }
+    for update in synchronized.flag_updates {
+        let message_id = MessageId::parse(update.local_key).map_err(|error| error.to_string())?;
+        if pending_message_ids.contains(&message_id) {
+            continue;
+        }
+        store
+            .update_remote_message_flags(&message_id, &update.flags)
+            .map_err(|error| error.to_string())?;
+    }
+    for remote in synchronized.messages {
+        let remote = CachedRemoteInput::from(remote);
+        let message_id = remote_message_id(account, &remote)?;
+        if pending_message_ids.contains(&message_id) {
+            continue;
+        }
+        if !known_mailbox_ids.contains(&remote_mailbox_id(account, &remote.remote_mailbox)?) {
+            warnings.push(
+                "Eine Nachricht liegt in einem Ordner, der noch nicht katalogisiert ist, und wird beim nächsten Abgleich übernommen".into(),
+            );
+            continue;
+        }
+        cache_remote_message(
+            database_path,
+            account,
+            remote,
+            message_id,
+            now,
+            &mut store,
+            &mut warnings,
+        )?;
+    }
+    for state in &synchronized.mailbox_states {
+        store
+            .save_remote_mailbox_sync_state(&RemoteMailboxSyncState {
+                account_id: account.id.clone(),
+                remote_mailbox: state.folder_id.clone(),
+                uid_validity: 0,
+                uid_next: None,
+                highest_modseq: None,
+                delta_cursor: state.delta_cursor.clone(),
+                catalog_complete: state.catalog_complete,
+                last_full_reconcile_at_ms: now,
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    store
+        .update_account_last_sync(&account.id, now)
+        .map_err(|error| error.to_string())?;
+    Ok(AccountSyncReport {
+        warnings,
+        catalog_messages_remaining,
+        delta_mailboxes_synchronized: u32::try_from(synchronized.mailbox_states.len())
+            .unwrap_or(u32::MAX),
+        full_mailboxes_reconciled: 0,
+        qresync_mailboxes_synchronized: 0,
+    })
+}
+
+#[allow(clippy::too_many_lines)]
+async fn synchronize_imap_account(
+    database_path: &str,
+    account: &MailAccount,
+    credential: &StoredMailCredential,
+) -> Result<AccountSyncReport, String> {
+    let (_, mut warnings) = synchronize_pending_drafts(database_path, account, credential).await?;
+    let pending = open_profile_store(database_path)?
+        .pending_mail_mutations(&account.id)
+        .map_err(|error| error.to_string())?;
+    if !pending.is_empty() {
+        let mut remote_mutations = Vec::with_capacity(pending.len());
+        for mutation in &pending {
+            match mutation.identity {
+                RemoteMessageIdentity::ImapUid { uid_validity, uid } => {
+                    remote_mutations.push(RemoteMutation {
+                        local_key: mutation.message_id.to_string(),
+                        source_mailbox: mutation.source_mailbox.clone(),
+                        target_mailbox: mutation.target_mailbox.clone(),
+                        uid_validity,
+                        remote_uid: uid,
+                        seen: mutation.seen,
+                        flagged: mutation.flagged,
+                    });
+                }
+                RemoteMessageIdentity::ProviderId(_) => warnings.push(format!(
+                    "Änderung {}: gespeicherte Serveridentität passt nicht zum IMAP-Konto",
+                    mutation.message_id
+                )),
+            }
+        }
         let report = apply_mailbox_mutations(
             account,
             credential.connector_credential(),
@@ -2161,13 +2709,16 @@ async fn synchronize_account(
         .remote_messages_for_account(&account.id)
         .map_err(|error| error.to_string())?
         .into_iter()
-        .map(|metadata| KnownRemoteMessage {
-            local_key: metadata.message_id.to_string(),
-            remote_mailbox: metadata.remote_mailbox,
-            uid_validity: metadata.uid_validity,
-            uid: metadata.remote_uid,
-            needs_catalog_refresh: !metadata.catalog_complete,
-            needs_body_refresh: metadata.body_requested && !metadata.body_complete,
+        .filter_map(|metadata| {
+            let (uid_validity, uid) = metadata.identity.imap_uid()?;
+            Some(KnownRemoteMessage {
+                local_key: metadata.message_id.to_string(),
+                remote_mailbox: metadata.remote_mailbox,
+                uid_validity,
+                uid,
+                needs_catalog_refresh: !metadata.catalog_complete,
+                needs_body_refresh: metadata.body_requested && !metadata.body_complete,
+            })
         })
         .collect::<Vec<_>>();
     let synchronized = synchronize_mailboxes(
@@ -2200,6 +2751,7 @@ async fn synchronize_account(
                 id,
                 account_id: account.id.clone(),
                 display_name: remote.remote_name.clone(),
+                remote_name: Some(remote.remote_name.clone()),
                 role: remote.role,
                 unread_count,
                 total_count,
@@ -2212,23 +2764,15 @@ async fn synchronize_account(
     let mut catalog_messages_remaining = 0_u32;
     for state in &synchronized.mailbox_states {
         if state.full_reconcile {
+            let active = imap_identities(state.uid_validity, &state.active_uids);
             let removed_attachments = store
-                .reconcile_remote_mailbox(
-                    &account.id,
-                    &state.remote_mailbox,
-                    state.uid_validity,
-                    &state.active_uids,
-                )
+                .reconcile_remote_mailbox(&account.id, &state.remote_mailbox, &active)
                 .map_err(|error| error.to_string())?;
             remove_attachment_objects(Path::new(database_path), &removed_attachments);
         } else if !state.vanished_uids.is_empty() {
+            let vanished = imap_identities(state.uid_validity, &state.vanished_uids);
             let removed_attachments = store
-                .remove_vanished_remote_messages(
-                    &account.id,
-                    &state.remote_mailbox,
-                    state.uid_validity,
-                    &state.vanished_uids,
-                )
+                .remove_vanished_remote_messages(&account.id, &state.remote_mailbox, &vanished)
                 .map_err(|error| error.to_string())?;
             remove_attachment_objects(Path::new(database_path), &removed_attachments);
         }
@@ -2245,6 +2789,7 @@ async fn synchronize_account(
             .map_err(|error| error.to_string())?;
     }
     for remote in synchronized.messages {
+        let remote = CachedRemoteInput::from(remote);
         let message_id = remote_message_id(account, &remote)?;
         if pending_message_ids.contains(&message_id) {
             continue;
@@ -2278,6 +2823,7 @@ async fn synchronize_account(
                 uid_validity: state.uid_validity,
                 uid_next: state.uid_next,
                 highest_modseq: state.highest_modseq,
+                delta_cursor: None,
                 catalog_complete: state.catalog_remaining == 0,
                 last_full_reconcile_at_ms,
             })
@@ -2311,10 +2857,19 @@ async fn synchronize_account(
     })
 }
 
+fn imap_identities(uid_validity: u32, uids: &[u32]) -> Vec<RemoteMessageIdentity> {
+    uids.iter()
+        .map(|uid| RemoteMessageIdentity::ImapUid {
+            uid_validity,
+            uid: *uid,
+        })
+        .collect()
+}
+
 fn cache_remote_message(
     database_path: &str,
     account: &MailAccount,
-    remote: maicenta_mail_connector::RemoteMessage,
+    remote: CachedRemoteInput,
     message_id: MessageId,
     now: i64,
     store: &mut SqliteMailStore,
@@ -2383,8 +2938,7 @@ fn cache_remote_message(
         message_id: message_id.clone(),
         account_id: account.id.clone(),
         remote_mailbox: remote.remote_mailbox,
-        uid_validity: remote.uid_validity,
-        remote_uid: remote.uid,
+        identity: remote.identity,
         catalog_complete: remote.catalog_complete,
         body_requested: remote_body_requested,
         body_complete: remote_body_complete,
@@ -2494,20 +3048,33 @@ fn cache_remote_message(
     ))
 }
 
+/// Derives the stable local message ID from the provider identity.
+///
+/// IMAP IDs embed the mailbox, UIDVALIDITY, and UID (the inbox keeps its
+/// original shorter form for compatibility with existing profiles). Provider
+/// IDs are folder-independent, so a message moved on the server keeps the
+/// same local ID and only changes its mailbox.
 fn remote_message_id(
     account: &MailAccount,
-    remote: &maicenta_mail_connector::RemoteMessage,
+    remote: &CachedRemoteInput,
 ) -> Result<MessageId, String> {
-    let value = if remote.mailbox_role == MailboxRole::Inbox {
-        format!("{}.{}.{}", account.id, remote.uid_validity, remote.uid)
-    } else {
-        format!(
-            "{}.{}.{}.{}",
-            account.id,
-            stable_remote_key(&remote.remote_mailbox),
-            remote.uid_validity,
-            remote.uid
-        )
+    let value = match &remote.identity {
+        RemoteMessageIdentity::ImapUid { uid_validity, uid } => {
+            if remote.mailbox_role == MailboxRole::Inbox {
+                format!("{}.{}.{}", account.id, uid_validity, uid)
+            } else {
+                format!(
+                    "{}.{}.{}.{}",
+                    account.id,
+                    stable_remote_key(&remote.remote_mailbox),
+                    uid_validity,
+                    uid
+                )
+            }
+        }
+        RemoteMessageIdentity::ProviderId(id) => {
+            format!("{}.graph.{}", account.id, stable_remote_key(id))
+        }
     };
     MessageId::parse(value).map_err(|error| error.to_string())
 }
@@ -2517,6 +3084,7 @@ fn mail_account_from_input(input: MailAccountInput) -> Result<MailAccount, Strin
     if id.as_str() == DEMO_ACCOUNT_ID {
         return Err("the reserved local profile identifier cannot be used".into());
     }
+    let provider = parse_mail_provider(&input.provider)?;
     let display_name = validated_text(input.display_name, "account display name", 100)?;
     let imap_host = validated_server_name(input.imap_host, "IMAP server")?;
     let smtp_host = validated_server_name(input.smtp_host, "SMTP server")?;
@@ -2527,6 +3095,7 @@ fn mail_account_from_input(input: MailAccountInput) -> Result<MailAccount, Strin
     }
     Ok(MailAccount {
         id,
+        provider,
         email: MailAddress::new(input.email, Some(display_name.clone()))
             .map_err(|error| error.to_string())?,
         display_name,
@@ -2540,6 +3109,21 @@ fn mail_account_from_input(input: MailAccountInput) -> Result<MailAccount, Strin
         smtp_username,
         last_sync_at_ms: None,
     })
+}
+
+fn parse_mail_provider(value: &str) -> Result<MailProvider, String> {
+    match value {
+        PROVIDER_IMAP => Ok(MailProvider::ImapSmtp),
+        PROVIDER_MICROSOFT_GRAPH => Ok(MailProvider::MicrosoftGraph),
+        _ => Err("mail provider must be imap or microsoft_graph".into()),
+    }
+}
+
+const fn mail_provider_name(value: MailProvider) -> &'static str {
+    match value {
+        MailProvider::ImapSmtp => PROVIDER_IMAP,
+        MailProvider::MicrosoftGraph => PROVIDER_MICROSOFT_GRAPH,
+    }
 }
 
 fn parse_transport_security(value: &str) -> Result<TransportSecurity, String> {
@@ -2908,6 +3492,7 @@ fn mail_account_dto(account: MailAccount, oauth_provider: Option<String>) -> Mai
     };
     MailAccountDto {
         id: account.id.to_string(),
+        provider: mail_provider_name(account.provider).into(),
         display_name: account.display_name,
         email: account.email.address().to_owned(),
         imap_host: account.imap_host,
@@ -3000,6 +3585,7 @@ fn prototype_mailbox(
         id: id.clone(),
         account_id: account_id.clone(),
         display_name: display_name.into(),
+        remote_name: None,
         role,
         unread_count,
         total_count,
@@ -3198,7 +3784,10 @@ mod tests {
     };
     use maicenta_application::{MailAccountStore, MailStore, SecretStore};
     use maicenta_domain::{AccountId, Mailbox, MailboxRole, MessageBody, MessageId};
+    use maicenta_graph_connector::GraphMessage;
     use maicenta_mail_connector::{RemoteAttachmentPart, RemoteMessage};
+
+    use super::CachedRemoteInput;
 
     static NEXT_DATABASE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -3642,6 +4231,7 @@ mod tests {
     fn remote_message_ids_are_unique_across_mailboxes() {
         let account = mail_account_from_input(MailAccountInput {
             id: "work".into(),
+            provider: "imap".into(),
             display_name: "Work".into(),
             email: "user@example.org".into(),
             imap_host: "imap.example.org".into(),
@@ -3672,6 +4262,8 @@ mod tests {
             ..inbox.clone()
         };
 
+        let inbox = CachedRemoteInput::from(inbox);
+        let sent = CachedRemoteInput::from(sent);
         assert_eq!(
             remote_message_id(&account, &inbox)
                 .expect("inbox id")
@@ -3682,6 +4274,19 @@ mod tests {
             remote_message_id(&account, &inbox).expect("inbox id"),
             remote_message_id(&account, &sent).expect("sent id")
         );
+        let graph = CachedRemoteInput::from(GraphMessage {
+            folder_id: "AAMkFolder=".into(),
+            mailbox_role: MailboxRole::Inbox,
+            id: "AAMkMessage=".into(),
+            flags: Vec::new(),
+            renderable_message: Vec::new(),
+            attachments: Vec::new(),
+            catalog_complete: true,
+            body_requested: false,
+            body_complete: false,
+        });
+        let graph_id = remote_message_id(&account, &graph).expect("graph id");
+        assert!(graph_id.as_str().starts_with("work.graph."));
     }
 
     #[test]
@@ -3691,6 +4296,7 @@ mod tests {
         open_workspace(database_path.clone()).expect("seed workspace");
         let account = mail_account_from_input(MailAccountInput {
             id: "incoming-test".into(),
+            provider: "imap".into(),
             display_name: "Incoming Test".into(),
             email: "user@example.org".into(),
             imap_host: "imap.example.org".into(),
@@ -3732,6 +4338,7 @@ aW5jb21pbmcgYnl0ZXM=
             body_requested: true,
             body_complete: true,
         };
+        let remote = CachedRemoteInput::from(remote);
         let message_id = remote_message_id(&account, &remote).expect("message id");
         let mut store = open_profile_store(&path).expect("storage");
         store.save_mail_account(&account).expect("save account");
@@ -3740,6 +4347,7 @@ aW5jb21pbmcgYnl0ZXM=
                 id: remote_mailbox_id(&account, "INBOX").expect("mailbox id"),
                 account_id: account.id.clone(),
                 display_name: "INBOX".into(),
+                remote_name: Some("INBOX".into()),
                 role: MailboxRole::Inbox,
                 unread_count: 0,
                 total_count: 0,
@@ -3794,6 +4402,7 @@ aW5jb21pbmcgYnl0ZXM=
         open_workspace(database_path.clone()).expect("seed workspace");
         let account = mail_account_from_input(MailAccountInput {
             id: "server-attachment-test".into(),
+            provider: "imap".into(),
             display_name: "Server Attachment Test".into(),
             email: "user@example.org".into(),
             imap_host: "imap.example.org".into(),
@@ -3824,6 +4433,7 @@ aW5jb21pbmcgYnl0ZXM=
             body_requested: true,
             body_complete: true,
         };
+        let remote = CachedRemoteInput::from(remote);
         let message_id = remote_message_id(&account, &remote).expect("message id");
         let mut store = open_profile_store(&path).expect("storage");
         store.save_mail_account(&account).expect("save account");
@@ -3832,6 +4442,7 @@ aW5jb21pbmcgYnl0ZXM=
                 id: remote_mailbox_id(&account, "INBOX").expect("mailbox id"),
                 account_id: account.id.clone(),
                 display_name: "INBOX".into(),
+                remote_name: Some("INBOX".into()),
                 role: MailboxRole::Inbox,
                 unread_count: 0,
                 total_count: 0,
@@ -3877,6 +4488,7 @@ aW5jb21pbmcgYnl0ZXM=
             database_path.clone(),
             MailAccountInput {
                 id: "oauth-account".into(),
+                provider: "imap".into(),
                 display_name: "Exchange Online".into(),
                 email: "alex@example.org".into(),
                 imap_host: "outlook.office365.com".into(),
@@ -3941,6 +4553,7 @@ aW5jb21pbmcgYnl0ZXM=
             source_path.clone(),
             MailAccountInput {
                 id: "portable-account".into(),
+                provider: "imap".into(),
                 display_name: "Portable Account".into(),
                 email: "portable@example.org".into(),
                 imap_host: "imap.example.org".into(),
@@ -3984,6 +4597,7 @@ aW5jb21pbmcgYnl0ZXM=
         let store = open_profile_store(&target).expect("restored storage");
         let account = mail_account_from_input(MailAccountInput {
             id: "portable-account".into(),
+            provider: "imap".into(),
             display_name: "Portable Account".into(),
             email: "portable@example.org".into(),
             imap_host: "imap.example.org".into(),

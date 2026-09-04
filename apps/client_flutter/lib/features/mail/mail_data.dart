@@ -214,6 +214,7 @@ class LocalContactItem {
 class MailAccountConfig {
   const MailAccountConfig({
     required this.id,
+    this.provider = 'imap',
     required this.displayName,
     required this.email,
     required this.imapHost,
@@ -230,6 +231,10 @@ class MailAccountConfig {
   });
 
   final String id;
+
+  /// `imap` for the IMAP/SMTP connector or `microsoft_graph` for Exchange
+  /// Online through the Microsoft Graph API.
+  final String provider;
   final String displayName;
   final String email;
   final String imapHost;
@@ -1066,6 +1071,7 @@ WorkspaceDataSnapshot _workspaceData(rust.WorkspaceSnapshot snapshot) {
         .map(
           (account) => MailAccountConfig(
             id: account.id,
+            provider: account.provider,
             displayName: account.displayName,
             email: account.email,
             imapHost: account.imapHost,
@@ -1137,6 +1143,7 @@ DemoMessage _messageData(rust.MessageDto message) {
 rust.MailAccountInput _mailAccountInput(MailAccountConfig account) {
   return rust.MailAccountInput(
     id: account.id,
+    provider: account.provider,
     displayName: account.displayName,
     email: account.email,
     imapHost: account.imapHost,

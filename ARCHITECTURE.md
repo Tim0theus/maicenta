@@ -88,9 +88,9 @@ The current core is split into:
 - `maicenta-application`: ports for durable mail and personal workspace storage
 - `maicenta-storage`: SQLite schema migrations and transactional persistence
   for mailboxes, message summaries, flags, sanitized message bodies, and
-  attachment metadata, derived mailbox counters, remote IMAP identities, and a
-  compacted mutation queue, plus account configuration, calendar entries,
-  tasks, and contacts
+  attachment metadata, derived mailbox counters, provider-neutral remote
+  identities (IMAP UID pairs or opaque provider IDs), and a compacted mutation
+  queue, plus account configuration, calendar entries, tasks, and contacts
 - `maicenta-vault`: profile master-key handling, OS credential-store access,
   authenticated attachment objects, legacy plaintext migration, and portable
   password-protected profile archives
@@ -101,10 +101,14 @@ The current core is split into:
   multi-folder synchronization, MIME `BODYSTRUCTURE` extraction, validated
   section downloads through `BODY.PEEK`, UID-safe flag/move application, SMTP
   submission over TLS or STARTTLS, password and XOAUTH2 SASL authentication,
-  plus temporary legacy credential migration
+  shared RFC 5322 rendering of outgoing messages, plus temporary legacy
+  credential migration
+- `maicenta-graph-connector`: Microsoft Graph mail synchronization with
+  per-folder delta cursors, immutable message IDs, synthetic MIME for the
+  renderer, on-demand attachment download, mutations, drafts, and `sendMail`
 - `maicenta-bridge`: generated, type-safe Flutter/Rust bindings for workspace
-  snapshots, account operations, synchronization, SMTP submission, attachment
-  export, and local mutations
+  snapshots, account operations, provider-dispatched synchronization, message
+  submission, attachment export, and local mutations
 
 Concrete IMAP, SMTP, vault, keychain, and Flutter-bridge implementations belong in
 adapter crates outside the domain and application packages. This keeps domain
@@ -140,12 +144,33 @@ endpoints so an imported profile cannot turn the bridge into an arbitrary POST
 client. IMAP uses SASL XOAUTH2 and SMTP restricts authentication to XOAUTH2 for
 OAuth accounts.
 
-Microsoft 365/Exchange Online is currently a standards connector using
-`outlook.office365.com` IMAP and `smtp.office365.com` SMTP. Microsoft Graph,
-EWS, on-premises Exchange discovery, shared/delegated mailbox semantics, and
-Exchange calendar/contact data require separate connectors and are not implied
-by this implementation. A connection test authenticates
-to IMAP and opens an authenticated SMTP connection without sending a message.
+Microsoft 365/Exchange Online has two connectors. The standards connector uses
+`outlook.office365.com` IMAP and `smtp.office365.com` SMTP with XOAUTH2. The
+Microsoft Graph connector (`connectors/microsoft_graph`) covers tenants where
+IMAP/SMTP AUTH is disabled: it discovers folders and their well-known roles,
+runs per-folder delta queries whose opaque `nextLink`/`deltaLink` cursor is
+persisted as the mailbox sync state, requests bodies as HTML and wraps them
+with bounded inline images into a synthetic RFC 5322 message so the existing
+renderer and `cid:` resolution apply unchanged, lists normal attachments by ID
+for on-demand download, applies read/flag/move mutations, uploads drafts as
+MIME, and sends through `sendMail`. Every request uses immutable IDs so a
+message keeps its identity across folder moves. Graph change notifications
+need a public webhook, so Graph accounts rely on the regular polling interval.
+An account records its provider (`imap` or `microsoft_graph`); the bridge
+dispatches synchronization, content download, mutations, drafts, and sending
+on that field. EWS, on-premises Exchange discovery, shared/delegated mailbox
+semantics, and Exchange calendar/contact data remain separate future work.
+A connection test authenticates to IMAP and opens an authenticated SMTP
+connection without sending a message, or reads the Graph inbox folder.
+
+Remote message identity is provider-neutral. Storage keeps exactly one of an
+IMAP `UIDVALIDITY`/`UID` pair or an opaque provider ID per cached message, per
+queued mutation, and per queued draft operation; reconciliation and vanished
+removal compare complete identities, so a UIDVALIDITY change or a Graph delta
+removal is handled by the same code path. Mailboxes carry a separate
+`remote_name` (the IMAP mailbox name or the Graph folder ID) next to their
+display name, and mailbox sync states hold either the IMAP triple or a delta
+cursor.
 The current synchronization pass discovers selectable folders, prioritizes
 standard roles, and inspects up to 25 recent message bodies from every
 subscribed folder. A first UID fetch retrieves flags, headers, and
@@ -575,10 +600,10 @@ core/
   search/               Local search
   plugins/              Extension runtime and permissions
 connectors/
-  mail/                 IMAP, SMTP, and legacy credential migration adapter
+  mail/                 IMAP, SMTP, MIME rendering, and legacy credential migration
+  microsoft_graph/      Microsoft Graph mail connector for Exchange Online
   caldav/
   carddav/
-  microsoft_graph/
 platform/
   windows/
   macos/

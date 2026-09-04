@@ -1,0 +1,21 @@
+[package]
+name = "maicenta-graph-connector"
+version = "0.1.0"
+description = "Microsoft Graph mail connector for Exchange Online tenants without IMAP/SMTP."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.22.1"
+maicenta-domain = { path = "../../core/domain" }
+maicenta-mail-connector = { path = "../mail" }
+reqwest = { version = "0.12.22", default-features = false, features = ["json", "rustls-tls"] }
+serde_json = "1.0.142"
+tokio = { version = "1.47.1", features = ["time"] }
+
+[dev-dependencies]
+maicenta-rendering = { path = "../../core/rendering" }
+
+[lints]
+workspace = true

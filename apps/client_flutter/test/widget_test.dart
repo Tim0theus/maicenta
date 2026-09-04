@@ -2202,9 +2202,76 @@ void main() {
 
     expect(testedTokens, same(tokens));
     expect(testedAccount?.authentication, 'oauth2');
+    expect(testedAccount?.provider, 'imap');
     expect(testedAccount?.oauthProvider, 'microsoft365');
     expect(testedAccount?.imapHost, 'outlook.office365.com');
     expect(testedAccount?.smtpHost, 'smtp.office365.com');
+    expect(find.textContaining('erfolgreich verbunden'), findsOneWidget);
+  });
+
+  testWidgets('connects Exchange Online through the Microsoft Graph API', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    MailAccountConfig? testedAccount;
+    final tokens = MailOAuthTokens(
+      provider: MailOAuthProvider.microsoftGraph,
+      clientId: 'public-client-id',
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      expiresAt: DateTime.utc(2030),
+      tokenEndpoint:
+          'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+      scopes: 'offline_access https://graph.microsoft.com/Mail.ReadWrite',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AccountSetupDialog(
+            onTest: (_, _) async {},
+            onAuthorizeOAuth: (provider, address) async {
+              expect(provider, MailOAuthProvider.microsoftGraph);
+              return tokens;
+            },
+            onTestOAuth: (account, authorizedTokens) async {
+              testedAccount = account;
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Kontoname'),
+      'Exchange Graph',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'E-Mail-Adresse'),
+      'alex@example.org',
+    );
+    await tester.tap(find.text('OAuth 2.0'));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('account-oauth-provider')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.text(MailOAuthProvider.microsoftGraph.displayName).last,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('account-graph-settings')), findsOneWidget);
+    expect(find.byKey(const Key('account-manual-settings')), findsNothing);
+    expect(find.textContaining('Microsoft Graph API'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('account-oauth-login')));
+    await tester.pumpAndSettle();
+
+    expect(testedAccount?.authentication, 'oauth2');
+    expect(testedAccount?.provider, 'microsoft_graph');
+    expect(testedAccount?.oauthProvider, 'microsoft_graph');
+    expect(testedAccount?.imapUsername, 'alex@example.org');
     expect(find.textContaining('erfolgreich verbunden'), findsOneWidget);
   });
 }

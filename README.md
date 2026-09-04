@@ -196,7 +196,9 @@ For Microsoft 365/Exchange Online and Google Workspace/Gmail, select
 **OAuth 2.0** in the account dialog. MAICENTA opens a platform authentication
 session, uses an
 Authorization Code flow with PKCE, validates IMAP and SMTP via XOAUTH2, and
-stores access and refresh tokens only in the encrypted profile. A native app
+stores access and refresh tokens only in the encrypted profile. For Microsoft
+365 the provider list offers an **IMAP/SMTP** and a **Graph API** variant; pick
+the Graph variant when the tenant has disabled IMAP or SMTP AUTH. A native app
 does not contain an OAuth client secret. Development builds require public
 client registrations and can receive their client IDs as follows:
 
@@ -218,10 +220,14 @@ Current account limitations are important:
 
 - Authentication supports a password/app password or OAuth 2.0 with PKCE and
   automatic refresh for Microsoft 365/Exchange Online and Google. Exchange
-  Online currently uses its standards endpoints (IMAP and SMTP with XOAUTH2),
-  not Microsoft Graph. On-premises Exchange/EWS, shared mailboxes, delegation,
-  tenant administration, Graph mail, and Exchange calendar/contact sync are
-  not implemented yet.
+  Online can be connected in two ways: through its standards endpoints (IMAP
+  and SMTP with XOAUTH2) or through the Microsoft Graph API for tenants where
+  IMAP/SMTP AUTH is disabled. The Graph variant requires the delegated
+  `Mail.ReadWrite` and `Mail.Send` permissions on the same app registration,
+  synchronizes with per-folder delta queries, and has no push notifications;
+  the regular polling interval applies. On-premises Exchange/EWS, shared
+  mailboxes, delegation, tenant administration, and Exchange calendar/contact
+  sync are not implemented yet.
 - Incoming synchronization reads every subscribed selectable folder and
   downloads up to 25 recent bounded display bodies per folder on the first
   pass, then up to 25 new or previously incomplete bodies per pass. Compact

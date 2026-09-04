@@ -7,7 +7,8 @@ change as the project evolves.
 ## Current status
 
 MAICENTA has a runnable desktop alpha with SQLite-backed mail and personal
-workspace data, real password- and OAuth-based IMAP/SMTP connectivity, a rich-text
+workspace data, real password- and OAuth-based IMAP/SMTP connectivity, a
+Microsoft Graph connector for Exchange Online tenants without IMAP, a rich-text
 composer, and a standards-oriented safe rendering foundation. Account sync is
 not production-ready and there is no stable release yet.
 
@@ -90,9 +91,16 @@ The first usable release will focus on a stable, local desktop mail client.
 - [x] Add Authorization Code + PKCE sign-in, encrypted refresh-token storage,
   automatic token refresh, and IMAP/SMTP XOAUTH2 for Microsoft 365/Exchange
   Online and Google, with provider-specific setup guidance.
-- [ ] Add Microsoft Graph mail as a separate connector where IMAP/SMTP is
-  disabled, plus on-premises Exchange/EWS discovery and an explicit support
-  policy.
+- [x] Generalize remote message identity from IMAP UIDs to provider IDs so
+  API-based connectors share the same storage, mutation queue, and draft
+  lifecycle as IMAP.
+- [x] Add Microsoft Graph mail as a separate connector for Exchange Online
+  tenants where IMAP/SMTP AUTH is disabled: per-folder delta synchronization,
+  immutable message IDs, bounded HTML bodies with inline images, on-demand
+  attachments, read/flag/move mutations, server drafts, and sending.
+- [ ] Add on-premises Exchange/EWS discovery and an explicit support policy.
+  Exchange Online retires EWS in October 2026, so EWS is relevant only for
+  on-premises servers.
 - [x] Upload new and edited drafts with an encrypted offline queue, stable
   retry identity, exact UID/UIDVALIDITY replacement, and server-draft cleanup
   after sending.

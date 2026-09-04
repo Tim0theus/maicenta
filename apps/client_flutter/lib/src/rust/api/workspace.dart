@@ -6,8 +6,9 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `attachment_content_type`, `attachment_object_path`, `cache_remote_message`, `calendar_event_dto`, `cleanup_import_backups`, `compact_preview`, `connector_credential`, `contact_dto`, `copy_local_attachment`, `current_timestamp_ms`, `draft_recipient_list`, `import_backup_path`, `install_staged_profile`, `load_account_credential`, `load_outgoing_attachments`, `load_snapshot`, `load_stored_outgoing_attachments`, `mail_account_dto`, `mail_account_from_input`, `mailbox_dto`, `mailbox_role_name`, `message_dto`, `message_dtos`, `migrate_legacy_credentials`, `open_profile_store`, `parse_transport_security`, `persist_attachment_objects`, `plain_text_as_html`, `profile_object_root`, `profile_vault`, `prototype_body`, `prototype_mailbox`, `prototype_messages`, `remote_mailbox_id`, `remote_message_id`, `remove_attachment_objects`, `remove_oauth_secrets`, `replace_cached_vault`, `required_secret`, `rollback_imported_profile`, `seed_prototype`, `synchronize_account`, `synchronize_pending_drafts`, `synchronized_draft_ids`, `task_dto`, `transport_security_name`, `upgrade_prototype_content`, `validate_combined_outgoing_attachments`, `validate_draft_metadata`, `validate_oauth_token_endpoint`, `validate_oauth_token_input`, `validate_outgoing_attachment_set`, `validated_display_name`, `validated_server_name`, `validated_text`, `write_exported_attachment`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AccountSyncReport`, `StoredMailCredential`
+// These functions are ignored because they are not marked as `pub`: `attachment_content_type`, `attachment_object_path`, `cache_remote_message`, `calendar_event_dto`, `cleanup_import_backups`, `compact_preview`, `connector_credential`, `contact_dto`, `copy_local_attachment`, `current_timestamp_ms`, `draft_recipient_list`, `imap_identities`, `import_backup_path`, `install_staged_profile`, `load_account_credential`, `load_outgoing_attachments`, `load_snapshot`, `load_stored_outgoing_attachments`, `mail_account_dto`, `mail_account_from_input`, `mail_provider_name`, `mailbox_dto`, `mailbox_role_name`, `message_dto`, `message_dtos`, `migrate_legacy_credentials`, `oauth_access_token`, `open_profile_store`, `parse_mail_provider`, `parse_transport_security`, `persist_attachment_objects`, `plain_text_as_html`, `profile_object_root`, `profile_vault`, `prototype_body`, `prototype_mailbox`, `prototype_messages`, `remote_mailbox_id`, `remote_message_id`, `remove_attachment_objects`, `remove_oauth_secrets`, `replace_cached_vault`, `required_secret`, `rollback_imported_profile`, `seed_prototype`, `synchronize_account`, `synchronize_graph_account`, `synchronize_imap_account`, `synchronize_pending_drafts`, `synchronized_draft_ids`, `task_dto`, `transport_security_name`, `upgrade_prototype_content`, `validate_combined_outgoing_attachments`, `validate_draft_metadata`, `validate_oauth_provider_for_account`, `validate_oauth_token_endpoint`, `validate_oauth_token_input`, `validate_outgoing_attachment_set`, `validated_display_name`, `validated_server_name`, `validated_text`, `write_exported_attachment`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AccountSyncReport`, `CachedRemoteInput`, `PendingDraftUpload`, `RemoteAttachmentDescriptor`, `StoredMailCredential`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `from`, `from`
 
 /// Opens the local profile database and returns its mail workspace snapshot.
 ///
@@ -690,6 +691,9 @@ class LocalTaskInput {
 
 class MailAccountDto {
   final String id;
+
+  /// `imap` for the standards connector or `microsoft_graph`.
+  final String provider;
   final String displayName;
   final String email;
   final String imapHost;
@@ -706,6 +710,7 @@ class MailAccountDto {
 
   const MailAccountDto({
     required this.id,
+    required this.provider,
     required this.displayName,
     required this.email,
     required this.imapHost,
@@ -724,6 +729,7 @@ class MailAccountDto {
   @override
   int get hashCode =>
       id.hashCode ^
+      provider.hashCode ^
       displayName.hashCode ^
       email.hashCode ^
       imapHost.hashCode ^
@@ -744,6 +750,7 @@ class MailAccountDto {
       other is MailAccountDto &&
           runtimeType == other.runtimeType &&
           id == other.id &&
+          provider == other.provider &&
           displayName == other.displayName &&
           email == other.email &&
           imapHost == other.imapHost &&
@@ -759,10 +766,15 @@ class MailAccountDto {
           lastSyncAtMs == other.lastSyncAtMs;
 }
 
-/// Complete user-supplied IMAP/SMTP configuration. `password` is accepted only
+/// Complete user-supplied account configuration. `password` is accepted only
 /// by credential-related functions and is never included in snapshots.
+///
+/// `provider` selects the connector: `imap` uses the IMAP/SMTP endpoints,
+/// `microsoft_graph` synchronizes through the Graph API and keeps the endpoint
+/// fields only as a documented fallback description.
 class MailAccountInput {
   final String id;
+  final String provider;
   final String displayName;
   final String email;
   final String imapHost;
@@ -776,6 +788,7 @@ class MailAccountInput {
 
   const MailAccountInput({
     required this.id,
+    required this.provider,
     required this.displayName,
     required this.email,
     required this.imapHost,
@@ -791,6 +804,7 @@ class MailAccountInput {
   @override
   int get hashCode =>
       id.hashCode ^
+      provider.hashCode ^
       displayName.hashCode ^
       email.hashCode ^
       imapHost.hashCode ^
@@ -808,6 +822,7 @@ class MailAccountInput {
       other is MailAccountInput &&
           runtimeType == other.runtimeType &&
           id == other.id &&
+          provider == other.provider &&
           displayName == other.displayName &&
           email == other.email &&
           imapHost == other.imapHost &&

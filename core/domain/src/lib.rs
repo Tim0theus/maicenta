@@ -16,4 +16,6 @@ pub use mail::{
     MessageRecipients, MessageSummary,
 };
 pub use modules::{ModuleState, WorkspaceModule};
-pub use workspace::{CalendarEvent, Contact, MailAccount, TaskItem, TransportSecurity};
+pub use workspace::{
+    CalendarEvent, Contact, MailAccount, MailProvider, TaskItem, TransportSecurity,
+};
