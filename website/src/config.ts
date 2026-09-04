@@ -11,7 +11,7 @@ export const site = {
   issues: 'https://github.com/Tim0theus/maicenta/issues',
   security: 'https://github.com/Tim0theus/maicenta/blob/main/SECURITY.md',
   license: 'https://github.com/Tim0theus/maicenta/blob/main/LICENSE',
-  contactEmail: 'beckmann.timm@gmx.de',
+  contactEmail: 'kontakt@maicenta.com',
 } as const;
 
 /**

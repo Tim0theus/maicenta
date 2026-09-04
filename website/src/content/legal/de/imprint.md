@@ -13,7 +13,7 @@ Mozartstraße 2
 Deutschland
 
 **Kontakt**
-E-Mail: [beckmann.timm@gmx.de](mailto:beckmann.timm@gmx.de)
+E-Mail: [kontakt@maicenta.com](mailto:kontakt@maicenta.com)
 Telefon: +49 151 1 968 38 28
 
 **Verantwortlich für den Inhalt nach § 18 Abs. 2 MStV**

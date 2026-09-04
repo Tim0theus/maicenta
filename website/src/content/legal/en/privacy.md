@@ -9,7 +9,7 @@ Timotheus Technology
 Timm Beckmann
 Mozartstraße 2
 82256 Fürstenfeldbruck, Germany
-Email: [beckmann.timm@gmx.de](mailto:beckmann.timm@gmx.de)
+Email: [kontakt@maicenta.com](mailto:kontakt@maicenta.com)
 
 ## The short version
 
