@@ -2968,8 +2968,33 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
       title: Text(isEditing ? 'Konto bearbeiten' : 'E-Mail-Konto hinzufügen'),
       content: SizedBox(
         width: 650,
-        child: SingleChildScrollView(
-          child: identityStep ? buildIdentityStep() : buildMethodStep(),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Flexible(
+              child: SingleChildScrollView(
+                child: identityStep ? buildIdentityStep() : buildMethodStep(),
+              ),
+            ),
+            // Progress and status stay visible regardless of scroll position;
+            // a hidden result reads as "nothing happened".
+            if (busy) ...[
+              const SizedBox(height: 10),
+              const LinearProgressIndicator(),
+            ],
+            if (status != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                status!,
+                key: const Key('account-status'),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: statusSuccess ? Colors.green.shade700 : null,
+                ),
+              ),
+            ],
+          ],
         ),
       ),
       actions: identityStep
@@ -2995,26 +3020,22 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
                   onPressed: busy ? null : backToIdentity,
                   child: const Text('Zurück'),
                 ),
-              OutlinedButton(
-                key: const Key('account-test'),
-                onPressed: busy ? null : testConnection,
-                child: Text(
-                  method.usesOAuth
-                      ? 'Anmelden und testen'
-                      : 'Verbindung testen',
+              if (!method.usesOAuth || isEditing)
+                OutlinedButton(
+                  key: const Key('account-test'),
+                  onPressed: busy ? null : testConnection,
+                  child: Text(
+                    method.usesOAuth
+                        ? 'Anmelden und testen'
+                        : 'Verbindung testen',
+                  ),
                 ),
-              ),
-              FilledButton(
-                key: const Key('account-save'),
-                onPressed: busy ? null : save,
-                child: Text(
-                  isEditing
-                      ? 'Speichern'
-                      : method.usesOAuth
-                      ? 'Anmelden und hinzufügen'
-                      : 'Konto hinzufügen',
+              if (!method.usesOAuth || isEditing)
+                FilledButton(
+                  key: const Key('account-save'),
+                  onPressed: busy ? null : save,
+                  child: Text(isEditing ? 'Speichern' : 'Konto hinzufügen'),
                 ),
-              ),
             ],
     );
   }
@@ -3046,21 +3067,6 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
             smtpUsername.text = value;
           },
         ),
-        if (busy) ...[
-          const SizedBox(height: 10),
-          const LinearProgressIndicator(),
-        ],
-        if (status != null) ...[
-          const SizedBox(height: 10),
-          Text(
-            status!,
-            key: const Key('account-status'),
-            style: TextStyle(
-              fontSize: 12,
-              color: statusSuccess ? Colors.green.shade700 : null,
-            ),
-          ),
-        ],
       ],
     );
   }
@@ -3131,21 +3137,6 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
               ),
           ],
         ),
-        if (busy) ...[
-          const SizedBox(height: 10),
-          const LinearProgressIndicator(),
-        ],
-        if (status != null) ...[
-          const SizedBox(height: 10),
-          Text(
-            status!,
-            key: const Key('account-status'),
-            style: TextStyle(
-              fontSize: 12,
-              color: statusSuccess ? Colors.green.shade700 : null,
-            ),
-          ),
-        ],
       ],
     );
   }
@@ -3157,9 +3148,13 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
           ? 'Mit Microsoft anmelden'
           : 'Mit Google anmelden';
       return [
-        FilledButton.tonalIcon(
+        FilledButton.icon(
           key: const Key('account-oauth-login'),
-          onPressed: busy ? null : connectOAuth,
+          // Adding a new account: sign in, verify, and finish in one step.
+          // Editing: only refresh the sign-in; Speichern closes the dialog.
+          onPressed: busy
+              ? null
+              : () => connectOAuth(closeAfterSuccess: !isEditing),
           icon: const Icon(Icons.open_in_browser, size: 18),
           label: Text(
             widget.existing?.authentication == 'oauth2'
@@ -3168,11 +3163,16 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
           ),
         ),
         const SizedBox(height: 6),
-        const Text(
-          'Die Anmeldung öffnet den Browser deines Systems. MAICENTA sieht '
-          'dein Passwort nie; es speichert nur die Zugangsschlüssel im '
-          'verschlüsselten Profil.',
-          style: TextStyle(fontSize: 12),
+        Text(
+          isEditing
+              ? 'Die Anmeldung öffnet den Browser deines Systems. MAICENTA '
+                    'sieht dein Passwort nie; es speichert nur die '
+                    'Zugangsschlüssel im verschlüsselten Profil.'
+              : 'Die Anmeldung öffnet den Browser deines Systems. Nach der '
+                    'Bestätigung prüft MAICENTA den Zugriff und legt das Konto '
+                    'an. Dein Passwort sieht MAICENTA nie; es speichert nur '
+                    'die Zugangsschlüssel im verschlüsselten Profil.',
+          style: const TextStyle(fontSize: 12),
         ),
       ];
     }

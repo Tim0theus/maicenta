@@ -2132,6 +2132,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     MailAccountConfig? testedAccount;
     MailOAuthTokens? testedTokens;
+    AccountSetupResult? result;
     final tokens = MailOAuthTokens(
       provider: MailOAuthProvider.microsoft365,
       clientId: 'public-client-id',
@@ -2145,23 +2146,34 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: AccountSetupDialog(
-            onDetect: (email) async => _microsoftDetection(email),
-            onTest: (_, _) async {},
-            onAuthorizeOAuth: (provider, address) async {
-              expect(provider, MailOAuthProvider.microsoft365);
-              expect(address, 'alex@example.org');
-              return tokens;
+        home: Builder(
+          builder: (context) => TextButton(
+            key: const Key('open-oauth-account'),
+            onPressed: () async {
+              result = await showDialog<AccountSetupResult>(
+                context: context,
+                builder: (_) => AccountSetupDialog(
+                  onDetect: (email) async => _microsoftDetection(email),
+                  onTest: (_, _) async {},
+                  onAuthorizeOAuth: (provider, address) async {
+                    expect(provider, MailOAuthProvider.microsoft365);
+                    expect(address, 'alex@example.org');
+                    return tokens;
+                  },
+                  onTestOAuth: (account, authorizedTokens) async {
+                    testedAccount = account;
+                    testedTokens = authorizedTokens;
+                  },
+                ),
+              );
             },
-            onTestOAuth: (account, authorizedTokens) async {
-              testedAccount = account;
-              testedTokens = authorizedTokens;
-            },
+            child: const Text('Öffnen'),
           ),
         ),
       ),
     );
+    await tester.tap(find.byKey(const Key('open-oauth-account')));
+    await tester.pumpAndSettle();
     await _enterIdentity(tester, 'Exchange', 'alex@example.org');
     await tester.tap(find.byKey(const Key('account-continue')));
     await tester.pumpAndSettle();
@@ -2179,7 +2191,10 @@ void main() {
     expect(testedAccount?.oauthProvider, 'microsoft365');
     expect(testedAccount?.imapHost, 'outlook.office365.com');
     expect(testedAccount?.smtpHost, 'smtp.office365.com');
-    expect(find.textContaining('erfolgreich verbunden'), findsOneWidget);
+    // A successful sign-in finishes the setup without a second click.
+    expect(result?.oauthTokens, same(tokens));
+    expect(result?.account.oauthProvider, 'microsoft365');
+    expect(find.byKey(const Key('account-method-step')), findsNothing);
   });
 
   testWidgets('recommends the Microsoft Graph API for Microsoft 365 domains', (
@@ -2190,6 +2205,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     MailAccountConfig? testedAccount;
+    AccountSetupResult? result;
     final tokens = MailOAuthTokens(
       provider: MailOAuthProvider.microsoftGraph,
       clientId: 'public-client-id',
@@ -2203,21 +2219,32 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: AccountSetupDialog(
-            onDetect: (email) async => _microsoftDetection(email),
-            onTest: (_, _) async {},
-            onAuthorizeOAuth: (provider, address) async {
-              expect(provider, MailOAuthProvider.microsoftGraph);
-              return tokens;
+        home: Builder(
+          builder: (context) => TextButton(
+            key: const Key('open-graph-account'),
+            onPressed: () async {
+              result = await showDialog<AccountSetupResult>(
+                context: context,
+                builder: (_) => AccountSetupDialog(
+                  onDetect: (email) async => _microsoftDetection(email),
+                  onTest: (_, _) async {},
+                  onAuthorizeOAuth: (provider, address) async {
+                    expect(provider, MailOAuthProvider.microsoftGraph);
+                    return tokens;
+                  },
+                  onTestOAuth: (account, authorizedTokens) async {
+                    testedAccount = account;
+                  },
+                ),
+              );
             },
-            onTestOAuth: (account, authorizedTokens) async {
-              testedAccount = account;
-            },
+            child: const Text('Öffnen'),
           ),
         ),
       ),
     );
+    await tester.tap(find.byKey(const Key('open-graph-account')));
+    await tester.pumpAndSettle();
     await _enterIdentity(tester, 'Exchange Graph', 'alex@example.org');
     await tester.tap(find.byKey(const Key('account-continue')));
     await tester.pumpAndSettle();
@@ -2228,6 +2255,9 @@ void main() {
     expect(find.byKey(const Key('account-manual-settings')), findsNothing);
     expect(find.byKey(const Key('account-password')), findsNothing);
     expect(find.text('Empfohlen'), findsOneWidget);
+    // One primary action only; no duplicate "Anmelden und testen" row.
+    expect(find.byKey(const Key('account-test')), findsNothing);
+    expect(find.byKey(const Key('account-save')), findsNothing);
 
     await tester.tap(find.byKey(const Key('account-oauth-login')));
     await tester.pumpAndSettle();
@@ -2236,7 +2266,8 @@ void main() {
     expect(testedAccount?.provider, 'microsoft_graph');
     expect(testedAccount?.oauthProvider, 'microsoft_graph');
     expect(testedAccount?.imapUsername, 'alex@example.org');
-    expect(find.textContaining('erfolgreich verbunden'), findsOneWidget);
+    expect(result?.account.provider, 'microsoft_graph');
+    expect(result?.oauthTokens, same(tokens));
   });
 }
 
