@@ -3,14 +3,13 @@ title: Datenschutzerklärung
 description: Wie maicenta.com und die MAICENTA-Desktop-App mit personenbezogenen Daten umgehen.
 ---
 
-> **TODO vor dem Livegang:** Angaben zum Verantwortlichen eintragen und prüfen, ob der Abschnitt zum Hosting-Anbieter dem tatsächlichen Deployment entspricht.
-
 ## Verantwortlicher
 
-[Vollständiger Name]
-[Straße und Hausnummer]
-[Postleitzahl und Ort], Deutschland
-E-Mail: [Kontakt-E-Mail-Adresse]
+Timotheus Technology
+Timm Beckmann
+Mozartstraße 2
+82256 Fürstenfeldbruck, Deutschland
+E-Mail: [kontakt@maicenta.com](mailto:kontakt@maicenta.com)
 
 ## Die Kurzfassung
 
@@ -22,7 +21,7 @@ E-Mail: [Kontakt-E-Mail-Adresse]
 
 Diese Website ist eine statische Seite und wird über einen Hosting- und Content-Delivery-Anbieter ausgeliefert:
 
-[Hosting-Anbieter, z. B. Cloudflare, Inc., 101 Townsend St, San Francisco, CA 94107, USA – Cloudflare Pages]
+Cloudflare, Inc., 101 Townsend St, San Francisco, CA 94107, USA (Cloudflare Workers)
 
 Beim Aufruf der Seite verarbeitet der Anbieter Verbindungsdaten, die zur Auslieferung technisch erforderlich sind: IP-Adresse, Datum und Uhrzeit des Zugriffs, aufgerufene URL, HTTP-Status, übertragene Datenmenge, Referrer, Browser und Betriebssystem. Die Verarbeitung dient der sicheren Bereitstellung der Website und der Missbrauchserkennung (Art. 6 Abs. 1 lit. f DSGVO). Der Anbieter speichert Logs für einen begrenzten Zeitraum gemäß seiner eigenen Aufbewahrungsrichtlinie. Übermittlungen in die USA sind durch das EU-US Data Privacy Framework und Standardvertragsklauseln abgesichert.
 
@@ -59,4 +58,4 @@ Du hast das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung der Vera
 
 Wir aktualisieren diese Erklärung, wenn sich Website oder App ändern. Die aktuelle Fassung ist immer hier veröffentlicht.
 
-Stand: [Datum]
+Stand: 4. September 2026

@@ -16,7 +16,7 @@ src/
   content/legal/<lang>/  Imprint and privacy policy (Markdown)
 public/
   branding/              Copies of assets/branding used by the site
-  _headers               Security headers for Cloudflare Pages
+  _headers               Security headers for the static assets
 ```
 
 Routes are `/en/...` and `/de/...`. Keep documentation slugs identical in both
@@ -60,13 +60,6 @@ URLs. Settings in the Cloudflare project:
 `.github/workflows/website.yml` only verifies that the site type-checks and
 builds; it does not deploy. Point the `maicenta.com` custom domain at the
 Worker in the Cloudflare dashboard.
-
-## Before going live
-
-- Fill in the placeholders in `src/content/legal/*/imprint.md` and `privacy.md`.
-- Set the real contact address in `src/config.ts`.
-- Confirm the hosting provider paragraph in the privacy policy matches the
-  actual deployment.
 
 ## License
 
