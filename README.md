@@ -61,8 +61,8 @@ their data unless the user explicitly chooses to remove it.
 ## Current status
 
 The repository contains a runnable local desktop alpha. In addition to the
-offline demonstration mailbox, it can configure multiple password-based
-IMAP/SMTP accounts, discover their folders, progressively catalogue compact
+offline demonstration mailbox, it can configure multiple password- or
+OAuth-backed IMAP/SMTP accounts, discover their folders, progressively catalogue compact
 headers from every subscribed selectable folder, download a bounded set of recent message
 bodies, and send standards-oriented HTML mail with a plain-text alternative and
 file attachments through SMTP. Incoming sync retains sender, recipient,
@@ -117,6 +117,13 @@ their account heading to remove the shortcut. The exact favorite order is
 stored in the encrypted profile. Files dropped from Finder, Explorer, or a
 Linux file manager onto the compose window become attachments and follow the
 same ten-file/18-MiB validation as the native file picker.
+
+Message rows also provide an Outlook-style right-click menu for opening,
+replying, forwarding, changing read and follow-up state, archiving, moving,
+deleting, and moving messages into or out of the account's spam folder.
+Account-local changes use the same durable IMAP operation queue as drag and
+drop, so they remain available offline and synchronize when the account is
+online again.
 
 The desktop chrome, folder and message panes, dialogs, composer, and dedicated
 message window support a profile-specific dark mode. It can be changed through
@@ -185,10 +192,36 @@ sanitized HTML, blocks active and remote content, and does not automatically
 open external links. Reply and forward actions open a prefilled rich-text
 compose window.
 
+For Microsoft 365/Exchange Online and Google Workspace/Gmail, select
+**OAuth 2.0** in the account dialog. MAICENTA opens a platform authentication
+session, uses an
+Authorization Code flow with PKCE, validates IMAP and SMTP via XOAUTH2, and
+stores access and refresh tokens only in the encrypted profile. A native app
+does not contain an OAuth client secret. Development builds require public
+client registrations and can receive their client IDs as follows:
+
+```sh
+flutter run -d macos \
+  --dart-define=MAICENTA_MICROSOFT_OAUTH_CLIENT_ID=<public-client-id> \
+  --dart-define=MAICENTA_GOOGLE_OAUTH_CLIENT_ID=<public-client-id>
+```
+
+Register `com.maicenta.app:/oauth2redirect` for macOS and Android builds. On
+Windows and Linux, register `http://localhost:43821/oauth2redirect`; those
+targets use the external browser and a temporary loopback listener instead of
+an embedded WebView. A provider-specific URI can be passed with
+`--dart-define=MAICENTA_OAUTH_REDIRECT_URI=<uri>` and must also be configured
+for the target platform. Provider consent, tenant policy, Google verification,
+and enabled IMAP/SMTP AUTH remain prerequisites outside MAICENTA.
+
 Current account limitations are important:
 
-- Authentication uses a password or provider-issued app password. OAuth 2.0,
-  including modern Microsoft 365 sign-in, is not implemented yet.
+- Authentication supports a password/app password or OAuth 2.0 with PKCE and
+  automatic refresh for Microsoft 365/Exchange Online and Google. Exchange
+  Online currently uses its standards endpoints (IMAP and SMTP with XOAUTH2),
+  not Microsoft Graph. On-premises Exchange/EWS, shared mailboxes, delegation,
+  tenant administration, Graph mail, and Exchange calendar/contact sync are
+  not implemented yet.
 - Incoming synchronization reads every subscribed selectable folder and
   downloads up to 25 recent bounded display bodies per folder on the first
   pass, then up to 25 new or previously incomplete bodies per pass. Compact
@@ -216,11 +249,17 @@ Current account limitations are important:
   bounded and reports an explicit warning when a declared section is missing,
   unsupported, or over its safety limit. Completed mailboxes use persisted
   UIDNEXT checkpoints for new-message ranges. Servers advertising CONDSTORE
-  additionally use HIGHESTMODSEQ/CHANGEDSINCE for flag deltas. The next
-  synchronization after a checkpoint becomes 24 hours old performs a complete
+  additionally use HIGHESTMODSEQ/CHANGEDSINCE for flag deltas. Persistent
+  profiles synchronize silently at startup, every five minutes while active,
+  and after the app resumes. While a real IMAP folder is open, servers
+  advertising RFC 2177 IDLE can trigger that background synchronization
+  immediately; unsupported servers retain polling. The next synchronization after a checkpoint
+  becomes 15 minutes old performs a complete
   `UID SEARCH ALL` safety reconciliation. On servers advertising QRESYNC,
   `VANISHED` deltas remove generation-matched local messages and attachments
   immediately; the periodic reconciliation remains as a defensive fallback.
+  An on-demand body fetch that finds a vanished UID also removes that stale
+  local catalogue entry and its cached attachments immediately.
   Detailed per-message progress,
   cancellation, additional inline formats, permanent
   deletion, remote folder creation/renaming, and automatic full-history body or

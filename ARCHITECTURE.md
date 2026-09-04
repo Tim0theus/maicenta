@@ -19,7 +19,8 @@ requiring a central MAICENTA service.
 - Clear separation of interface, domain logic, connectors, and storage
 - Modules with stable, versioned boundaries
 - Least-privilege access for extensions and AI providers
-- Secrets stored only through secure operating-system facilities
+- Secrets encrypted at rest; the operating-system facility protects the
+  profile master key
 - Explicit migrations, atomic writes, checksums, and recoverable operations
 
 ## High-level components
@@ -99,7 +100,8 @@ The current core is split into:
 - `maicenta-mail-connector`: async IMAP folder discovery and bounded
   multi-folder synchronization, MIME `BODYSTRUCTURE` extraction, validated
   section downloads through `BODY.PEEK`, UID-safe flag/move application, SMTP
-  submission over TLS or STARTTLS, plus temporary legacy credential migration
+  submission over TLS or STARTTLS, password and XOAUTH2 SASL authentication,
+  plus temporary legacy credential migration
 - `maicenta-bridge`: generated, type-safe Flutter/Rust bindings for workspace
   snapshots, account operations, synchronization, SMTP submission, attachment
   export, and local mutations
@@ -118,10 +120,31 @@ prototype records only when the profile is empty, and returns mail, calendar,
 task, contact, and account DTOs. Generated bridge files are checked in so
 ordinary Flutter builds do not require the code generator.
 
-Account snapshots contain only non-secret server configuration. Passwords and
-app passwords are rows in the encrypted profile and never cross back into a
-workspace snapshot. The platform keychain contains only the profile key. A
-connection test authenticates
+Account snapshots contain only non-secret server configuration and an OAuth
+provider identifier. Passwords, app passwords, OAuth access/refresh tokens,
+client IDs, scopes, token endpoints, and expiry timestamps are independent
+named rows in the encrypted profile and stored tokens never cross back into a
+workspace snapshot. The platform keychain contains only the profile key.
+
+The Flutter account flow implements OAuth Authorization Code + PKCE for native
+public clients and never embeds a client secret. It opens the platform's
+browser/authentication session. Windows and Linux use an external browser with
+a fixed localhost loopback redirect; macOS and Android use their native
+authentication session and a registered app callback scheme. The flow verifies
+the returned state, exchanges the code directly with the provider,
+and passes the resulting token set once to Rust. Before every network operation
+the bridge selects a password or OAuth credential; an expiring OAuth token is
+refreshed in Rust and atomically replaced in the encrypted profile. Refresh
+requests are restricted to compiled trusted Google and Microsoft token
+endpoints so an imported profile cannot turn the bridge into an arbitrary POST
+client. IMAP uses SASL XOAUTH2 and SMTP restricts authentication to XOAUTH2 for
+OAuth accounts.
+
+Microsoft 365/Exchange Online is currently a standards connector using
+`outlook.office365.com` IMAP and `smtp.office365.com` SMTP. Microsoft Graph,
+EWS, on-premises Exchange discovery, shared/delegated mailbox semantics, and
+Exchange calendar/contact data require separate connectors and are not implied
+by this implementation. A connection test authenticates
 to IMAP and opens an authenticated SMTP connection without sending a message.
 The current synchronization pass discovers selectable folders, prioritizes
 standard roles, and inspects up to 25 recent message bodies from every
@@ -143,7 +166,16 @@ all known UIDs. Without CONDSTORE, a bounded recent flag refresh remains the
 fallback. Previously unknown new UIDs are handled before incomplete-body
 retries, with at most 25 bodies fetched per mailbox and pass.
 
-On the next synchronization after 24 hours, or immediately after an absent,
+Persistent clients start a silent synchronization after launch, poll every five
+minutes while active, and synchronize again after the application resumes. For
+the currently selected remote mailbox, the Flutter client issues bounded bridge
+waits backed by RFC 2177 IMAP IDLE when the authenticated server advertises it.
+Any unsolicited mailbox change ends the wait and triggers a silent sync; folder
+changes, offline mode, suspension, connection failure, and servers without IDLE
+fall back safely to bounded waits or periodic polling. If IDLE is available but
+QRESYNC cannot be enabled, the changed mailbox checkpoint is marked for a full
+UID reconciliation before that sync. On
+the next synchronization after 15 minutes, or immediately after an absent,
 incomplete, inconsistent, or UIDVALIDITY-mismatched checkpoint, the connector
 performs a complete `UID SEARCH ALL` safety reconciliation. The bridge then removes rows
 missing on the server or belonging to an obsolete UIDVALIDITY generation,
@@ -155,6 +187,9 @@ current UIDVALIDITY generation are accepted, then removed transactionally with
 their attachment metadata and local objects. If QRESYNC fails, synchronization
 falls back to CONDSTORE and then to the bounded/full flag path without advancing
 an unsafe checkpoint. The periodic full scan remains a defensive fallback.
+If a selective body request discovers that its exact UID has already vanished,
+the bridge removes that message and its attachment objects transactionally and
+returns a structured missing result instead of exposing a protocol error.
 
 SMTP emits `multipart/alternative` with a plain-text fallback and sanitized HTML.
 When the user selects files, that alternative part is nested in
@@ -175,7 +210,7 @@ accounts commit their cache and timestamps even when another account reports a
 credential or protocol error; the bridge returns those warnings alongside the
 refreshed snapshot.
 
-Removing an account deletes its configuration, vault credential, and cached
+Removing an account deletes its configuration, all vault secrets, and cached
 mail in one encrypted SQLite transaction. Other workspace modules and the
 server-side mailbox remain untouched.
 

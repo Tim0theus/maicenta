@@ -8,6 +8,7 @@ use std::{
 
 use async_imap::{
     Client, Session,
+    extensions::idle::IdleResponse,
     imap_proto::types::{
         BodyContentCommon, BodyContentSinglePart, BodyStructure, ContentEncoding,
         Response as ImapResponse, SectionPath,
@@ -24,7 +25,10 @@ use lettre::{
         Attachment, Mailbox as LettreMailbox, MultiPart, SinglePart,
         header::{ContentType, HeaderName, HeaderValue},
     },
-    transport::smtp::{authentication::Credentials, response::Response},
+    transport::smtp::{
+        authentication::{Credentials, Mechanism},
+        response::Response,
+    },
 };
 use maicenta_domain::{MailAccount, MailboxRole, MessageFlag, TransportSecurity};
 use tokio::{io::AsyncRead, io::AsyncWrite, net::TcpStream};
@@ -55,10 +59,61 @@ pub enum ConnectorError {
     Authentication(String),
     #[error("mail protocol operation failed: {0}")]
     Protocol(String),
+    /// The selected mailbox is still reachable, but the exact catalogued UID
+    /// has been removed from the server in the meantime.
+    #[error("remote message no longer exists: {0}")]
+    RemoteMessageMissing(String),
     #[error("message could not be created: {0}")]
     Message(String),
     #[error("legacy operating-system credential store failed: {0}")]
     CredentialStore(String),
+}
+
+/// Authentication material supplied by the encrypted profile vault.
+///
+/// OAuth access tokens are deliberately handled like passwords: they are
+/// borrowed only for the duration of a connector operation and never logged.
+#[derive(Clone, Copy)]
+pub enum MailCredential<'a> {
+    Password(&'a str),
+    OAuth2AccessToken(&'a str),
+}
+
+impl Debug for MailCredential<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple(match self {
+                Self::Password(_) => "Password",
+                Self::OAuth2AccessToken(_) => "OAuth2AccessToken",
+            })
+            .field(&"[REDACTED]")
+            .finish()
+    }
+}
+
+impl MailCredential<'_> {
+    fn secret(self) -> String {
+        match self {
+            Self::Password(value) | Self::OAuth2AccessToken(value) => value.to_owned(),
+        }
+    }
+}
+
+struct XOAuth2Authenticator<'a> {
+    username: &'a str,
+    access_token: &'a str,
+}
+
+impl async_imap::Authenticator for XOAuth2Authenticator<'_> {
+    type Response = Vec<u8>;
+
+    fn process(&mut self, _challenge: &[u8]) -> Self::Response {
+        format!(
+            "user={}\u{1}auth=Bearer {}\u{1}\u{1}",
+            self.username, self.access_token
+        )
+        .into_bytes()
+    }
 }
 
 /// One provider mailbox discovered through IMAP.
@@ -86,6 +141,17 @@ pub struct RemoteMessage {
     /// False when a declared display part was omitted or not returned by the
     /// server. Attachments are intentionally excluded and do not affect this.
     pub body_complete: bool,
+}
+
+/// Result of one bounded IMAP IDLE wait on a selected mailbox.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IdleWaitResult {
+    /// Whether the server advertises RFC 2177 IDLE.
+    pub idle_supported: bool,
+    /// Whether the server advertises QRESYNC for the subsequent delta sync.
+    pub qresync_supported: bool,
+    /// True when the server sent a mailbox change notification.
+    pub changed: bool,
 }
 
 /// Metadata needed to fetch one non-inline MIME part without transferring the
@@ -321,24 +387,30 @@ pub fn delete_legacy_password(account: &MailAccount) -> Result<(), ConnectorErro
 /// # Errors
 ///
 /// Returns a categorized connection, authentication, or protocol error.
-pub async fn test_account(account: &MailAccount, password: &str) -> Result<(), ConnectorError> {
-    tokio::time::timeout(OPERATION_TIMEOUT, test_account_inner(account, password))
+pub async fn test_account(
+    account: &MailAccount,
+    credential: MailCredential<'_>,
+) -> Result<(), ConnectorError> {
+    tokio::time::timeout(OPERATION_TIMEOUT, test_account_inner(account, credential))
         .await
         .map_err(|_| ConnectorError::Connection("account test timed out".into()))?
 }
 
-async fn test_account_inner(account: &MailAccount, password: &str) -> Result<(), ConnectorError> {
+async fn test_account_inner(
+    account: &MailAccount,
+    credential: MailCredential<'_>,
+) -> Result<(), ConnectorError> {
     validate_account(account)?;
     match account.imap_security {
         TransportSecurity::Tls => {
-            let mut session = login_imap_tls(account, password).await?;
+            let mut session = login_imap_tls(account, credential).await?;
             session
                 .logout()
                 .await
                 .map_err(|error| ConnectorError::Protocol(error.to_string()))?;
         }
         TransportSecurity::StartTls => {
-            let mut session = login_imap_starttls(account, password).await?;
+            let mut session = login_imap_starttls(account, credential).await?;
             session
                 .logout()
                 .await
@@ -346,7 +418,7 @@ async fn test_account_inner(account: &MailAccount, password: &str) -> Result<(),
         }
     }
 
-    let smtp = smtp_transport(account, password)?;
+    let smtp = smtp_transport(account, credential)?;
     let connected = smtp
         .test_connection()
         .await
@@ -374,7 +446,7 @@ async fn test_account_inner(account: &MailAccount, password: &str) -> Result<(),
 /// Returns a categorized connection, authentication, or protocol error.
 pub async fn synchronize_mailboxes(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
     known_messages: &[KnownRemoteMessage],
     mailbox_checkpoints: &[RemoteMailboxCheckpoint],
     message_limit_per_mailbox: usize,
@@ -383,7 +455,7 @@ pub async fn synchronize_mailboxes(
         SYNC_OPERATION_TIMEOUT,
         synchronize_mailboxes_inner(
             account,
-            password,
+            credential,
             known_messages,
             mailbox_checkpoints,
             message_limit_per_mailbox,
@@ -407,7 +479,7 @@ pub async fn synchronize_mailboxes(
 /// incomplete.
 pub async fn download_attachment_part(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
     remote_mailbox: &str,
     uid_validity: u32,
     uid: u32,
@@ -418,7 +490,7 @@ pub async fn download_attachment_part(
         OPERATION_TIMEOUT,
         download_attachment_part_inner(
             account,
-            password,
+            credential,
             remote_mailbox,
             uid_validity,
             uid,
@@ -442,7 +514,7 @@ pub async fn download_attachment_part(
 /// error when the remote identity is stale or the message cannot be fetched.
 pub async fn download_message_content(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
     remote_mailbox: &str,
     uid_validity: u32,
     uid: u32,
@@ -456,7 +528,7 @@ pub async fn download_message_content(
     tokio::time::timeout(OPERATION_TIMEOUT, async {
         match account.imap_security {
             TransportSecurity::Tls => {
-                let mut session = login_imap_tls(account, password).await?;
+                let mut session = login_imap_tls(account, credential).await?;
                 let result = download_message_content_in_session(
                     &mut session,
                     remote_mailbox,
@@ -468,7 +540,7 @@ pub async fn download_message_content(
                 result
             }
             TransportSecurity::StartTls => {
-                let mut session = login_imap_starttls(account, password).await?;
+                let mut session = login_imap_starttls(account, credential).await?;
                 let result = download_message_content_in_session(
                     &mut session,
                     remote_mailbox,
@@ -483,6 +555,94 @@ pub async fn download_message_content(
     })
     .await
     .map_err(|_| ConnectorError::Connection("message download timed out".into()))?
+}
+
+/// Waits for an RFC 2177 IDLE notification on one selected mailbox.
+///
+/// The connection is deliberately bounded and closed after each result. The
+/// caller can reissue the wait, switch folders, or stop cleanly when the app is
+/// suspended. Servers without IDLE return an unsupported result so callers can
+/// retain polling as a fallback.
+///
+/// # Errors
+///
+/// Returns a categorized connection, authentication, or protocol error when
+/// the account cannot enter or leave IDLE cleanly.
+pub async fn wait_for_mailbox_change(
+    account: &MailAccount,
+    credential: MailCredential<'_>,
+    remote_mailbox: &str,
+    timeout: Duration,
+) -> Result<IdleWaitResult, ConnectorError> {
+    validate_account(account)?;
+    if remote_mailbox.is_empty() {
+        return Err(ConnectorError::InvalidConfiguration(
+            "remote mailbox is required for IDLE".into(),
+        ));
+    }
+    let timeout = timeout.clamp(Duration::from_secs(15), Duration::from_secs(120));
+    match account.imap_security {
+        TransportSecurity::Tls => {
+            let session = login_imap_tls(account, credential).await?;
+            wait_for_mailbox_change_in_session(session, remote_mailbox, timeout).await
+        }
+        TransportSecurity::StartTls => {
+            let session = login_imap_starttls(account, credential).await?;
+            wait_for_mailbox_change_in_session(session, remote_mailbox, timeout).await
+        }
+    }
+}
+
+async fn wait_for_mailbox_change_in_session<T>(
+    mut session: Session<T>,
+    remote_mailbox: &str,
+    timeout: Duration,
+) -> Result<IdleWaitResult, ConnectorError>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Debug + Send,
+{
+    let capabilities = session
+        .capabilities()
+        .await
+        .map_err(|error| ConnectorError::Protocol(error.to_string()))?;
+    let idle_supported = capabilities.has_str("IDLE");
+    let qresync_advertised = capabilities.has_str("QRESYNC");
+    let qresync_supported = qresync_advertised
+        && session
+            .run_command_and_check_ok("ENABLE QRESYNC")
+            .await
+            .is_ok();
+    if !idle_supported {
+        let _ = session.logout().await;
+        return Ok(IdleWaitResult {
+            idle_supported: false,
+            qresync_supported,
+            changed: false,
+        });
+    }
+    session
+        .select(remote_mailbox)
+        .await
+        .map_err(|error| ConnectorError::Protocol(error.to_string()))?;
+    let mut idle = session.idle();
+    idle.init()
+        .await
+        .map_err(|error| ConnectorError::Protocol(error.to_string()))?;
+    let response = {
+        let (wait, _interrupt) = idle.wait_with_timeout(timeout);
+        wait.await
+            .map_err(|error| ConnectorError::Connection(error.to_string()))?
+    };
+    let mut session = idle
+        .done()
+        .await
+        .map_err(|error| ConnectorError::Protocol(error.to_string()))?;
+    let _ = session.logout().await;
+    Ok(IdleWaitResult {
+        idle_supported,
+        qresync_supported,
+        changed: matches!(response, IdleResponse::NewData(_)),
+    })
 }
 
 async fn download_message_content_in_session<T>(
@@ -507,7 +667,9 @@ where
     let pending = pending
         .pop()
         .filter(|message| message.uid == uid)
-        .ok_or_else(|| ConnectorError::Protocol("message UID no longer exists".into()))?;
+        .ok_or_else(|| {
+            ConnectorError::RemoteMessageMissing("message UID no longer exists".into())
+        })?;
     let mailbox = RemoteMailbox {
         remote_name: remote_mailbox.to_owned(),
         role: MailboxRole::Custom,
@@ -517,7 +679,7 @@ where
 
 async fn download_attachment_part_inner(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
     remote_mailbox: &str,
     uid_validity: u32,
     uid: u32,
@@ -527,7 +689,7 @@ async fn download_attachment_part_inner(
     validate_account(account)?;
     match account.imap_security {
         TransportSecurity::Tls => {
-            let mut session = login_imap_tls(account, password).await?;
+            let mut session = login_imap_tls(account, credential).await?;
             let result = download_attachment_in_session(
                 &mut session,
                 remote_mailbox,
@@ -541,7 +703,7 @@ async fn download_attachment_part_inner(
             result
         }
         TransportSecurity::StartTls => {
-            let mut session = login_imap_starttls(account, password).await?;
+            let mut session = login_imap_starttls(account, credential).await?;
             let result = download_attachment_in_session(
                 &mut session,
                 remote_mailbox,
@@ -643,12 +805,12 @@ fn validated_section_path(section: &str) -> Result<ValidatedSectionPath, Connect
 /// [`MutationReport::failed`].
 pub async fn apply_mailbox_mutations(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
     mutations: &[RemoteMutation],
 ) -> Result<MutationReport, ConnectorError> {
     tokio::time::timeout(
         OPERATION_TIMEOUT,
-        apply_mailbox_mutations_inner(account, password, mutations),
+        apply_mailbox_mutations_inner(account, credential, mutations),
     )
     .await
     .map_err(|_| ConnectorError::Connection("IMAP mutation synchronization timed out".into()))?
@@ -668,12 +830,12 @@ pub async fn apply_mailbox_mutations(
 /// for a later retry.
 pub async fn apply_draft_operations(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
     operations: &[RemoteDraftOperation],
 ) -> Result<DraftOperationReport, ConnectorError> {
     tokio::time::timeout(
         OPERATION_TIMEOUT,
-        apply_draft_operations_inner(account, password, operations),
+        apply_draft_operations_inner(account, credential, operations),
     )
     .await
     .map_err(|_| ConnectorError::Connection("IMAP draft synchronization timed out".into()))?
@@ -681,19 +843,19 @@ pub async fn apply_draft_operations(
 
 async fn apply_draft_operations_inner(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
     operations: &[RemoteDraftOperation],
 ) -> Result<DraftOperationReport, ConnectorError> {
     validate_account(account)?;
     match account.imap_security {
         TransportSecurity::Tls => {
-            let mut session = login_imap_tls(account, password).await?;
+            let mut session = login_imap_tls(account, credential).await?;
             let result = apply_drafts_in_session(&mut session, account, operations).await;
             let _ = session.logout().await;
             result
         }
         TransportSecurity::StartTls => {
-            let mut session = login_imap_starttls(account, password).await?;
+            let mut session = login_imap_starttls(account, credential).await?;
             let result = apply_drafts_in_session(&mut session, account, operations).await;
             let _ = session.logout().await;
             result
@@ -703,19 +865,19 @@ async fn apply_draft_operations_inner(
 
 async fn apply_mailbox_mutations_inner(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
     mutations: &[RemoteMutation],
 ) -> Result<MutationReport, ConnectorError> {
     validate_account(account)?;
     match account.imap_security {
         TransportSecurity::Tls => {
-            let mut session = login_imap_tls(account, password).await?;
+            let mut session = login_imap_tls(account, credential).await?;
             let result = apply_mutations_in_session(&mut session, mutations).await;
             let _ = session.logout().await;
             result
         }
         TransportSecurity::StartTls => {
-            let mut session = login_imap_starttls(account, password).await?;
+            let mut session = login_imap_starttls(account, credential).await?;
             let result = apply_mutations_in_session(&mut session, mutations).await;
             let _ = session.logout().await;
             result
@@ -725,7 +887,7 @@ async fn apply_mailbox_mutations_inner(
 
 async fn synchronize_mailboxes_inner(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
     known_messages: &[KnownRemoteMessage],
     mailbox_checkpoints: &[RemoteMailboxCheckpoint],
     message_limit_per_mailbox: usize,
@@ -734,7 +896,7 @@ async fn synchronize_mailboxes_inner(
     let message_limit_per_mailbox = message_limit_per_mailbox.clamp(1, 50);
     match account.imap_security {
         TransportSecurity::Tls => {
-            let mut session = login_imap_tls(account, password).await?;
+            let mut session = login_imap_tls(account, credential).await?;
             let result = synchronize_session(
                 &mut session,
                 known_messages,
@@ -746,7 +908,7 @@ async fn synchronize_mailboxes_inner(
             result
         }
         TransportSecurity::StartTls => {
-            let mut session = login_imap_starttls(account, password).await?;
+            let mut session = login_imap_starttls(account, credential).await?;
             let result = synchronize_session(
                 &mut session,
                 known_messages,
@@ -769,7 +931,7 @@ async fn synchronize_mailboxes_inner(
 /// message.
 pub async fn send_message(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
     outgoing: &OutgoingMessage,
 ) -> Result<Response, ConnectorError> {
     validate_account(account)?;
@@ -777,7 +939,7 @@ pub async fn send_message(
 
     tokio::time::timeout(
         OPERATION_TIMEOUT,
-        smtp_transport(account, password)?.send(message),
+        smtp_transport(account, credential)?.send(message),
     )
     .await
     .map_err(|_| ConnectorError::Connection("SMTP delivery timed out".into()))?
@@ -924,7 +1086,7 @@ fn validate_account(account: &MailAccount) -> Result<(), ConnectorError> {
 
 async fn login_imap_tls(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
 ) -> Result<Session<async_native_tls::TlsStream<TcpStream>>, ConnectorError> {
     let stream = connect_tcp(&account.imap_host, account.imap_port).await?;
     let tls = TlsConnector::new()
@@ -937,15 +1099,12 @@ async fn login_imap_tls(
         .await
         .map_err(|error| ConnectorError::Connection(error.to_string()))?
         .ok_or_else(|| ConnectorError::Connection("IMAP greeting was missing".into()))?;
-    client
-        .login(&account.imap_username, password)
-        .await
-        .map_err(|(error, _)| ConnectorError::Authentication(error.to_string()))
+    authenticate_imap(client, &account.imap_username, credential).await
 }
 
 async fn login_imap_starttls(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
 ) -> Result<Session<async_native_tls::TlsStream<TcpStream>>, ConnectorError> {
     let stream = connect_tcp(&account.imap_host, account.imap_port).await?;
     let mut client = Client::new(stream);
@@ -963,10 +1122,33 @@ async fn login_imap_starttls(
         .connect(&account.imap_host, stream)
         .await
         .map_err(|error| ConnectorError::Connection(error.to_string()))?;
-    Client::new(tls)
-        .login(&account.imap_username, password)
-        .await
-        .map_err(|(error, _)| ConnectorError::Authentication(error.to_string()))
+    authenticate_imap(Client::new(tls), &account.imap_username, credential).await
+}
+
+async fn authenticate_imap<T>(
+    client: Client<T>,
+    username: &str,
+    credential: MailCredential<'_>,
+) -> Result<Session<T>, ConnectorError>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Debug + Send,
+{
+    match credential {
+        MailCredential::Password(password) => client
+            .login(username, password)
+            .await
+            .map_err(|(error, _)| ConnectorError::Authentication(error.to_string())),
+        MailCredential::OAuth2AccessToken(access_token) => client
+            .authenticate(
+                "XOAUTH2",
+                XOAuth2Authenticator {
+                    username,
+                    access_token,
+                },
+            )
+            .await
+            .map_err(|(error, _)| ConnectorError::Authentication(error.to_string())),
+    }
 }
 
 async fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, ConnectorError> {
@@ -2574,7 +2756,7 @@ fn mailbox_role(name: &str, attributes: &[NameAttribute<'_>]) -> MailboxRole {
 
 fn smtp_transport(
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
 ) -> Result<AsyncSmtpTransport<Tokio1Executor>, ConnectorError> {
     let builder = match account.smtp_security {
         TransportSecurity::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(&account.smtp_host),
@@ -2583,14 +2765,17 @@ fn smtp_transport(
         }
     }
     .map_err(|error| ConnectorError::InvalidConfiguration(error.to_string()))?;
-    Ok(builder
+    let builder = builder
         .port(account.smtp_port)
         .credentials(Credentials::new(
             account.smtp_username.clone(),
-            password.to_owned(),
-        ))
-        .timeout(Some(NETWORK_TIMEOUT))
-        .build())
+            credential.secret(),
+        ));
+    let builder = match credential {
+        MailCredential::Password(_) => builder,
+        MailCredential::OAuth2AccessToken(_) => builder.authentication(vec![Mechanism::Xoauth2]),
+    };
+    Ok(builder.timeout(Some(NETWORK_TIMEOUT)).build())
 }
 
 #[cfg(test)]
@@ -2607,9 +2792,9 @@ mod tests {
     use super::{
         KnownRemoteMessage, MailboxSyncPlan, MoveStrategy, OutgoingAttachment, OutgoingMessage,
         RemoteMailbox, RemoteMailboxCheckpoint, RenderablePartRole, ValidatedSectionPath,
-        assemble_selective_message, build_draft_message, build_message, draft_message_id,
-        filter_known_vanished_uids, mailbox_role, mailbox_sync_plan, mailbox_sync_priority,
-        ordered_mailboxes_for_sync, plan_incremental_mailbox_work,
+        XOAuth2Authenticator, assemble_selective_message, build_draft_message, build_message,
+        draft_message_id, filter_known_vanished_uids, mailbox_role, mailbox_sync_plan,
+        mailbox_sync_priority, ordered_mailboxes_for_sync, plan_incremental_mailbox_work,
         remote_attachments_from_bodystructure, renderable_parts_from_bodystructure,
         safe_move_strategy, select_incremental_uids, stable_remote_key, validated_section_path,
     };
@@ -2964,5 +3149,19 @@ mod tests {
         let formatted = String::from_utf8(message.formatted()).expect("UTF-8 draft MIME");
 
         assert!(formatted.contains("Bcc: hidden@example.org"));
+    }
+
+    #[test]
+    fn builds_the_standard_xoauth2_imap_initial_response() {
+        let mut authenticator = XOAuth2Authenticator {
+            username: "alex@example.org",
+            access_token: "short-lived-token",
+        };
+        let response = async_imap::Authenticator::process(&mut authenticator, b"");
+
+        assert_eq!(
+            response,
+            b"user=alex@example.org\x01auth=Bearer short-lived-token\x01\x01"
+        );
     }
 }

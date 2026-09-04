@@ -4,6 +4,7 @@ import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart
 import '../../app_theme.dart';
 import 'mail_data.dart';
 import 'mailbox_labels.dart';
+import 'safe_message_html.dart';
 
 const _outlookBlue = Color(0xFF0F6CBD);
 
@@ -19,6 +20,7 @@ Future<void> showMessageWindow(
   required Future<bool> Function(DemoMessage message, String mailboxId) onMove,
   required Future<void> Function(MailAttachmentData attachment)
   onSaveAttachment,
+  required Future<DemoMessage?> Function(DemoMessage message) onReloadContent,
 }) {
   return showDialog<void>(
     context: context,
@@ -34,6 +36,7 @@ Future<void> showMessageWindow(
         onUpdate: onUpdate,
         onMove: onMove,
         onSaveAttachment: onSaveAttachment,
+        onReloadContent: onReloadContent,
       ),
     ),
   );
@@ -50,6 +53,7 @@ class _MessageWindow extends StatefulWidget {
     required this.onUpdate,
     required this.onMove,
     required this.onSaveAttachment,
+    required this.onReloadContent,
   });
 
   final DemoMessage message;
@@ -61,6 +65,7 @@ class _MessageWindow extends StatefulWidget {
   final Future<DemoMessage?> Function(DemoMessage message) onUpdate;
   final Future<bool> Function(DemoMessage message, String mailboxId) onMove;
   final Future<void> Function(MailAttachmentData attachment) onSaveAttachment;
+  final Future<DemoMessage?> Function(DemoMessage message) onReloadContent;
 
   @override
   State<_MessageWindow> createState() => _MessageWindowState();
@@ -72,6 +77,7 @@ class _MessageWindowState extends State<_MessageWindow> {
   double zoom = 1;
   bool showDetails = true;
   bool busy = false;
+  bool externalImagesAllowed = false;
 
   @override
   void initState() {
@@ -100,6 +106,34 @@ class _MessageWindowState extends State<_MessageWindow> {
         Navigator.pop(context);
       } else {
         setState(() => message = message.copyWith(mailboxId: mailboxId));
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> showExternalContent() async {
+    if (hasBlockedRemoteImages(message.body)) {
+      setState(() => externalImagesAllowed = true);
+      return;
+    }
+    if (busy) return;
+    setState(() => busy = true);
+    try {
+      final refreshed = await widget.onReloadContent(message);
+      if (!mounted || refreshed == null) return;
+      setState(() {
+        message = refreshed;
+        externalImagesAllowed = hasBlockedRemoteImages(refreshed.body);
+      });
+      if (!externalImagesAllowed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Die Serverkopie enthält keine darstellbaren externen Bilder.',
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => busy = false);
@@ -431,6 +465,16 @@ class _MessageWindowState extends State<_MessageWindow> {
     final to = message.draft ? message.draftTo : message.toRecipients;
     final cc = message.draft ? message.draftCc : message.ccRecipients;
     final bcc = message.draft ? message.draftBcc : message.bccRecipients;
+    final blockedRemoteImages = hasBlockedRemoteImages(message.body);
+    final unresolvedImages = hasUnresolvedMessageImages(message.body);
+    final hasVisibleText = hasDisplayableMessageText(
+      message.body,
+      message.plainText,
+    );
+    final canRequestRemoteContent =
+        !message.draft &&
+        message.accountId != 'personal' &&
+        (blockedRemoteImages || unresolvedImages || !hasVisibleText);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -497,34 +541,78 @@ class _MessageWindowState extends State<_MessageWindow> {
           ),
         ),
         Container(
-          height: 29,
+          constraints: const BoxConstraints(minHeight: 29),
           color: MaicentaPalette.of(context).chrome,
-          padding: const EdgeInsets.symmetric(horizontal: 22),
-          alignment: Alignment.centerLeft,
-          child: Text(
-            message.draft
-                ? message.draftSynchronized
-                      ? 'IMAP-Entwurf · Synchronisiert'
-                      : 'Lokaler Entwurf · Synchronisierung ausstehend'
-                : 'Sichere Standard-HTML-Ansicht · Externe Inhalte blockiert',
-            style: const TextStyle(fontSize: 10.5),
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 2),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  message.draft
+                      ? message.draftSynchronized
+                            ? 'IMAP-Entwurf · Synchronisiert'
+                            : 'Lokaler Entwurf · Synchronisierung ausstehend'
+                      : externalImagesAllowed
+                      ? 'Sichere Standard-HTML-Ansicht · Externe Bilder geladen · Skripte blockiert'
+                      : blockedRemoteImages
+                      ? 'Sichere Standard-HTML-Ansicht · Externe Bilder und Skripte blockiert'
+                      : 'Sichere Standard-HTML-Ansicht · Externe Inhalte blockiert',
+                  style: const TextStyle(fontSize: 10.5),
+                ),
+              ),
+              if (canRequestRemoteContent)
+                TextButton.icon(
+                  key: const Key('message-window-load-external-content'),
+                  onPressed: busy ? null : showExternalContent,
+                  icon: const Icon(Icons.image_outlined, size: 16),
+                  label: Text(
+                    blockedRemoteImages || unresolvedImages
+                        ? 'Bilder laden'
+                        : 'Inhalt erneut laden',
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                ),
+            ],
           ),
         ),
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(28, 24, 36, 32),
-            child: SelectionArea(
-              child: HtmlWidget(
-                key: const Key('message-window-html-body'),
-                message.body,
-                textStyle: TextStyle(fontSize: 13.5 * zoom, height: 1.5),
-                onTapUrl: (url) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Externer Link blockiert: $url')),
-                  );
-                  return true;
-                },
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (!hasVisibleText && !externalImagesAllowed) ...[
+                  Text(
+                    blockedRemoteImages
+                        ? 'Diese Nachricht enthält keinen lokal darstellbaren Text. Sie besteht möglicherweise nur aus externen Bildern.'
+                        : 'Für diese Nachricht ist kein darstellbarer Text lokal gespeichert. Der Inhalt kann erneut vom Mailserver geladen werden.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: MaicentaPalette.of(context).mutedText,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                SelectionArea(
+                  child: HtmlWidget(
+                    key: const Key('message-window-html-body'),
+                    message.body,
+                    factoryBuilder: () => SafeMailWidgetFactory(
+                      allowRemoteImages: () => externalImagesAllowed,
+                    ),
+                    rebuildTriggers: [externalImagesAllowed, message.body],
+                    textStyle: TextStyle(fontSize: 13.5 * zoom, height: 1.5),
+                    onTapUrl: (url) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Externer Link blockiert: $url'),
+                        ),
+                      );
+                      return true;
+                    },
+                  ),
+                ),
+              ],
             ),
           ),
         ),

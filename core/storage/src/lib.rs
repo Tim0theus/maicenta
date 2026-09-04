@@ -1,11 +1,12 @@
 //! SQLite-backed local persistence for MAICENTA.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::Read,
+    ops::{Deref, DerefMut},
     path::{Component, Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
     time::Duration,
 };
 
@@ -21,14 +22,37 @@ use maicenta_domain::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-const CURRENT_SCHEMA_VERSION: u32 = 13;
+const CURRENT_SCHEMA_VERSION: u32 = 14;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const FAVORITE_MAILBOXES_KEY: &str = "favorite_mailbox_ids";
 const DARK_MODE_KEY: &str = "dark_mode_enabled";
 
+static DATABASE_OPERATION_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
+    OnceLock::new();
+
 /// Thread-safe `SQLite` implementation of [`MailStore`].
 pub struct SqliteMailStore {
     connection: Mutex<Connection>,
+    operation_lock: Arc<Mutex<()>>,
+}
+
+struct StoreConnectionGuard<'a> {
+    _operation_guard: MutexGuard<'a, ()>,
+    connection_guard: MutexGuard<'a, Connection>,
+}
+
+impl Deref for StoreConnectionGuard<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.connection_guard
+    }
+}
+
+impl DerefMut for StoreConnectionGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.connection_guard
+    }
 }
 
 impl SqliteMailStore {
@@ -39,8 +63,11 @@ impl SqliteMailStore {
     /// Returns a storage error when the database cannot be opened, configured,
     /// or migrated.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ApplicationError> {
+        let path = path.as_ref();
+        let operation_lock = database_operation_lock(path);
+        let _operation_guard = lock_operation(&operation_lock)?;
         let connection = Connection::open(path).map_err(storage_error)?;
-        Self::from_connection(connection)
+        Self::from_connection_with_lock(connection, operation_lock.clone())
     }
 
     /// Opens an encrypted profile database, migrating a legacy plaintext
@@ -55,10 +82,12 @@ impl SqliteMailStore {
         key: &[u8; 32],
     ) -> Result<Self, ApplicationError> {
         let path = path.as_ref();
+        let operation_lock = database_operation_lock(path);
+        let _operation_guard = lock_operation(&operation_lock)?;
         migrate_plaintext_database(path, key)?;
         let connection = open_keyed_connection(path, key)?;
         restrict_database_permissions(path)?;
-        Self::from_connection(connection)
+        Self::from_connection_with_lock(connection, operation_lock.clone())
     }
 
     /// Creates an initialized in-memory database.
@@ -71,7 +100,14 @@ impl SqliteMailStore {
         Self::from_connection(connection)
     }
 
-    fn from_connection(mut connection: Connection) -> Result<Self, ApplicationError> {
+    fn from_connection(connection: Connection) -> Result<Self, ApplicationError> {
+        Self::from_connection_with_lock(connection, Arc::new(Mutex::new(())))
+    }
+
+    fn from_connection_with_lock(
+        mut connection: Connection,
+        operation_lock: Arc<Mutex<()>>,
+    ) -> Result<Self, ApplicationError> {
         connection
             .busy_timeout(Duration::from_secs(5))
             .map_err(storage_error)?;
@@ -79,15 +115,23 @@ impl SqliteMailStore {
             .execute_batch(
                 "
                 PRAGMA foreign_keys = ON;
-                PRAGMA journal_mode = WAL;
                 PRAGMA synchronous = NORMAL;
                 ",
             )
             .map_err(storage_error)?;
+        let journal_mode: String = connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .map_err(storage_error)?;
+        if !matches!(journal_mode.as_str(), "wal" | "memory") {
+            connection
+                .execute_batch("PRAGMA journal_mode = WAL;")
+                .map_err(storage_error)?;
+        }
         migrate(&mut connection)?;
 
         Ok(Self {
             connection: Mutex::new(connection),
+            operation_lock,
         })
     }
 
@@ -147,11 +191,41 @@ impl SqliteMailStore {
         Ok(())
     }
 
-    fn connection(&self) -> Result<MutexGuard<'_, Connection>, ApplicationError> {
-        self.connection
-            .lock()
-            .map_err(|_| ApplicationError::Storage("database lock was poisoned".into()))
+    fn connection(&self) -> Result<StoreConnectionGuard<'_>, ApplicationError> {
+        let operation_guard = lock_operation(&self.operation_lock)?;
+        let connection_guard = self.connection.lock().map_err(|_| {
+            ApplicationError::Storage("database connection lock was poisoned".into())
+        })?;
+        Ok(StoreConnectionGuard {
+            _operation_guard: operation_guard,
+            connection_guard,
+        })
     }
+}
+
+fn lock_operation(lock: &Mutex<()>) -> Result<MutexGuard<'_, ()>, ApplicationError> {
+    lock.lock()
+        .map_err(|_| ApplicationError::Storage("database operation lock was poisoned".into()))
+}
+
+fn database_operation_lock(path: &Path) -> Arc<Mutex<()>> {
+    let key = fs::canonicalize(path).unwrap_or_else(|_| {
+        path.parent()
+            .and_then(|parent| fs::canonicalize(parent).ok())
+            .and_then(|parent| path.file_name().map(|name| parent.join(name)))
+            .unwrap_or_else(|| path.to_path_buf())
+    });
+    let registry = DATABASE_OPERATION_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
 }
 
 impl MailStore for SqliteMailStore {
@@ -1840,15 +1914,11 @@ impl MailAccountStore for SqliteMailStore {
 
 impl SecretStore for SqliteMailStore {
     fn get(&self, account_id: &AccountId, key: &str) -> Result<Option<String>, ApplicationError> {
-        if key != "password" {
-            return Err(ApplicationError::Storage(format!(
-                "unsupported account secret: {key}"
-            )));
-        }
+        validate_secret_key(key)?;
         self.connection()?
             .query_row(
-                "SELECT password FROM account_secrets WHERE account_id = ?1",
-                [account_id.as_str()],
+                "SELECT value FROM account_secrets WHERE account_id = ?1 AND key = ?2",
+                params![account_id.as_str(), key],
                 |row| row.get(0),
             )
             .optional()
@@ -1861,41 +1931,47 @@ impl SecretStore for SqliteMailStore {
         key: &str,
         value: &str,
     ) -> Result<(), ApplicationError> {
-        if key != "password" {
-            return Err(ApplicationError::Storage(format!(
-                "unsupported account secret: {key}"
-            )));
-        }
+        validate_secret_key(key)?;
         if value.is_empty() {
             return Err(ApplicationError::Storage(
-                "account password must not be empty".into(),
+                "account secret must not be empty".into(),
             ));
         }
         self.connection()?
             .execute(
-                "INSERT INTO account_secrets (account_id, password)
-                 VALUES (?1, ?2)
-                 ON CONFLICT(account_id) DO UPDATE SET password = excluded.password",
-                params![account_id.as_str(), value],
+                "INSERT INTO account_secrets (account_id, key, value)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value",
+                params![account_id.as_str(), key, value],
             )
             .map(|_| ())
             .map_err(storage_error)
     }
 
     fn remove(&mut self, account_id: &AccountId, key: &str) -> Result<(), ApplicationError> {
-        if key != "password" {
-            return Err(ApplicationError::Storage(format!(
-                "unsupported account secret: {key}"
-            )));
-        }
+        validate_secret_key(key)?;
         self.connection()?
             .execute(
-                "DELETE FROM account_secrets WHERE account_id = ?1",
-                [account_id.as_str()],
+                "DELETE FROM account_secrets WHERE account_id = ?1 AND key = ?2",
+                params![account_id.as_str(), key],
             )
             .map(|_| ())
             .map_err(storage_error)
     }
+}
+
+fn validate_secret_key(key: &str) -> Result<(), ApplicationError> {
+    if key.is_empty()
+        || key.len() > 64
+        || !key
+            .bytes()
+            .all(|value| value.is_ascii_alphanumeric() || matches!(value, b'.' | b'_' | b'-'))
+    {
+        return Err(ApplicationError::Storage(
+            "account secret key is invalid".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn open_keyed_connection(path: &Path, key: &[u8; 32]) -> Result<Connection, ApplicationError> {
@@ -2548,6 +2624,10 @@ fn migrate(connection: &mut Connection) -> Result<(), ApplicationError> {
         apply_migration_v13(connection)?;
     }
 
+    if version < 14 {
+        apply_migration_v14(connection)?;
+    }
+
     Ok(())
 }
 
@@ -2856,6 +2936,33 @@ fn apply_migration_v8(connection: &mut Connection) -> Result<(), ApplicationErro
                 ) STRICT;
 
                 PRAGMA user_version = 8;
+                ",
+        )
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)
+}
+
+fn apply_migration_v14(connection: &mut Connection) -> Result<(), ApplicationError> {
+    let transaction = connection.transaction().map_err(storage_error)?;
+    transaction
+        .execute_batch(
+            "
+                ALTER TABLE account_secrets RENAME TO account_passwords_legacy;
+
+                CREATE TABLE account_secrets (
+                    account_id TEXT NOT NULL
+                        REFERENCES mail_accounts(id) ON DELETE CASCADE,
+                    key TEXT NOT NULL CHECK (length(key) BETWEEN 1 AND 64),
+                    value TEXT NOT NULL CHECK (length(value) > 0),
+                    PRIMARY KEY (account_id, key)
+                ) STRICT;
+
+                INSERT INTO account_secrets (account_id, key, value)
+                SELECT account_id, 'password', password
+                FROM account_passwords_legacy;
+
+                DROP TABLE account_passwords_legacy;
+                PRAGMA user_version = 14;
                 ",
         )
         .map_err(storage_error)?;
@@ -3475,8 +3582,12 @@ mod tests {
     use std::{
         fs,
         path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
-        time::{Instant, SystemTime, UNIX_EPOCH},
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            mpsc,
+        },
+        thread,
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
     use maicenta_application::{
@@ -3929,23 +4040,86 @@ mod tests {
     }
 
     #[test]
-    fn stores_account_passwords_inside_the_encrypted_profile() {
+    fn stores_independent_account_secrets_inside_the_encrypted_profile() {
         let mut store = SqliteMailStore::open_in_memory().expect("profile");
         let account = mail_account();
         store.save_mail_account(&account).expect("save account");
         store
             .set(&account.id, "password", "app-password")
             .expect("save password");
+        store
+            .set(&account.id, "oauth.refresh_token", "refresh-token")
+            .expect("save refresh token");
         assert_eq!(
             store.get(&account.id, "password").expect("load password"),
             Some("app-password".into())
+        );
+        assert_eq!(
+            store
+                .get(&account.id, "oauth.refresh_token")
+                .expect("load refresh token"),
+            Some("refresh-token".into())
+        );
+        store
+            .remove(&account.id, "password")
+            .expect("remove password");
+        assert_eq!(
+            store
+                .get(&account.id, "password")
+                .expect("removed password"),
+            None
+        );
+        assert_eq!(
+            store
+                .get(&account.id, "oauth.refresh_token")
+                .expect("refresh token retained"),
+            Some("refresh-token".into())
         );
         store
             .delete_mail_account(&account.id)
             .expect("delete account");
         assert_eq!(
-            store.get(&account.id, "password").expect("deleted secret"),
+            store
+                .get(&account.id, "oauth.refresh_token")
+                .expect("deleted secret"),
             None
+        );
+    }
+
+    #[test]
+    fn migrates_existing_password_rows_to_named_secrets() {
+        let connection = Connection::open_in_memory().expect("database");
+        connection
+            .execute_batch(
+                "
+                PRAGMA foreign_keys = ON;
+                CREATE TABLE mail_accounts (
+                    id TEXT PRIMARY KEY NOT NULL
+                ) STRICT;
+                CREATE TABLE account_secrets (
+                    account_id TEXT PRIMARY KEY NOT NULL
+                        REFERENCES mail_accounts(id) ON DELETE CASCADE,
+                    password TEXT NOT NULL CHECK (length(password) > 0)
+                ) STRICT;
+                INSERT INTO mail_accounts (id) VALUES ('work');
+                INSERT INTO account_secrets (account_id, password)
+                VALUES ('work', 'existing-password');
+                PRAGMA user_version = 13;
+                ",
+            )
+            .expect("legacy schema");
+
+        let store = SqliteMailStore::from_connection(connection).expect("migrated store");
+        let account_id = AccountId::parse("work").expect("account id");
+        assert_eq!(
+            store
+                .get(&account_id, "password")
+                .expect("migrated password"),
+            Some("existing-password".into())
+        );
+        assert_eq!(
+            store.schema_version().expect("schema version"),
+            CURRENT_SCHEMA_VERSION
         );
     }
 
@@ -4412,6 +4586,33 @@ mod tests {
                 .expect("load mailboxes"),
             vec![mailbox]
         );
+    }
+
+    #[test]
+    fn coordinates_operations_across_connections_to_the_same_profile() {
+        let database = TemporaryDatabase::new();
+        let first = SqliteMailStore::open(&database.path).expect("first connection");
+        let second = SqliteMailStore::open(&database.path).expect("second connection");
+        let first_operation = first.connection().expect("first operation");
+        let (sender, receiver) = mpsc::channel();
+
+        let worker = thread::spawn(move || {
+            let result = second.schema_version();
+            sender.send(result).expect("send result");
+        });
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        drop(first_operation);
+        assert_eq!(
+            receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("coordinated operation"),
+            Ok(CURRENT_SCHEMA_VERSION)
+        );
+        worker.join().expect("worker");
     }
 
     #[test]

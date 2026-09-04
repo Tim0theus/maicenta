@@ -45,6 +45,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MailAccountInput dco_decode_box_autoadd_mail_account_input(dynamic raw);
 
   @protected
+  MessageDto dco_decode_box_autoadd_message_dto(dynamic raw);
+
+  @protected
+  OAuthTokenInput dco_decode_box_autoadd_o_auth_token_input(dynamic raw);
+
+  @protected
   OutgoingMessageInput dco_decode_box_autoadd_outgoing_message_input(
     dynamic raw,
   );
@@ -112,16 +118,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MailboxDto dco_decode_mailbox_dto(dynamic raw);
 
   @protected
+  MailboxIdleDto dco_decode_mailbox_idle_dto(dynamic raw);
+
+  @protected
   MessageAttachmentDto dco_decode_message_attachment_dto(dynamic raw);
 
   @protected
   MessageDto dco_decode_message_dto(dynamic raw);
 
   @protected
+  OAuthTokenInput dco_decode_o_auth_token_input(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
+
+  @protected
+  MessageDto? dco_decode_opt_box_autoadd_message_dto(dynamic raw);
 
   @protected
   OutgoingMessageInput dco_decode_outgoing_message_input(dynamic raw);
@@ -175,6 +190,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MailAccountInput sse_decode_box_autoadd_mail_account_input(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  MessageDto sse_decode_box_autoadd_message_dto(SseDeserializer deserializer);
+
+  @protected
+  OAuthTokenInput sse_decode_box_autoadd_o_auth_token_input(
     SseDeserializer deserializer,
   );
 
@@ -256,6 +279,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MailboxDto sse_decode_mailbox_dto(SseDeserializer deserializer);
 
   @protected
+  MailboxIdleDto sse_decode_mailbox_idle_dto(SseDeserializer deserializer);
+
+  @protected
   MessageAttachmentDto sse_decode_message_attachment_dto(
     SseDeserializer deserializer,
   );
@@ -264,10 +290,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MessageDto sse_decode_message_dto(SseDeserializer deserializer);
 
   @protected
+  OAuthTokenInput sse_decode_o_auth_token_input(SseDeserializer deserializer);
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
+  MessageDto? sse_decode_opt_box_autoadd_message_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   OutgoingMessageInput sse_decode_outgoing_message_input(
@@ -334,6 +368,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_mail_account_input(
     MailAccountInput self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_message_dto(
+    MessageDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_o_auth_token_input(
+    OAuthTokenInput self,
     SseSerializer serializer,
   );
 
@@ -446,6 +492,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_mailbox_dto(MailboxDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_mailbox_idle_dto(
+    MailboxIdleDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_message_attachment_dto(
     MessageAttachmentDto self,
     SseSerializer serializer,
@@ -455,11 +507,23 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_message_dto(MessageDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_o_auth_token_input(
+    OAuthTokenInput self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_i_64(
     PlatformInt64? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_message_dto(
+    MessageDto? self,
     SseSerializer serializer,
   );
 

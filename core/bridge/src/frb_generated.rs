@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -69111438;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -217916187;
 
 // Section: executor
 
@@ -727,6 +727,47 @@ fn wire__crate__api__workspace__save_mail_account_impl(
         },
     )
 }
+fn wire__crate__api__workspace__save_oauth_mail_account_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "save_oauth_mail_account",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_database_path = <String>::sse_decode(&mut deserializer);
+            let api_input =
+                <crate::api::workspace::MailAccountInput>::sse_decode(&mut deserializer);
+            let api_tokens =
+                <crate::api::workspace::OAuthTokenInput>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::workspace::save_oauth_mail_account(
+                        api_database_path,
+                        api_input,
+                        api_tokens,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__workspace__search_profile_messages_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -931,6 +972,48 @@ fn wire__crate__api__workspace__test_mail_account_connection_impl(
         },
     )
 }
+fn wire__crate__api__workspace__test_oauth_mail_account_connection_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "test_oauth_mail_account_connection",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_input =
+                <crate::api::workspace::MailAccountInput>::sse_decode(&mut deserializer);
+            let api_access_token = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::workspace::test_oauth_mail_account_connection(
+                            api_input,
+                            api_access_token,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__workspace__update_local_message_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -970,6 +1053,49 @@ fn wire__crate__api__workspace__update_local_message_impl(
                     )?;
                     Ok(output_ok)
                 })())
+            }
+        },
+    )
+}
+fn wire__crate__api__workspace__wait_for_mailbox_idle_change_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "wait_for_mailbox_idle_change",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_database_path = <String>::sse_decode(&mut deserializer);
+            let api_mailbox_id = <String>::sse_decode(&mut deserializer);
+            let api_timeout_seconds = <u32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::workspace::wait_for_mailbox_idle_change(
+                            api_database_path,
+                            api_mailbox_id,
+                            api_timeout_seconds,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
             }
         },
     )
@@ -1275,6 +1401,8 @@ impl SseDecode for crate::api::workspace::MailAccountDto {
         let mut var_smtpPort = <u16>::sse_decode(deserializer);
         let mut var_smtpSecurity = <String>::sse_decode(deserializer);
         let mut var_smtpUsername = <String>::sse_decode(deserializer);
+        let mut var_authentication = <String>::sse_decode(deserializer);
+        let mut var_oauthProvider = <Option<String>>::sse_decode(deserializer);
         let mut var_lastSyncAtMs = <Option<i64>>::sse_decode(deserializer);
         return crate::api::workspace::MailAccountDto {
             id: var_id,
@@ -1288,6 +1416,8 @@ impl SseDecode for crate::api::workspace::MailAccountDto {
             smtp_port: var_smtpPort,
             smtp_security: var_smtpSecurity,
             smtp_username: var_smtpUsername,
+            authentication: var_authentication,
+            oauth_provider: var_oauthProvider,
             last_sync_at_ms: var_lastSyncAtMs,
         };
     }
@@ -1339,6 +1469,18 @@ impl SseDecode for crate::api::workspace::MailboxDto {
             role: var_role,
             unread_count: var_unreadCount,
             total_count: var_totalCount,
+        };
+    }
+}
+
+impl SseDecode for crate::api::workspace::MailboxIdleDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_idleSupported = <bool>::sse_decode(deserializer);
+        let mut var_changed = <bool>::sse_decode(deserializer);
+        return crate::api::workspace::MailboxIdleDto {
+            idle_supported: var_idleSupported,
+            changed: var_changed,
         };
     }
 }
@@ -1418,6 +1560,28 @@ impl SseDecode for crate::api::workspace::MessageDto {
     }
 }
 
+impl SseDecode for crate::api::workspace::OAuthTokenInput {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_provider = <String>::sse_decode(deserializer);
+        let mut var_clientId = <String>::sse_decode(deserializer);
+        let mut var_accessToken = <String>::sse_decode(deserializer);
+        let mut var_refreshToken = <String>::sse_decode(deserializer);
+        let mut var_expiresAtMs = <i64>::sse_decode(deserializer);
+        let mut var_tokenEndpoint = <String>::sse_decode(deserializer);
+        let mut var_scopes = <String>::sse_decode(deserializer);
+        return crate::api::workspace::OAuthTokenInput {
+            provider: var_provider,
+            client_id: var_clientId,
+            access_token: var_accessToken,
+            refresh_token: var_refreshToken,
+            expires_at_ms: var_expiresAtMs,
+            token_endpoint: var_tokenEndpoint,
+            scopes: var_scopes,
+        };
+    }
+}
+
 impl SseDecode for Option<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1434,6 +1598,19 @@ impl SseDecode for Option<i64> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<i64>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<crate::api::workspace::MessageDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::workspace::MessageDto>::sse_decode(
+                deserializer,
+            ));
         } else {
             return None;
         }
@@ -1625,37 +1802,55 @@ fn pde_ffi_dispatcher_primary_impl(
         18 => {
             wire__crate__api__workspace__save_mail_account_impl(port, ptr, rust_vec_len, data_len)
         }
-        19 => wire__crate__api__workspace__search_profile_messages_impl(
+        19 => wire__crate__api__workspace__save_oauth_mail_account_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        20 => wire__crate__api__workspace__send_account_message_impl(
+        20 => wire__crate__api__workspace__search_profile_messages_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        21 => wire__crate__api__workspace__synchronize_mail_account_drafts_impl(
+        21 => wire__crate__api__workspace__send_account_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        22 => wire__crate__api__workspace__synchronize_mail_accounts_impl(
+        22 => wire__crate__api__workspace__synchronize_mail_account_drafts_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        23 => wire__crate__api__workspace__test_mail_account_connection_impl(
+        23 => wire__crate__api__workspace__synchronize_mail_accounts_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        24 => wire__crate__api__workspace__update_local_message_impl(
+        24 => wire__crate__api__workspace__test_mail_account_connection_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        25 => wire__crate__api__workspace__test_oauth_mail_account_connection_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        26 => wire__crate__api__workspace__update_local_message_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        27 => wire__crate__api__workspace__wait_for_mailbox_idle_change_impl(
             port,
             ptr,
             rust_vec_len,
@@ -1870,6 +2065,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::workspace::MailAccountDto {
             self.smtp_port.into_into_dart().into_dart(),
             self.smtp_security.into_into_dart().into_dart(),
             self.smtp_username.into_into_dart().into_dart(),
+            self.authentication.into_into_dart().into_dart(),
+            self.oauth_provider.into_into_dart().into_dart(),
             self.last_sync_at_ms.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -1942,6 +2139,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::workspace::MailboxDto>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::workspace::MailboxIdleDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.idle_supported.into_into_dart().into_dart(),
+            self.changed.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::workspace::MailboxIdleDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::workspace::MailboxIdleDto>
+    for crate::api::workspace::MailboxIdleDto
+{
+    fn into_into_dart(self) -> crate::api::workspace::MailboxIdleDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::workspace::MessageAttachmentDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -2005,6 +2223,32 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::workspace::MessageDto>
     for crate::api::workspace::MessageDto
 {
     fn into_into_dart(self) -> crate::api::workspace::MessageDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::workspace::OAuthTokenInput {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.provider.into_into_dart().into_dart(),
+            self.client_id.into_into_dart().into_dart(),
+            self.access_token.into_into_dart().into_dart(),
+            self.refresh_token.into_into_dart().into_dart(),
+            self.expires_at_ms.into_into_dart().into_dart(),
+            self.token_endpoint.into_into_dart().into_dart(),
+            self.scopes.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::workspace::OAuthTokenInput
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::workspace::OAuthTokenInput>
+    for crate::api::workspace::OAuthTokenInput
+{
+    fn into_into_dart(self) -> crate::api::workspace::OAuthTokenInput {
         self
     }
 }
@@ -2308,6 +2552,8 @@ impl SseEncode for crate::api::workspace::MailAccountDto {
         <u16>::sse_encode(self.smtp_port, serializer);
         <String>::sse_encode(self.smtp_security, serializer);
         <String>::sse_encode(self.smtp_username, serializer);
+        <String>::sse_encode(self.authentication, serializer);
+        <Option<String>>::sse_encode(self.oauth_provider, serializer);
         <Option<i64>>::sse_encode(self.last_sync_at_ms, serializer);
     }
 }
@@ -2338,6 +2584,14 @@ impl SseEncode for crate::api::workspace::MailboxDto {
         <String>::sse_encode(self.role, serializer);
         <u32>::sse_encode(self.unread_count, serializer);
         <u32>::sse_encode(self.total_count, serializer);
+    }
+}
+
+impl SseEncode for crate::api::workspace::MailboxIdleDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.idle_supported, serializer);
+        <bool>::sse_encode(self.changed, serializer);
     }
 }
 
@@ -2385,6 +2639,19 @@ impl SseEncode for crate::api::workspace::MessageDto {
     }
 }
 
+impl SseEncode for crate::api::workspace::OAuthTokenInput {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.provider, serializer);
+        <String>::sse_encode(self.client_id, serializer);
+        <String>::sse_encode(self.access_token, serializer);
+        <String>::sse_encode(self.refresh_token, serializer);
+        <i64>::sse_encode(self.expires_at_ms, serializer);
+        <String>::sse_encode(self.token_endpoint, serializer);
+        <String>::sse_encode(self.scopes, serializer);
+    }
+}
+
 impl SseEncode for Option<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2401,6 +2668,16 @@ impl SseEncode for Option<i64> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <i64>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<crate::api::workspace::MessageDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::workspace::MessageDto>::sse_encode(value, serializer);
         }
     }
 }

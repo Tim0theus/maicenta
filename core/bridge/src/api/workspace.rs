@@ -17,11 +17,12 @@ use maicenta_domain::{
     MessageSummary, TaskItem, TransportSecurity, WorkspaceItemId,
 };
 use maicenta_mail_connector::{
-    KnownRemoteMessage, OutgoingAttachment, OutgoingMessage, RemoteDraftIdentity,
-    RemoteDraftOperation, RemoteMailboxCheckpoint, RemoteMutation, apply_draft_operations,
-    apply_mailbox_mutations, delete_legacy_password, download_attachment_part,
-    download_message_content, load_legacy_password, send_message as send_smtp_message,
-    stable_remote_key, synchronize_mailboxes, test_account,
+    ConnectorError, KnownRemoteMessage, MailCredential, OutgoingAttachment, OutgoingMessage,
+    RemoteDraftIdentity, RemoteDraftOperation, RemoteMailboxCheckpoint, RemoteMutation,
+    apply_draft_operations, apply_mailbox_mutations, delete_legacy_password,
+    download_attachment_part, download_message_content, load_legacy_password,
+    send_message as send_smtp_message, stable_remote_key, synchronize_mailboxes, test_account,
+    wait_for_mailbox_change,
 };
 use maicenta_rendering::{
     MessageRenderer, RenderPolicy, RenderedMessage, decode_attachment_part,
@@ -38,8 +39,21 @@ const MAX_OUTGOING_ATTACHMENT_BYTES: u64 = 18 * 1024 * 1024;
 const MAX_ON_DEMAND_ATTACHMENT_BYTES: usize = 100 * 1024 * 1024;
 const INITIAL_MESSAGES_PER_MAILBOX: usize = 100;
 const MAX_MESSAGE_PAGE_SIZE: usize = 200;
-const FULL_MAILBOX_RECONCILE_INTERVAL_MS: i64 = 24 * 60 * 60 * 1_000;
+// QRESYNC-aware servers report deletions incrementally. Other servers need a
+// bounded UID SEARCH ALL pass; doing that every 15 minutes keeps removals
+// reasonably fresh without rescanning large folders on every five-minute poll.
+const FULL_MAILBOX_RECONCILE_INTERVAL_MS: i64 = 15 * 60 * 1_000;
 const ACCOUNT_PASSWORD_KEY: &str = "password";
+const OAUTH_PROVIDER_KEY: &str = "oauth.provider";
+const OAUTH_CLIENT_ID_KEY: &str = "oauth.client_id";
+const OAUTH_ACCESS_TOKEN_KEY: &str = "oauth.access_token";
+const OAUTH_REFRESH_TOKEN_KEY: &str = "oauth.refresh_token";
+const OAUTH_EXPIRES_AT_KEY: &str = "oauth.expires_at_ms";
+const OAUTH_TOKEN_ENDPOINT_KEY: &str = "oauth.token_endpoint";
+const OAUTH_SCOPES_KEY: &str = "oauth.scopes";
+const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
+const MICROSOFT_TOKEN_ENDPOINT: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+const OAUTH_REFRESH_SKEW_MS: i64 = 120_000;
 
 static PROFILE_VAULTS: OnceLock<Mutex<HashMap<PathBuf, Arc<ProfileVault>>>> = OnceLock::new();
 
@@ -95,14 +109,136 @@ fn open_profile_store(database_path: impl AsRef<Path>) -> Result<SqliteMailStore
         .map_err(|error| error.to_string())
 }
 
-fn load_account_password(
+enum StoredMailCredential {
+    Password(Zeroizing<String>),
+    OAuth2(Zeroizing<String>),
+}
+
+impl StoredMailCredential {
+    fn connector_credential(&self) -> MailCredential<'_> {
+        match self {
+            Self::Password(password) => MailCredential::Password(password.as_str()),
+            Self::OAuth2(access_token) => MailCredential::OAuth2AccessToken(access_token.as_str()),
+        }
+    }
+}
+
+fn required_secret(
     store: &SqliteMailStore,
     account_id: &AccountId,
+    key: &str,
+    description: &str,
 ) -> Result<String, String> {
     store
-        .get(account_id, ACCOUNT_PASSWORD_KEY)
+        .get(account_id, key)
         .map_err(|error| error.to_string())?
-        .ok_or_else(|| "no password is stored in the encrypted profile for this account".to_owned())
+        .ok_or_else(|| format!("no {description} is stored in the encrypted profile"))
+}
+
+async fn load_account_credential(
+    database_path: &Path,
+    account_id: &AccountId,
+) -> Result<StoredMailCredential, String> {
+    let store = open_profile_store(database_path)?;
+    let access_token = store
+        .get(account_id, OAUTH_ACCESS_TOKEN_KEY)
+        .map_err(|error| error.to_string())?;
+    let Some(access_token) = access_token else {
+        return required_secret(&store, account_id, ACCOUNT_PASSWORD_KEY, "password")
+            .map(Zeroizing::new)
+            .map(StoredMailCredential::Password);
+    };
+    let expires_at_ms = required_secret(
+        &store,
+        account_id,
+        OAUTH_EXPIRES_AT_KEY,
+        "OAuth token expiry",
+    )?
+    .parse::<i64>()
+    .map_err(|_| "the stored OAuth token expiry is invalid".to_owned())?;
+    if expires_at_ms > current_timestamp_ms()?.saturating_add(OAUTH_REFRESH_SKEW_MS) {
+        return Ok(StoredMailCredential::OAuth2(Zeroizing::new(access_token)));
+    }
+    let client_id = required_secret(&store, account_id, OAUTH_CLIENT_ID_KEY, "OAuth client ID")?;
+    let refresh_token = required_secret(
+        &store,
+        account_id,
+        OAUTH_REFRESH_TOKEN_KEY,
+        "OAuth refresh token",
+    )?;
+    let token_endpoint = required_secret(
+        &store,
+        account_id,
+        OAUTH_TOKEN_ENDPOINT_KEY,
+        "OAuth token endpoint",
+    )?;
+    let scopes = required_secret(&store, account_id, OAUTH_SCOPES_KEY, "OAuth scopes")?;
+    drop(store);
+
+    validate_oauth_token_endpoint(&token_endpoint)?;
+    let response = reqwest::Client::new()
+        .post(&token_endpoint)
+        .form(&[
+            ("client_id", client_id.as_str()),
+            ("refresh_token", refresh_token.as_str()),
+            ("grant_type", "refresh_token"),
+            ("scope", scopes.as_str()),
+        ])
+        .send()
+        .await
+        .map_err(|error| format!("OAuth token refresh failed: {error}"))?;
+    let status = response.status();
+    let payload: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| format!("OAuth token response was invalid: {error}"))?;
+    if !status.is_success() {
+        let detail = payload
+            .get("error_description")
+            .or_else(|| payload.get("error"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("the authorization server rejected the refresh token");
+        return Err(format!("OAuth token refresh failed: {detail}"));
+    }
+    let refreshed_access_token = payload
+        .get("access_token")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "OAuth token response did not contain an access token".to_owned())?;
+    let expires_in_seconds = payload
+        .get("expires_in")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "OAuth token response did not contain a valid lifetime".to_owned())?;
+    let new_expiry =
+        current_timestamp_ms()?.saturating_add(expires_in_seconds.saturating_mul(1_000));
+    let rotated_refresh_token = payload
+        .get("refresh_token")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty());
+    let mut store = open_profile_store(database_path)?;
+    store
+        .set(account_id, OAUTH_ACCESS_TOKEN_KEY, refreshed_access_token)
+        .map_err(|error| error.to_string())?;
+    store
+        .set(account_id, OAUTH_EXPIRES_AT_KEY, &new_expiry.to_string())
+        .map_err(|error| error.to_string())?;
+    if let Some(rotated_refresh_token) = rotated_refresh_token {
+        store
+            .set(account_id, OAUTH_REFRESH_TOKEN_KEY, rotated_refresh_token)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(StoredMailCredential::OAuth2(Zeroizing::new(
+        refreshed_access_token.to_owned(),
+    )))
+}
+
+fn validate_oauth_token_endpoint(value: &str) -> Result<(), String> {
+    if matches!(value, GOOGLE_TOKEN_ENDPOINT | MICROSOFT_TOKEN_ENDPOINT) {
+        Ok(())
+    } else {
+        Err("the stored OAuth token endpoint is not trusted".into())
+    }
 }
 
 fn migrate_legacy_credentials(store: &mut SqliteMailStore) -> Result<(), String> {
@@ -202,6 +338,12 @@ pub struct DraftSyncDto {
     pub warnings: Vec<String>,
 }
 
+/// Result of one bounded IMAP IDLE wait for the currently visible mailbox.
+pub struct MailboxIdleDto {
+    pub idle_supported: bool,
+    pub changed: bool,
+}
+
 pub struct CalendarEventDto {
     pub id: String,
     pub title: String,
@@ -235,6 +377,8 @@ pub struct MailAccountDto {
     pub smtp_port: u16,
     pub smtp_security: String,
     pub smtp_username: String,
+    pub authentication: String,
+    pub oauth_provider: Option<String>,
     pub last_sync_at_ms: Option<i64>,
 }
 
@@ -297,6 +441,19 @@ pub struct MailAccountInput {
     pub smtp_port: u16,
     pub smtp_security: String,
     pub smtp_username: String,
+}
+
+/// OAuth token set returned by an Authorization Code + PKCE exchange.
+/// It is accepted only by credential functions and stored in the encrypted
+/// profile; tokens are never returned in workspace snapshots.
+pub struct OAuthTokenInput {
+    pub provider: String,
+    pub client_id: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_at_ms: i64,
+    pub token_endpoint: String,
+    pub scopes: String,
 }
 
 /// Rich message submitted from the desktop composer.
@@ -554,7 +711,7 @@ pub fn save_local_message(
 pub async fn load_remote_message_content(
     database_path: String,
     message_id: String,
-) -> Result<MessageDto, String> {
+) -> Result<Option<MessageDto>, String> {
     let message_id = MessageId::parse(message_id).map_err(|error| error.to_string())?;
     let store = open_profile_store(&database_path)?;
     let metadata = store
@@ -566,18 +723,34 @@ pub async fn load_remote_message_content(
         .into_iter()
         .find(|account| account.id == metadata.account_id)
         .ok_or_else(|| "mail account for this message no longer exists".to_owned())?;
-    let password = Zeroizing::new(load_account_password(&store, &account.id)?);
     drop(store);
+    let credential = load_account_credential(Path::new(&database_path), &account.id).await?;
 
-    let remote = download_message_content(
+    let remote = match download_message_content(
         &account,
-        &password,
+        credential.connector_credential(),
         &metadata.remote_mailbox,
         metadata.uid_validity,
         metadata.remote_uid,
     )
     .await
-    .map_err(|error| error.to_string())?;
+    {
+        Ok(remote) => remote,
+        Err(ConnectorError::RemoteMessageMissing(_)) => {
+            let mut store = open_profile_store(&database_path)?;
+            let removed_attachments = store
+                .remove_vanished_remote_messages(
+                    &metadata.account_id,
+                    &metadata.remote_mailbox,
+                    metadata.uid_validity,
+                    &[metadata.remote_uid],
+                )
+                .map_err(|error| error.to_string())?;
+            remove_attachment_objects(Path::new(&database_path), &removed_attachments);
+            return Ok(None);
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     let mut store = open_profile_store(&database_path)?;
     let mut warnings = Vec::new();
     cache_remote_message(
@@ -589,6 +762,78 @@ pub async fn load_remote_message_content(
         &mut store,
         &mut warnings,
     )
+    .map(Some)
+}
+
+/// Waits for a push-style IMAP IDLE notification on one configured mailbox.
+///
+/// The call is bounded by `timeout_seconds`. If the server lacks QRESYNC, a
+/// received IDLE notification marks only this mailbox for a full UID safety
+/// reconciliation during the immediately following synchronization.
+///
+/// # Errors
+///
+/// Returns an account, credential, connection, or protocol error. Local and
+/// virtual folders return an unsupported result without opening a connection.
+pub async fn wait_for_mailbox_idle_change(
+    database_path: String,
+    mailbox_id: String,
+    timeout_seconds: u32,
+) -> Result<MailboxIdleDto, String> {
+    let mailbox_id = MailboxId::parse(mailbox_id).map_err(|error| error.to_string())?;
+    let store = open_profile_store(&database_path)?;
+    let accounts = store
+        .list_mail_accounts()
+        .map_err(|error| error.to_string())?;
+    let mut selected = None;
+    for account in accounts {
+        let mailbox = store
+            .list_mailboxes(&account.id)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|mailbox| mailbox.id == mailbox_id);
+        if let Some(mailbox) = mailbox {
+            selected = Some((account, mailbox.display_name));
+            break;
+        }
+    }
+    let Some((account, remote_mailbox)) = selected else {
+        return Ok(MailboxIdleDto {
+            idle_supported: false,
+            changed: false,
+        });
+    };
+    drop(store);
+
+    let credential = load_account_credential(Path::new(&database_path), &account.id).await?;
+    let result = wait_for_mailbox_change(
+        &account,
+        credential.connector_credential(),
+        &remote_mailbox,
+        std::time::Duration::from_secs(u64::from(timeout_seconds)),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+
+    if result.changed && !result.qresync_supported {
+        let mut store = open_profile_store(&database_path)?;
+        if let Some(mut state) = store
+            .remote_mailbox_sync_states(&account.id)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|state| state.remote_mailbox == remote_mailbox)
+        {
+            state.last_full_reconcile_at_ms = 0;
+            store
+                .save_remote_mailbox_sync_state(&state)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    Ok(MailboxIdleDto {
+        idle_supported: result.idle_supported,
+        changed: result.changed,
+    })
 }
 
 /// Saves one cached or server-backed attachment to a user-selected destination.
@@ -617,11 +862,11 @@ pub async fn export_attachment(
     }
     let remote_section = attachment
         .remote_section
-        .as_deref()
+        .clone()
         .ok_or_else(|| "attachment has neither a local object nor a remote section".to_owned())?;
     let transfer_encoding = attachment
         .transfer_encoding
-        .as_deref()
+        .clone()
         .ok_or_else(|| "attachment transfer encoding is missing".to_owned())?;
     let metadata = store
         .remote_message_metadata(&attachment.message_id)
@@ -632,19 +877,20 @@ pub async fn export_attachment(
         .into_iter()
         .find(|account| account.id == metadata.account_id)
         .ok_or_else(|| "mail account for this attachment no longer exists".to_owned())?;
-    let password = Zeroizing::new(load_account_password(&store, &account.id)?);
+    drop(store);
+    let credential = load_account_credential(&database_path, &account.id).await?;
     let encoded = download_attachment_part(
         &account,
-        &password,
+        credential.connector_credential(),
         &metadata.remote_mailbox,
         metadata.uid_validity,
         metadata.remote_uid,
-        remote_section,
+        &remote_section,
     )
     .await
     .map_err(|error| error.to_string())?;
     let decoded =
-        decode_attachment_part(&encoded, transfer_encoding, MAX_ON_DEMAND_ATTACHMENT_BYTES)
+        decode_attachment_part(&encoded, &transfer_encoding, MAX_ON_DEMAND_ATTACHMENT_BYTES)
             .map_err(|error| error.to_string())?;
     write_exported_attachment(Path::new(&destination_path), &decoded)
 }
@@ -1218,6 +1464,108 @@ pub fn save_mail_account(
         store
             .set(&account.id, ACCOUNT_PASSWORD_KEY, password.as_str())
             .map_err(|error| error.to_string())?;
+        remove_oauth_secrets(&mut store, &account.id)?;
+    }
+    Ok(())
+}
+
+/// Saves an OAuth-backed IMAP/SMTP account and its refreshable token set in
+/// the encrypted profile vault.
+///
+/// Native applications must use Authorization Code + PKCE and must not ship a
+/// client secret. The refresh token never crosses back into Flutter snapshots.
+pub fn save_oauth_mail_account(
+    database_path: String,
+    input: MailAccountInput,
+    tokens: OAuthTokenInput,
+) -> Result<(), String> {
+    let access_token = Zeroizing::new(tokens.access_token);
+    let refresh_token = Zeroizing::new(tokens.refresh_token);
+    validate_oauth_token_input(
+        &tokens.provider,
+        &tokens.client_id,
+        access_token.as_str(),
+        refresh_token.as_str(),
+        tokens.expires_at_ms,
+        &tokens.token_endpoint,
+        &tokens.scopes,
+    )?;
+    let mut account = mail_account_from_input(input)?;
+    let mut store = open_profile_store(database_path)?;
+    if let Some(existing) = store
+        .list_mail_accounts()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|stored| stored.id == account.id)
+    {
+        account.last_sync_at_ms = existing.last_sync_at_ms;
+    }
+    store
+        .save_mail_account(&account)
+        .map_err(|error| error.to_string())?;
+    for (key, value) in [
+        (OAUTH_PROVIDER_KEY, tokens.provider.as_str()),
+        (OAUTH_CLIENT_ID_KEY, tokens.client_id.as_str()),
+        (OAUTH_ACCESS_TOKEN_KEY, access_token.as_str()),
+        (OAUTH_REFRESH_TOKEN_KEY, refresh_token.as_str()),
+        (OAUTH_TOKEN_ENDPOINT_KEY, tokens.token_endpoint.as_str()),
+        (OAUTH_SCOPES_KEY, tokens.scopes.as_str()),
+    ] {
+        store
+            .set(&account.id, key, value)
+            .map_err(|error| error.to_string())?;
+    }
+    store
+        .set(
+            &account.id,
+            OAUTH_EXPIRES_AT_KEY,
+            &tokens.expires_at_ms.to_string(),
+        )
+        .map_err(|error| error.to_string())?;
+    store
+        .remove(&account.id, ACCOUNT_PASSWORD_KEY)
+        .map_err(|error| error.to_string())
+}
+
+fn validate_oauth_token_input(
+    provider: &str,
+    client_id: &str,
+    access_token: &str,
+    refresh_token: &str,
+    expires_at_ms: i64,
+    token_endpoint: &str,
+    scopes: &str,
+) -> Result<(), String> {
+    if !matches!(provider, "google" | "microsoft365") {
+        return Err("OAuth provider must be google or microsoft365".into());
+    }
+    if client_id.trim().is_empty()
+        || access_token.is_empty()
+        || refresh_token.is_empty()
+        || scopes.trim().is_empty()
+    {
+        return Err("OAuth client ID, tokens, and scopes must not be empty".into());
+    }
+    validate_oauth_token_endpoint(token_endpoint)?;
+    if expires_at_ms <= current_timestamp_ms()? {
+        return Err("OAuth access token is already expired".into());
+    }
+    Ok(())
+}
+
+fn remove_oauth_secrets(store: &mut SqliteMailStore, account_id: &AccountId) -> Result<(), String> {
+    for key in [
+        OAUTH_PROVIDER_KEY,
+        OAUTH_CLIENT_ID_KEY,
+        OAUTH_ACCESS_TOKEN_KEY,
+        OAUTH_REFRESH_TOKEN_KEY,
+        OAUTH_EXPIRES_AT_KEY,
+        OAUTH_TOKEN_ENDPOINT_KEY,
+        OAUTH_SCOPES_KEY,
+    ] {
+        store
+            .remove(account_id, key)
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -1277,9 +1625,28 @@ pub async fn test_mail_account_connection(
 ) -> Result<(), String> {
     let password = Zeroizing::new(password);
     let account = mail_account_from_input(input)?;
-    test_account(&account, password.as_str())
+    test_account(&account, MailCredential::Password(password.as_str()))
         .await
         .map_err(|error| error.to_string())
+}
+
+/// Tests IMAP and SMTP with a short-lived OAuth access token without storing
+/// either the configuration or token.
+pub async fn test_oauth_mail_account_connection(
+    input: MailAccountInput,
+    access_token: String,
+) -> Result<(), String> {
+    let access_token = Zeroizing::new(access_token);
+    if access_token.is_empty() {
+        return Err("an OAuth access token is required".into());
+    }
+    let account = mail_account_from_input(input)?;
+    test_account(
+        &account,
+        MailCredential::OAuth2AccessToken(access_token.as_str()),
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 /// Pushes queued draft creates, edits, and removals for one account without
@@ -1300,9 +1667,11 @@ pub async fn synchronize_mail_account_drafts(
         .into_iter()
         .find(|account| account.id == account_id)
         .ok_or_else(|| "mail account not found".to_owned())?;
-    let password = Zeroizing::new(load_account_password(&store, &account.id)?);
+    drop(store);
+    let credential = load_account_credential(Path::new(&database_path), &account.id).await?;
     let (synchronized, warnings) =
-        synchronize_pending_drafts(&database_path, &account, &password).await?;
+        synchronize_pending_drafts(&database_path, &account, credential.connector_credential())
+            .await?;
     let pending = open_profile_store(&database_path)?
         .pending_mail_mutation_count()
         .map_err(|error| error.to_string())?;
@@ -1388,7 +1757,8 @@ pub async fn send_account_message(
         .into_iter()
         .find(|account| account.id == account_id)
         .ok_or_else(|| "mail account not found".to_owned())?;
-    let password = Zeroizing::new(load_account_password(&store, &account.id)?);
+    drop(store);
+    let credential = load_account_credential(&database_path, &account.id).await?;
     let outgoing = OutgoingMessage {
         to: input.to,
         cc: input.cc,
@@ -1399,7 +1769,7 @@ pub async fn send_account_message(
         attachments,
         high_importance: input.high_importance,
     };
-    send_smtp_message(&account, &password, &outgoing)
+    send_smtp_message(&account, credential.connector_credential(), &outgoing)
         .await
         .map(|response| {
             format!(
@@ -1598,7 +1968,7 @@ struct AccountSyncReport {
 async fn synchronize_pending_drafts(
     database_path: &str,
     account: &MailAccount,
-    password: &str,
+    credential: MailCredential<'_>,
 ) -> Result<(u32, Vec<String>), String> {
     let store = open_profile_store(database_path)?;
     let pending = store
@@ -1678,7 +2048,7 @@ async fn synchronize_pending_drafts(
     if operations.is_empty() {
         return Ok((0, warnings));
     }
-    let report = apply_draft_operations(account, password, &operations)
+    let report = apply_draft_operations(account, credential, &operations)
         .await
         .map_err(|error| error.to_string())?;
     let synchronized = u32::try_from(report.applied.len()).unwrap_or(u32::MAX);
@@ -1721,11 +2091,10 @@ async fn synchronize_account(
     database_path: &str,
     account: &MailAccount,
 ) -> Result<AccountSyncReport, String> {
-    let credential_store = open_profile_store(database_path)?;
-    let password = Zeroizing::new(load_account_password(&credential_store, &account.id)?);
-    drop(credential_store);
+    let credential = load_account_credential(Path::new(database_path), &account.id).await?;
     let (_, mut warnings) =
-        synchronize_pending_drafts(database_path, account, password.as_str()).await?;
+        synchronize_pending_drafts(database_path, account, credential.connector_credential())
+            .await?;
     let pending = open_profile_store(database_path)?
         .pending_mail_mutations(&account.id)
         .map_err(|error| error.to_string())?;
@@ -1742,9 +2111,13 @@ async fn synchronize_account(
                 flagged: mutation.flagged,
             })
             .collect::<Vec<_>>();
-        let report = apply_mailbox_mutations(account, &password, &remote_mutations)
-            .await
-            .map_err(|error| error.to_string())?;
+        let report = apply_mailbox_mutations(
+            account,
+            credential.connector_credential(),
+            &remote_mutations,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         let mut store = open_profile_store(database_path)?;
         for applied in report.applied {
             let message_id =
@@ -1799,7 +2172,7 @@ async fn synchronize_account(
         .collect::<Vec<_>>();
     let synchronized = synchronize_mailboxes(
         account,
-        &password,
+        credential.connector_credential(),
         &known_messages,
         &mailbox_checkpoints,
         25,
@@ -2259,6 +2632,16 @@ fn load_snapshot(store: &SqliteMailStore) -> Result<WorkspaceSnapshot, String> {
     let mail_accounts = store
         .list_mail_accounts()
         .map_err(|error| error.to_string())?;
+    let mail_account_dtos = mail_accounts
+        .iter()
+        .cloned()
+        .map(|account| {
+            let provider = store
+                .get(&account.id, OAUTH_PROVIDER_KEY)
+                .map_err(|error| error.to_string())?;
+            Ok(mail_account_dto(account, provider))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let mut account_ids =
         vec![AccountId::parse(DEMO_ACCOUNT_ID).map_err(|error| error.to_string())?];
     account_ids.extend(mail_accounts.iter().map(|account| account.id.clone()));
@@ -2329,7 +2712,7 @@ fn load_snapshot(store: &SqliteMailStore) -> Result<WorkspaceSnapshot, String> {
             .into_iter()
             .map(contact_dto)
             .collect(),
-        mail_accounts: mail_accounts.into_iter().map(mail_account_dto).collect(),
+        mail_accounts: mail_account_dtos,
         sync_warnings: Vec::new(),
         catalog_messages_remaining: 0,
         delta_mailboxes_synchronized: 0,
@@ -2517,7 +2900,12 @@ fn contact_dto(contact: Contact) -> ContactDto {
     }
 }
 
-fn mail_account_dto(account: MailAccount) -> MailAccountDto {
+fn mail_account_dto(account: MailAccount, oauth_provider: Option<String>) -> MailAccountDto {
+    let authentication = if oauth_provider.is_some() {
+        "oauth2"
+    } else {
+        "password"
+    };
     MailAccountDto {
         id: account.id.to_string(),
         display_name: account.display_name,
@@ -2530,6 +2918,8 @@ fn mail_account_dto(account: MailAccount) -> MailAccountDto {
         smtp_port: account.smtp_port,
         smtp_security: transport_security_name(account.smtp_security).into(),
         smtp_username: account.smtp_username,
+        authentication: authentication.into(),
+        oauth_provider,
         last_sync_at_ms: account.last_sync_at_ms,
     }
 }
@@ -2796,17 +3186,18 @@ mod tests {
     };
 
     use super::{
-        LocalCalendarEventInput, LocalContactInput, LocalMessageInput, LocalTaskInput,
-        MailAccountInput, attachment_content_type, attachment_object_path, cache_remote_message,
+        ACCOUNT_PASSWORD_KEY, LocalCalendarEventInput, LocalContactInput, LocalMessageInput,
+        LocalTaskInput, MICROSOFT_TOKEN_ENDPOINT, MailAccountInput, OAUTH_REFRESH_TOKEN_KEY,
+        OAuthTokenInput, attachment_content_type, attachment_object_path, cache_remote_message,
         create_local_mailbox, delete_local_mailbox, export_local_attachment, export_profile,
         import_profile, load_mailbox_messages, load_outgoing_attachments, mail_account_from_input,
         open_profile_store, open_workspace, remote_mailbox_id, remote_message_id,
         rename_local_mailbox, save_dark_mode, save_favorite_mailboxes, save_local_calendar_event,
         save_local_contact, save_local_message, save_local_task, save_mail_account,
-        search_profile_messages, update_local_message,
+        save_oauth_mail_account, search_profile_messages, update_local_message,
     };
     use maicenta_application::{MailAccountStore, MailStore, SecretStore};
-    use maicenta_domain::{Mailbox, MailboxRole, MessageBody, MessageId};
+    use maicenta_domain::{AccountId, Mailbox, MailboxRole, MessageBody, MessageId};
     use maicenta_mail_connector::{RemoteAttachmentPart, RemoteMessage};
 
     static NEXT_DATABASE_ID: AtomicU64 = AtomicU64::new(0);
@@ -3470,6 +3861,67 @@ aW5jb21pbmcgYnl0ZXM=
         assert_eq!(attachment.file_name, "server.pdf");
         assert_eq!(attachment.size_bytes, 321);
         assert!(!attachment.available_locally);
+
+        for suffix in ["", "-shm", "-wal"] {
+            let _ = fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        let _ = fs::remove_dir_all(path.with_extension("objects"));
+    }
+
+    #[test]
+    fn stores_oauth_tokens_without_exposing_them_in_snapshots() {
+        let path = temporary_database_path();
+        let database_path = path.to_string_lossy().into_owned();
+        open_workspace(database_path.clone()).expect("workspace");
+        save_oauth_mail_account(
+            database_path.clone(),
+            MailAccountInput {
+                id: "oauth-account".into(),
+                display_name: "Exchange Online".into(),
+                email: "alex@example.org".into(),
+                imap_host: "outlook.office365.com".into(),
+                imap_port: 993,
+                imap_security: "tls".into(),
+                imap_username: "alex@example.org".into(),
+                smtp_host: "smtp.office365.com".into(),
+                smtp_port: 587,
+                smtp_security: "starttls".into(),
+                smtp_username: "alex@example.org".into(),
+            },
+            OAuthTokenInput {
+                provider: "microsoft365".into(),
+                client_id: "public-client-id".into(),
+                access_token: "access-token-marker".into(),
+                refresh_token: "refresh-token-marker".into(),
+                expires_at_ms: 1_893_456_000_000,
+                token_endpoint: MICROSOFT_TOKEN_ENDPOINT.into(),
+                scopes: "offline_access https://outlook.office.com/SMTP.Send".into(),
+            },
+        )
+        .expect("save OAuth account");
+
+        let snapshot = open_workspace(database_path).expect("snapshot");
+        let account = snapshot
+            .mail_accounts
+            .iter()
+            .find(|account| account.id == "oauth-account")
+            .expect("OAuth account");
+        assert_eq!(account.authentication, "oauth2");
+        assert_eq!(account.oauth_provider.as_deref(), Some("microsoft365"));
+        let store = open_profile_store(&path).expect("profile store");
+        let account_id = AccountId::parse("oauth-account").expect("account id");
+        assert_eq!(
+            store
+                .get(&account_id, OAUTH_REFRESH_TOKEN_KEY)
+                .expect("refresh token"),
+            Some("refresh-token-marker".into())
+        );
+        assert_eq!(
+            store
+                .get(&account_id, ACCOUNT_PASSWORD_KEY)
+                .expect("password"),
+            None
+        );
 
         for suffix in ["", "-shm", "-wal"] {
             let _ = fs::remove_file(format!("{}{suffix}", path.display()));

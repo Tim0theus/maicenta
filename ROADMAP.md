@@ -7,7 +7,7 @@ change as the project evolves.
 ## Current status
 
 MAICENTA has a runnable desktop alpha with SQLite-backed mail and personal
-workspace data, real password-based IMAP/SMTP connectivity, a rich-text
+workspace data, real password- and OAuth-based IMAP/SMTP connectivity, a rich-text
 composer, and a standards-oriented safe rendering foundation. Account sync is
 not production-ready and there is no stable release yet.
 
@@ -48,6 +48,9 @@ The first usable release will focus on a stable, local desktop mail client.
 - [x] Add desktop drag and drop for moving messages within an account, adding,
   reordering, and removing encrypted-profile Favorites, and dropping native
   files into the composer as validated attachments.
+- [x] Add an Outlook-style message context menu for reply and forward actions,
+  read and follow-up state, account-local moves, archive, trash, spam, and
+  not-spam handling.
 - [x] Add a profile-persisted light/dark desktop theme and open editable drafts
   directly in the composer on double-click without an intermediate window.
 
@@ -78,7 +81,18 @@ The first usable release will focus on a stable, local desktop mail client.
 - [x] Use QRESYNC `VANISHED` deletion deltas when supported, filter them against
   known UIDs in the current UIDVALIDITY generation, and remove matching local
   messages and attachment objects transactionally.
-- [ ] Add OAuth 2.0 and provider-specific authentication guidance.
+- [x] Run silent IMAP synchronization at startup, every five minutes while the
+  client is active, and after resume; immediately discard a stale local entry
+  when an on-demand body request confirms that its UID vanished.
+- [x] Use bounded RFC 2177 IMAP IDLE waits for the currently visible remote
+  mailbox, trigger a silent sync on server notifications, and retain polling
+  plus targeted full reconciliation when IDLE or QRESYNC is unavailable.
+- [x] Add Authorization Code + PKCE sign-in, encrypted refresh-token storage,
+  automatic token refresh, and IMAP/SMTP XOAUTH2 for Microsoft 365/Exchange
+  Online and Google, with provider-specific setup guidance.
+- [ ] Add Microsoft Graph mail as a separate connector where IMAP/SMTP is
+  disabled, plus on-premises Exchange/EWS discovery and an explicit support
+  policy.
 - [x] Upload new and edited drafts with an encrypted offline queue, stable
   retry identity, exact UID/UIDVALIDITY replacement, and server-draft cleanup
   after sending.

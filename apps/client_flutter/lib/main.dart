@@ -10,9 +10,12 @@ import 'package:path_provider/path_provider.dart';
 
 import 'app_theme.dart';
 import 'features/compose/compose_window.dart';
+import 'features/mail/account_autodiscovery.dart';
 import 'features/mail/mail_data.dart';
 import 'features/mail/mailbox_labels.dart';
 import 'features/mail/message_window.dart';
+import 'features/mail/oauth_service.dart';
+import 'features/mail/safe_message_html.dart';
 import 'l10n/app_localizations.dart';
 import 'src/rust/frb_generated.dart';
 
@@ -162,6 +165,20 @@ enum WorkspaceModule { mail, calendar, tasks, contacts }
 
 enum MailListFilter { all, unread, flagged }
 
+enum MailContextAction {
+  open,
+  reply,
+  replyAll,
+  forward,
+  toggleRead,
+  toggleFlag,
+  archive,
+  delete,
+  spam,
+  notSpam,
+  move,
+}
+
 enum MailSort { received, sender, subject }
 
 enum ProfileTransferAction { export, import }
@@ -230,7 +247,8 @@ class WorkspaceShell extends StatefulWidget {
   State<WorkspaceShell> createState() => _WorkspaceShellState();
 }
 
-class _WorkspaceShellState extends State<WorkspaceShell> {
+class _WorkspaceShellState extends State<WorkspaceShell>
+    with WidgetsBindingObserver {
   WorkspaceModule module = WorkspaceModule.mail;
   int selectedMessage = 0;
   late String selectedFolder;
@@ -250,6 +268,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   int fullMailboxesReconciled = 0;
   int qresyncMailboxesSynchronized = 0;
   Timer? searchDebounce;
+  Timer? automaticSyncTimer;
+  int idleWatcherGeneration = 0;
   int searchGeneration = 0;
   MailListFilter mailFilter = MailListFilter.all;
   MailSort mailSort = MailSort.received;
@@ -267,6 +287,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     selectedFolder = widget.mailDataSource.folders.first.id;
     messages = widget.mailDataSource.messages.toList();
     folders = widget.mailDataSource.folders.toList();
@@ -277,12 +298,95 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     mailAccounts = widget.mailDataSource.mailAccounts.toList();
     offlineMode = mailAccounts.isEmpty;
     pendingMailOperations = widget.mailDataSource.pendingMailOperations;
+    if (widget.mailDataSource.automaticSynchronizationEnabled) {
+      automaticSyncTimer = Timer.periodic(
+        const Duration(minutes: 5),
+        (_) => unawaited(synchronize(automatic: true)),
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        await synchronize(automatic: true);
+        if (mounted) restartIdleWatcher();
+      });
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    idleWatcherGeneration += 1;
     searchDebounce?.cancel();
+    automaticSyncTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!widget.mailDataSource.automaticSynchronizationEnabled) return;
+    if (state == AppLifecycleState.resumed) {
+      unawaited(resumeAutomaticSynchronization());
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      idleWatcherGeneration += 1;
+    }
+  }
+
+  Future<void> resumeAutomaticSynchronization() async {
+    await synchronize(automatic: true);
+    if (mounted) restartIdleWatcher();
+  }
+
+  void restartIdleWatcher() {
+    idleWatcherGeneration += 1;
+    if (!mounted ||
+        offlineMode ||
+        !widget.mailDataSource.automaticSynchronizationEnabled) {
+      return;
+    }
+    final folder = selectedFolderData;
+    if (folder == null ||
+        folder.accountId == 'personal' ||
+        !mailAccounts.any((account) => account.id == folder.accountId)) {
+      return;
+    }
+    final generation = idleWatcherGeneration;
+    unawaited(watchMailboxWithIdle(folder.id, generation));
+  }
+
+  bool idleWatcherIsCurrent(String mailboxId, int generation) =>
+      mounted &&
+      !offlineMode &&
+      generation == idleWatcherGeneration &&
+      selectedFolder == mailboxId;
+
+  Future<void> watchMailboxWithIdle(String mailboxId, int generation) async {
+    while (idleWatcherIsCurrent(mailboxId, generation)) {
+      try {
+        final outcome = await widget.mailDataSource.waitForMailboxChange(
+          mailboxId,
+        );
+        if (!idleWatcherIsCurrent(mailboxId, generation)) return;
+        if (!outcome.idleSupported) return;
+        if (outcome.changed) {
+          while (synchronizing && idleWatcherIsCurrent(mailboxId, generation)) {
+            await Future<void>.delayed(const Duration(milliseconds: 250));
+          }
+          if (!idleWatcherIsCurrent(mailboxId, generation)) return;
+          await synchronize(automatic: true);
+        }
+      } on Object {
+        await Future<void>.delayed(const Duration(seconds: 30));
+      }
+    }
+  }
+
+  void selectFolder(String folderId) {
+    setState(() {
+      selectedFolder = folderId;
+      selectedMessage = 0;
+    });
+    restartIdleWatcher();
   }
 
   List<DemoMessage> get filteredMessages {
@@ -402,15 +506,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
     if (message.body.isNotEmpty ||
         message.plainText.isNotEmpty ||
-        message.accountId == 'personal' ||
-        loadingMessageContents.contains(message.id)) {
+        message.accountId == 'personal') {
       return;
+    }
+    await reloadMessageContent(message);
+  }
+
+  Future<DemoMessage?> reloadMessageContent(DemoMessage message) async {
+    if (message.accountId == 'personal' ||
+        loadingMessageContents.contains(message.id)) {
+      return null;
     }
     if (offlineMode) {
       showNotice(
         'Der Inhalt dieser katalogisierten Nachricht ist noch nicht lokal verfügbar.',
       );
-      return;
+      return null;
     }
     loadingMessageContents.add(message.id);
     showNotice('Nachrichteninhalt wird sicher vom IMAP-Server geladen …');
@@ -418,7 +529,26 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       final loadedFromSource = await widget.mailDataSource.loadMessageContent(
         message,
       );
-      if (!mounted) return;
+      if (!mounted) return null;
+      if (loadedFromSource == null) {
+        setState(() {
+          final previous = messages
+              .where((entry) => entry.id == message.id)
+              .firstOrNull;
+          _adjustFolderCounters(previous, null);
+          messages.removeWhere((entry) => entry.id == message.id);
+          profileSearchResults?.removeWhere((entry) => entry.id == message.id);
+          final remaining = filteredMessages.length;
+          selectedMessage = remaining == 0
+              ? 0
+              : selectedMessage.clamp(0, remaining - 1);
+        });
+        ScaffoldMessenger.of(context).clearSnackBars();
+        showNotice(
+          'Die Nachricht wurde inzwischen auf dem IMAP-Server entfernt und lokal aus dem Katalog gelöscht.',
+        );
+        return null;
+      }
       final loaded = loadedFromSource.copyWith(
         mailboxId: message.mailboxId,
         unread: message.unread,
@@ -436,13 +566,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             ?.map((entry) => entry.id == loaded.id ? loaded : entry)
             .toList();
       });
+      return loaded;
     } on Object catch (error) {
-      if (!mounted) return;
+      if (!mounted) return null;
       showInformation(
         'Nachrichteninhalt nicht verfügbar',
         'Die Metadaten bleiben durchsuchbar. Der Inhalt konnte nicht vom '
             'IMAP-Server geladen werden.\n\n$error',
       );
+      return null;
     } finally {
       loadingMessageContents.remove(message.id);
     }
@@ -791,6 +923,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         module = WorkspaceModule.mail;
         mailFilter = MailListFilter.all;
       });
+      restartIdleWatcher();
       var notice = effectiveDisposition == ComposeDisposition.sent
           ? sentThroughSmtp
                 ? 'Die Nachricht wurde über SMTP gesendet und lokal abgelegt.'
@@ -881,6 +1014,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onUpdate: persistMessageUpdate,
       onMove: moveMessageFromWindow,
       onSaveAttachment: saveAttachment,
+      onReloadContent: reloadMessageContent,
     );
   }
 
@@ -942,6 +1076,108 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       return;
     }
     await moveMessageFromWindow(message, targetFolder.id);
+  }
+
+  void selectMessageForContext(int index) {
+    if (index < 0 || index >= filteredMessages.length) return;
+    setState(() => selectedMessage = index);
+  }
+
+  Future<void> openMessageFromContext(DemoMessage message) async {
+    if (!filteredMessages.any((entry) => entry.id == message.id)) return;
+    var openedMessage = message;
+    if (message.unread && !message.draft) {
+      final updated = await persistMessageUpdate(
+        message.copyWith(unread: false),
+      );
+      if (!mounted || updated == null) return;
+      openedMessage = updated;
+    }
+    if (openedMessage.draft && openedMessage.editableDraft) {
+      await editDraftMessage(openedMessage);
+      return;
+    }
+    await showMessageWindow(
+      context,
+      message: openedMessage,
+      folders: folders,
+      onReply: replyToMessage,
+      onReplyAll: replyAllToMessage,
+      onForward: forwardMessage,
+      onEditDraft: editDraftMessage,
+      onUpdate: persistMessageUpdate,
+      onMove: moveMessageFromWindow,
+      onSaveAttachment: saveAttachment,
+      onReloadContent: reloadMessageContent,
+    );
+  }
+
+  Future<void> handleMailContextAction(
+    DemoMessage message,
+    MailContextAction action,
+  ) async {
+    switch (action) {
+      case MailContextAction.open:
+        await openMessageFromContext(message);
+        return;
+      case MailContextAction.reply:
+        await replyToMessage(message);
+        return;
+      case MailContextAction.replyAll:
+        await replyAllToMessage(message);
+        return;
+      case MailContextAction.forward:
+        await forwardMessage(message);
+        return;
+      case MailContextAction.toggleRead:
+        await persistMessageUpdate(message.copyWith(unread: !message.unread));
+        return;
+      case MailContextAction.toggleFlag:
+        await persistMessageUpdate(message.copyWith(flagged: !message.flagged));
+        return;
+      case MailContextAction.archive:
+        await moveMessageToRole(message, 'archive', 'archiviert');
+        return;
+      case MailContextAction.delete:
+        await moveMessageToRole(
+          message,
+          'trash',
+          'in den Papierkorb verschoben',
+        );
+        return;
+      case MailContextAction.spam:
+        await moveMessageToRole(message, 'junk', 'als Spam behandelt');
+        return;
+      case MailContextAction.notSpam:
+        await moveMessageToRole(message, 'inbox', 'als „Kein Spam“ behandelt');
+        return;
+      case MailContextAction.move:
+        return;
+    }
+  }
+
+  Future<void> moveMessageToRole(
+    DemoMessage message,
+    String role,
+    String action,
+  ) async {
+    final target = folders
+        .where(
+          (folder) =>
+              folder.accountId == message.accountId && folder.role == role,
+        )
+        .firstOrNull;
+    if (target == null) {
+      showNotice('Für dieses Konto ist kein passender IMAP-Ordner verfügbar.');
+      return;
+    }
+    if (target.id == message.mailboxId) return;
+    final updated = await persistMessageUpdate(
+      message.copyWith(mailboxId: target.id),
+    );
+    if (!mounted || updated == null) return;
+    setState(() => selectedMessage = 0);
+    showNotice('„${message.subject}“ wurde $action.');
   }
 
   Future<void> updateFavoriteFolders(List<String> orderedIds) async {
@@ -1048,22 +1284,30 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     showNotice('${updates.length} Nachrichten wurden als gelesen markiert.');
   }
 
-  Future<void> synchronize() async {
+  Future<void> synchronize({bool automatic = false}) async {
     if (synchronizing) {
-      showNotice('Die IMAP-Synchronisierung läuft bereits.');
+      if (!automatic) {
+        showNotice('Die IMAP-Synchronisierung läuft bereits.');
+      }
       return;
     }
     if (offlineMode) {
-      showNotice('Offline-Modus aktiv: Der lokale Datenbestand ist verfügbar.');
+      if (!automatic) {
+        showNotice(
+          'Offline-Modus aktiv: Der lokale Datenbestand ist verfügbar.',
+        );
+      }
       return;
     }
     if (mailAccounts.isEmpty) {
-      showNotice('Bitte zuerst ein IMAP-/SMTP-Konto einrichten.');
-      await showAccountSettings();
+      if (!automatic) {
+        showNotice('Bitte zuerst ein IMAP-/SMTP-Konto einrichten.');
+        await showAccountSettings();
+      }
       return;
     }
     setState(() => synchronizing = true);
-    showNotice('IMAP-Synchronisierung läuft …');
+    if (!automatic) showNotice('IMAP-Synchronisierung läuft …');
     final warnings = <String>{};
     int? previousRemaining;
     try {
@@ -1082,13 +1326,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           break;
         }
         previousRemaining = remaining;
-        showNotice(
-          'Der Suchkatalog wird im Hintergrund fortgesetzt: noch $remaining Nachrichten.',
-        );
+        if (!automatic) {
+          showNotice(
+            'Der Suchkatalog wird im Hintergrund fortgesetzt: noch $remaining Nachrichten.',
+          );
+        }
         await Future<void>.delayed(const Duration(milliseconds: 100));
       }
       if (!mounted) return;
-      if (warnings.isEmpty && catalogMessagesRemaining == 0) {
+      if (!automatic && warnings.isEmpty && catalogMessagesRemaining == 0) {
         final catalogued = folders.fold<int>(
           0,
           (count, folder) => count + folder.totalCount,
@@ -1099,7 +1345,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           '$fullMailboxesReconciled Vollabgleich, '
           '$qresyncMailboxesSynchronized QRESYNC).',
         );
-      } else if (warnings.isNotEmpty) {
+      } else if (!automatic && warnings.isNotEmpty) {
         showInformation(
           'Synchronisierung abgeschlossen',
           'Die verfügbaren Konten wurden aktualisiert. Hinweise zu '
@@ -1109,10 +1355,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       }
     } on Object catch (error) {
       if (!mounted) return;
-      showInformation(
-        'Synchronisierung fehlgeschlagen',
-        'Der lokale Datenbestand bleibt verfügbar.\n\n$error',
-      );
+      if (!automatic) {
+        showInformation(
+          'Synchronisierung fehlgeschlagen',
+          'Der lokale Datenbestand bleibt verfügbar.\n\n$error',
+        );
+      }
     } finally {
       if (mounted) setState(() => synchronizing = false);
     }
@@ -1120,6 +1368,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   void toggleOffline() {
     setState(() => offlineMode = !offlineMode);
+    restartIdleWatcher();
     showNotice(
       offlineMode ? 'Offline-Modus aktiviert.' : 'Online-Modus vorbereitet.',
     );
@@ -1175,6 +1424,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       selectedFolder = folder.id;
       selectedMessage = 0;
     });
+    restartIdleWatcher();
   }
 
   Future<void> renameFolder() async {
@@ -1242,6 +1492,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       selectedFolder = inboxId;
       selectedMessage = 0;
     });
+    restartIdleWatcher();
     showNotice(
       'Der lokale Ordner wurde gelöscht; enthaltene Nachrichten liegen im Posteingang.',
     );
@@ -1396,11 +1647,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             ? action.account
             : null,
         onTest: widget.mailDataSource.testAccount,
+        onTestOAuth: widget.mailDataSource.testOAuthAccount,
       ),
     );
     if (result == null) return;
     try {
-      await widget.mailDataSource.saveAccount(result.account, result.password);
+      if (result.oauthTokens == null) {
+        await widget.mailDataSource.saveAccount(
+          result.account,
+          result.password,
+        );
+      } else {
+        await widget.mailDataSource.saveOAuthAccount(
+          result.account,
+          result.oauthTokens!,
+        );
+      }
     } on Object catch (error) {
       if (!mounted) return;
       showInformation(
@@ -1428,6 +1690,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void replaceWorkspace(WorkspaceDataSnapshot snapshot) {
     searchDebounce?.cancel();
     searchGeneration += 1;
+    final previouslySelectedId = selectedMail?.id;
+    final previouslySelectedFolder = selectedFolder;
     final activeQuery = query;
     final includeContent = searchIncludesContent;
     final shouldAdoptTheme =
@@ -1451,14 +1715,25 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       profileSearchResults = null;
       searchInProgress = false;
       searchIncludesContent = false;
-      selectedMessage = 0;
       if (!folders.any((folder) => folder.id == selectedFolder)) {
         selectedFolder = folderIdForRole('inbox');
       }
+      final refreshedVisible = filteredMessages;
+      final refreshedIndex = previouslySelectedId == null
+          ? -1
+          : refreshedVisible.indexWhere(
+              (message) => message.id == previouslySelectedId,
+            );
+      selectedMessage = refreshedIndex >= 0
+          ? refreshedIndex
+          : refreshedVisible.isEmpty
+          ? 0
+          : selectedMessage.clamp(0, refreshedVisible.length - 1);
     });
     if (shouldAdoptTheme) {
       unawaited(adoptSnapshotTheme(snapshot.darkModeEnabled));
     }
+    if (selectedFolder != previouslySelectedFolder) restartIdleWatcher();
     if (activeQuery.trim().isNotEmpty) {
       searchWorkspace(activeQuery, includeContent: includeContent);
     }
@@ -1766,6 +2041,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   onChanged: (value) {
                     setState(() => offlineMode = value);
                     updateDialog(() {});
+                    restartIdleWatcher();
                   },
                 ),
                 SwitchListTile(
@@ -1912,11 +2188,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         selectedMessage: selectedMessage,
         selectedFolder: selectedFolder,
         onMessageSelected: selectMessage,
+        onMessageContextSelected: selectMessageForContext,
         onMessageOpened: openMessageWindow,
-        onFolderSelected: (folder) => setState(() {
-          selectedFolder = folder;
-          selectedMessage = 0;
-        }),
+        onMessageContextAction: handleMailContextAction,
+        onFolderSelected: selectFolder,
         onMessageDropped: (message, folder) =>
             unawaited(moveMessageByDrop(message, folder)),
         onFavoriteFolderOrderChanged: (folderIds) =>
@@ -1932,6 +2207,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         onForward: forwardSelected,
         onEditDraft: editSelectedDraft,
         onSaveAttachment: saveAttachment,
+        onReloadContent: reloadMessageContent,
         onAccountSettings: showAccountSettings,
         onNewFolder: createFolder,
         filter: mailFilter,
@@ -1986,10 +2262,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 }
 
 class AccountSetupResult {
-  const AccountSetupResult({required this.account, required this.password});
+  const AccountSetupResult({
+    required this.account,
+    this.password = '',
+    this.oauthTokens,
+  });
 
   final MailAccountConfig account;
   final String password;
+  final MailOAuthTokens? oauthTokens;
 }
 
 enum AccountManagementActionType { add, edit, delete }
@@ -2096,11 +2377,29 @@ class AccountManagerDialog extends StatelessWidget {
 }
 
 class AccountSetupDialog extends StatefulWidget {
-  const AccountSetupDialog({super.key, this.existing, required this.onTest});
+  const AccountSetupDialog({
+    super.key,
+    this.existing,
+    required this.onTest,
+    this.onTestOAuth,
+    this.onDiscover = discoverMailAccountSettings,
+    this.onAuthorizeOAuth,
+  });
 
   final MailAccountConfig? existing;
   final Future<void> Function(MailAccountConfig account, String password)
   onTest;
+  final Future<void> Function(
+    MailAccountConfig account,
+    MailOAuthTokens tokens,
+  )?
+  onTestOAuth;
+  final MailSettingsDiscovery onDiscover;
+  final Future<MailOAuthTokens> Function(
+    MailOAuthProvider provider,
+    String email,
+  )?
+  onAuthorizeOAuth;
 
   @override
   State<AccountSetupDialog> createState() => _AccountSetupDialogState();
@@ -2119,8 +2418,14 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
   final password = TextEditingController();
   String imapSecurity = 'tls';
   String smtpSecurity = 'starttls';
+  String authentication = 'password';
+  MailOAuthProvider oauthProvider = MailOAuthProvider.microsoft365;
+  MailOAuthTokens? oauthTokens;
   String? status;
+  bool statusSuccess = false;
   bool busy = false;
+  bool manualMode = false;
+  int? testedConfiguration;
 
   @override
   void initState() {
@@ -2141,8 +2446,16 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     smtpPort.text = '${account?.smtpPort ?? 587}';
     smtpSecurity = account?.smtpSecurity ?? 'starttls';
     smtpUsername.text = account?.smtpUsername ?? '';
+    authentication = account?.authentication ?? 'password';
+    oauthProvider = account?.oauthProvider == 'google'
+        ? MailOAuthProvider.google
+        : MailOAuthProvider.microsoft365;
+    oauthTokens = null;
     password.clear();
     status = null;
+    statusSuccess = false;
+    manualMode = account != null || authentication == 'oauth2';
+    testedConfiguration = null;
   }
 
   @override
@@ -2159,29 +2472,64 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     super.dispose();
   }
 
-  MailAccountConfig? configuration({required bool requirePassword}) {
+  bool validateIdentity({
+    required bool requirePassword,
+    bool reportErrors = true,
+  }) {
+    final address = email.text.trim();
+    final separator = address.lastIndexOf('@');
+    final validAddress =
+        separator > 0 &&
+        separator == address.indexOf('@') &&
+        separator < address.length - 1;
+    if (displayName.text.trim().isNotEmpty &&
+        validAddress &&
+        (!requirePassword || password.text.isNotEmpty)) {
+      return true;
+    }
+    if (reportErrors) {
+      setState(() {
+        status = requirePassword
+            ? 'Bitte Kontoname, gültige E-Mail-Adresse und Passwort angeben.'
+            : 'Bitte Kontoname und eine gültige E-Mail-Adresse angeben.';
+        statusSuccess = false;
+      });
+    }
+    return false;
+  }
+
+  MailAccountConfig? configuration({
+    required bool requirePassword,
+    bool reportErrors = true,
+  }) {
+    if (!validateIdentity(
+      requirePassword: requirePassword,
+      reportErrors: reportErrors,
+    )) {
+      return null;
+    }
     final parsedImapPort = int.tryParse(imapPort.text.trim());
     final parsedSmtpPort = int.tryParse(smtpPort.text.trim());
     final requiredValues = [
-      displayName.text,
-      email.text,
       imapHost.text,
       imapUsername.text,
       smtpHost.text,
       smtpUsername.text,
     ];
     if (requiredValues.any((value) => value.trim().isEmpty) ||
-        (requirePassword && password.text.isEmpty) ||
         parsedImapPort == null ||
         parsedImapPort < 1 ||
         parsedImapPort > 65535 ||
         parsedSmtpPort == null ||
         parsedSmtpPort < 1 ||
         parsedSmtpPort > 65535) {
-      setState(
-        () => status =
-            'Bitte alle Felder und gültige Ports zwischen 1 und 65535 angeben.',
-      );
+      if (reportErrors) {
+        setState(() {
+          status =
+              'Bitte alle Serverfelder und gültige Ports zwischen 1 und 65535 angeben.';
+          statusSuccess = false;
+        });
+      }
       return null;
     }
     return MailAccountConfig(
@@ -2196,31 +2544,281 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
       smtpPort: parsedSmtpPort,
       smtpSecurity: smtpSecurity,
       smtpUsername: smtpUsername.text.trim(),
+      authentication: authentication,
+      oauthProvider: authentication == 'oauth2'
+          ? oauthProvider.storageName
+          : null,
       lastSyncAt: widget.existing?.lastSyncAt,
     );
   }
 
+  int configurationFingerprint(MailAccountConfig account) => Object.hashAll([
+    account.email,
+    account.imapHost,
+    account.imapPort,
+    account.imapSecurity,
+    account.imapUsername,
+    account.smtpHost,
+    account.smtpPort,
+    account.smtpSecurity,
+    account.smtpUsername,
+    account.authentication,
+    account.oauthProvider,
+    password.text,
+  ]);
+
+  void applyOAuthProviderSettings() {
+    final address = email.text.trim();
+    imapUsername.text = address;
+    smtpUsername.text = address;
+    imapPort.text = '993';
+    imapSecurity = 'tls';
+    smtpPort.text = '587';
+    smtpSecurity = 'starttls';
+    switch (oauthProvider) {
+      case MailOAuthProvider.microsoft365:
+        imapHost.text = 'outlook.office365.com';
+        smtpHost.text = 'smtp.office365.com';
+        break;
+      case MailOAuthProvider.google:
+        imapHost.text = 'imap.gmail.com';
+        smtpHost.text = 'smtp.gmail.com';
+        break;
+    }
+  }
+
+  Future<MailOAuthTokens> authorizeOAuth() {
+    final callback = widget.onAuthorizeOAuth;
+    if (callback != null) {
+      return callback(oauthProvider, email.text.trim());
+    }
+    return MailOAuthService().authorize(
+      provider: oauthProvider,
+      loginHint: email.text.trim(),
+    );
+  }
+
+  Future<void> connectOAuth({bool closeAfterSuccess = false}) async {
+    if (!validateIdentity(requirePassword: false)) return;
+    setState(() {
+      busy = true;
+      statusSuccess = false;
+      status = '${oauthProvider.displayName} wird im Browser geöffnet …';
+      applyOAuthProviderSettings();
+    });
+    var dialogClosed = false;
+    try {
+      final tokens = await authorizeOAuth();
+      if (!mounted) return;
+      final account = configuration(requirePassword: false);
+      if (account == null) return;
+      final testOAuth = widget.onTestOAuth;
+      if (testOAuth == null) {
+        throw StateError('OAuth-Verbindungstest ist nicht verfügbar.');
+      }
+      setState(() {
+        status = 'OAuth-Anmeldung erfolgreich. IMAP und SMTP werden geprüft …';
+      });
+      await testOAuth(account, tokens);
+      if (!mounted) return;
+      oauthTokens = tokens;
+      testedConfiguration = configurationFingerprint(account);
+      setState(() {
+        status = '${oauthProvider.displayName} wurde erfolgreich verbunden.';
+        statusSuccess = true;
+      });
+      if (closeAfterSuccess) {
+        dialogClosed = true;
+        Navigator.pop(
+          context,
+          AccountSetupResult(account: account, oauthTokens: tokens),
+        );
+      }
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        status = 'OAuth-Anmeldung fehlgeschlagen: $error';
+        statusSuccess = false;
+      });
+    } finally {
+      if (mounted && !dialogClosed) setState(() => busy = false);
+    }
+  }
+
+  void applyDiscoveredSettings(DiscoveredMailSettings settings) {
+    imapHost.text = settings.imapHost;
+    imapPort.text = '${settings.imapPort}';
+    imapSecurity = settings.imapSecurity;
+    imapUsername.text = settings.imapUsername;
+    smtpHost.text = settings.smtpHost;
+    smtpPort.text = '${settings.smtpPort}';
+    smtpSecurity = settings.smtpSecurity;
+    smtpUsername.text = settings.smtpUsername;
+  }
+
+  Future<MailAccountConfig?> discoverAndTest({
+    required bool saveAfterSuccess,
+  }) async {
+    if (!validateIdentity(requirePassword: true)) return null;
+    setState(() {
+      busy = true;
+      statusSuccess = false;
+      status = 'Sichere Servereinstellungen werden aus der Domain ermittelt …';
+    });
+    var dialogClosed = false;
+    try {
+      final discovered = await widget.onDiscover(email.text.trim());
+      if (!mounted) return null;
+      if (discovered.isEmpty) {
+        setState(() {
+          manualMode = true;
+          status =
+              'Für diese Domain wurden keine vollständigen IMAP-/SMTP-Daten '
+              'gefunden. Bitte die Servereinstellungen manuell ergänzen.';
+        });
+        return null;
+      }
+
+      Object? lastError;
+      for (final settings in discovered.take(3)) {
+        setState(() {
+          applyDiscoveredSettings(settings);
+          status =
+              '${settings.source}: ${settings.imapHost}:${settings.imapPort} '
+              'und ${settings.smtpHost}:${settings.smtpPort} werden geprüft …';
+        });
+        final account = configuration(
+          requirePassword: true,
+          reportErrors: false,
+        );
+        if (account == null) continue;
+        try {
+          await widget.onTest(account, password.text);
+          if (!mounted) return null;
+          testedConfiguration = configurationFingerprint(account);
+          setState(() {
+            status =
+                'Konto automatisch erkannt. IMAP und SMTP wurden erfolgreich geprüft.';
+            statusSuccess = true;
+          });
+          if (saveAfterSuccess) {
+            dialogClosed = true;
+            Navigator.pop(
+              context,
+              AccountSetupResult(account: account, password: password.text),
+            );
+          }
+          return account;
+        } on Object catch (error) {
+          lastError = error;
+          final message = error.toString().toLowerCase();
+          if (message.contains('authentication') ||
+              message.contains('authentifizierung') ||
+              message.contains('login') ||
+              message.contains('anmeldung')) {
+            break;
+          }
+        }
+      }
+      if (!mounted) return null;
+      setState(() {
+        manualMode = true;
+        status =
+            'Die automatisch gefundenen Daten konnten nicht bestätigt werden. '
+            'Bitte Serverdaten oder Zugangsdaten prüfen.\n\n$lastError';
+        statusSuccess = false;
+      });
+    } on Object catch (error) {
+      if (!mounted) return null;
+      setState(() {
+        manualMode = true;
+        status =
+            'Die automatische Erkennung ist fehlgeschlagen. Die manuelle '
+            'Einrichtung wurde geöffnet.\n\n$error';
+        statusSuccess = false;
+      });
+    } finally {
+      if (mounted && !dialogClosed) setState(() => busy = false);
+    }
+    return null;
+  }
+
   Future<void> testConnection() async {
+    if (authentication == 'oauth2') {
+      await connectOAuth();
+      return;
+    }
+    if (!manualMode) {
+      await discoverAndTest(saveAfterSuccess: false);
+      return;
+    }
     final account = configuration(requirePassword: true);
     if (account == null) return;
     setState(() {
       busy = true;
       status = 'IMAP-Anmeldung und SMTP-Verbindung werden geprüft …';
+      statusSuccess = false;
     });
     try {
       await widget.onTest(account, password.text);
       if (!mounted) return;
-      setState(() => status = 'IMAP und SMTP wurden erfolgreich geprüft.');
+      testedConfiguration = configurationFingerprint(account);
+      setState(() {
+        status = 'IMAP und SMTP wurden erfolgreich geprüft.';
+        statusSuccess = true;
+      });
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() => status = 'Verbindung fehlgeschlagen: $error');
+      setState(() {
+        status = 'Verbindung fehlgeschlagen: $error';
+        statusSuccess = false;
+      });
     } finally {
       if (mounted) setState(() => busy = false);
     }
   }
 
-  void save() {
-    final account = configuration(requirePassword: widget.existing == null);
+  Future<void> save() async {
+    if (authentication == 'oauth2') {
+      final account = configuration(requirePassword: false);
+      if (account == null) return;
+      if (oauthTokens != null &&
+          testedConfiguration == configurationFingerprint(account)) {
+        Navigator.pop(
+          context,
+          AccountSetupResult(account: account, oauthTokens: oauthTokens),
+        );
+        return;
+      }
+      if (widget.existing?.authentication == 'oauth2' &&
+          widget.existing?.oauthProvider == oauthProvider.storageName) {
+        Navigator.pop(context, AccountSetupResult(account: account));
+        return;
+      }
+      await connectOAuth(closeAfterSuccess: true);
+      return;
+    }
+    if (!manualMode) {
+      final configured = configuration(
+        requirePassword: true,
+        reportErrors: false,
+      );
+      if (configured != null &&
+          testedConfiguration == configurationFingerprint(configured)) {
+        Navigator.pop(
+          context,
+          AccountSetupResult(account: configured, password: password.text),
+        );
+        return;
+      }
+      await discoverAndTest(saveAfterSuccess: true);
+      return;
+    }
+    final account = configuration(
+      requirePassword:
+          widget.existing == null ||
+          widget.existing?.authentication == 'oauth2',
+    );
     if (account == null) return;
     Navigator.pop(
       context,
@@ -2239,11 +2837,15 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
-                'Das Passwort wird im verschlüsselten Profil gespeichert; der '
-                'Betriebssystem-Schlüsselbund schützt nur den Profilschlüssel. '
-                'Beim Bearbeiten kann das Passwort leer bleiben.',
-                style: TextStyle(fontSize: 12),
+              Text(
+                authentication == 'oauth2'
+                    ? 'Access- und Refresh-Token werden im verschlüsselten Profil '
+                          'gespeichert. MAICENTA verwendet OAuth mit PKCE und kein '
+                          'Client-Secret.'
+                    : 'Das Passwort wird im verschlüsselten Profil gespeichert; '
+                          'der Betriebssystem-Schlüsselbund schützt nur den '
+                          'Profilschlüssel. Beim Bearbeiten kann das Passwort leer bleiben.',
+                style: const TextStyle(fontSize: 12),
               ),
               const SizedBox(height: 14),
               _AccountField(
@@ -2256,56 +2858,210 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
                 label: 'E-Mail-Adresse',
                 controller: email,
                 onChanged: (value) {
-                  if (imapUsername.text.isEmpty) imapUsername.text = value;
-                  if (smtpUsername.text.isEmpty) smtpUsername.text = value;
+                  if (authentication == 'oauth2' ||
+                      !manualMode ||
+                      imapUsername.text.isEmpty) {
+                    imapUsername.text = value;
+                  }
+                  if (authentication == 'oauth2' ||
+                      !manualMode ||
+                      smtpUsername.text.isEmpty) {
+                    smtpUsername.text = value;
+                  }
                 },
               ),
+              const SizedBox(height: 3),
+              SegmentedButton<String>(
+                key: const Key('account-authentication'),
+                segments: const [
+                  ButtonSegment(
+                    value: 'password',
+                    icon: Icon(Icons.password, size: 18),
+                    label: Text('Passwort'),
+                  ),
+                  ButtonSegment(
+                    value: 'oauth2',
+                    icon: Icon(Icons.verified_user_outlined, size: 18),
+                    label: Text('OAuth 2.0'),
+                  ),
+                ],
+                selected: {authentication},
+                onSelectionChanged: busy
+                    ? null
+                    : (selection) => setState(() {
+                        authentication = selection.first;
+                        manualMode =
+                            authentication == 'oauth2' ||
+                            widget.existing != null;
+                        oauthTokens = null;
+                        status = null;
+                        statusSuccess = false;
+                        testedConfiguration = null;
+                        if (authentication == 'oauth2') {
+                          applyOAuthProviderSettings();
+                        }
+                      }),
+              ),
               const SizedBox(height: 10),
-              const Text(
-                'Posteingang (IMAP)',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 6),
-              _ServerRow(
-                hostKey: const Key('account-imap-host'),
-                host: imapHost,
-                port: imapPort,
-                security: imapSecurity,
-                onSecurityChanged: (value) => setState(() {
-                  imapSecurity = value;
-                  imapPort.text = value == 'tls' ? '993' : '143';
-                }),
-              ),
-              _AccountField(
-                label: 'IMAP-Benutzername',
-                controller: imapUsername,
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                'Postausgang (SMTP)',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 6),
-              _ServerRow(
-                hostKey: const Key('account-smtp-host'),
-                host: smtpHost,
-                port: smtpPort,
-                security: smtpSecurity,
-                onSecurityChanged: (value) => setState(() {
-                  smtpSecurity = value;
-                  smtpPort.text = value == 'tls' ? '465' : '587';
-                }),
-              ),
-              _AccountField(
-                label: 'SMTP-Benutzername',
-                controller: smtpUsername,
-              ),
-              _AccountField(
-                key: const Key('account-password'),
-                label: 'Passwort oder App-Passwort',
-                controller: password,
-                obscureText: true,
-              ),
+              if (authentication == 'password') ...[
+                _AccountField(
+                  key: const Key('account-password'),
+                  label: 'Passwort oder App-Passwort',
+                  controller: password,
+                  obscureText: true,
+                ),
+                SegmentedButton<bool>(
+                  key: const Key('account-setup-mode'),
+                  segments: const [
+                    ButtonSegment(
+                      value: false,
+                      icon: Icon(Icons.auto_fix_high, size: 18),
+                      label: Text('Automatisch'),
+                    ),
+                    ButtonSegment(
+                      value: true,
+                      icon: Icon(Icons.tune, size: 18),
+                      label: Text('Manuell'),
+                    ),
+                  ],
+                  selected: {manualMode},
+                  onSelectionChanged: busy
+                      ? null
+                      : (selection) => setState(() {
+                          manualMode = selection.first;
+                          status = null;
+                          statusSuccess = false;
+                          testedConfiguration = null;
+                        }),
+                ),
+              ] else ...[
+                DropdownButtonFormField<MailOAuthProvider>(
+                  key: const Key('account-oauth-provider'),
+                  initialValue: oauthProvider,
+                  decoration: const InputDecoration(
+                    labelText: 'Anbieter',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: MailOAuthProvider.values
+                      .map(
+                        (provider) => DropdownMenuItem(
+                          value: provider,
+                          child: Text(provider.displayName),
+                        ),
+                      )
+                      .toList(growable: false),
+                  onChanged: busy
+                      ? null
+                      : (provider) {
+                          if (provider == null) return;
+                          setState(() {
+                            oauthProvider = provider;
+                            oauthTokens = null;
+                            testedConfiguration = null;
+                            status = null;
+                            applyOAuthProviderSettings();
+                          });
+                        },
+                ),
+                const SizedBox(height: 8),
+                FilledButton.tonalIcon(
+                  key: const Key('account-oauth-login'),
+                  onPressed: busy ? null : connectOAuth,
+                  icon: const Icon(Icons.open_in_browser, size: 18),
+                  label: Text(
+                    widget.existing?.authentication == 'oauth2'
+                        ? 'Erneut im Browser anmelden'
+                        : 'Im Browser anmelden',
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Exchange Online wird über Microsoft 365 mit XOAUTH2 für '
+                  'IMAP und SMTP angebunden. Lokales Exchange/EWS ist in '
+                  'dieser Ausbaustufe noch nicht enthalten.',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+              const SizedBox(height: 12),
+              if (authentication == 'password' && !manualMode)
+                Container(
+                  key: const Key('account-automatic-settings'),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.dns_outlined, size: 20),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'MAICENTA ermittelt IMAP und SMTP automatisch über '
+                          'sichere Domain-Autokonfiguration, DNS-SRV und '
+                          'bekannte Providerdaten. Das Passwort wird dabei '
+                          'nicht an den Konfigurationsdienst übertragen.',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                Column(
+                  key: const Key('account-manual-settings'),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      'Posteingang (IMAP)',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    _ServerRow(
+                      hostKey: const Key('account-imap-host'),
+                      host: imapHost,
+                      port: imapPort,
+                      security: imapSecurity,
+                      onSecurityChanged: (value) => setState(() {
+                        imapSecurity = value;
+                        imapPort.text = value == 'tls' ? '993' : '143';
+                        testedConfiguration = null;
+                      }),
+                    ),
+                    _AccountField(
+                      label: 'IMAP-Benutzername',
+                      controller: imapUsername,
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Postausgang (SMTP)',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    _ServerRow(
+                      hostKey: const Key('account-smtp-host'),
+                      host: smtpHost,
+                      port: smtpPort,
+                      security: smtpSecurity,
+                      onSecurityChanged: (value) => setState(() {
+                        smtpSecurity = value;
+                        smtpPort.text = value == 'tls' ? '465' : '587';
+                        testedConfiguration = null;
+                      }),
+                    ),
+                    _AccountField(
+                      label: 'SMTP-Benutzername',
+                      controller: smtpUsername,
+                    ),
+                  ],
+                ),
+              if (busy) ...[
+                const SizedBox(height: 10),
+                const LinearProgressIndicator(),
+              ],
               if (status != null) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -2313,9 +3069,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
                   key: const Key('account-status'),
                   style: TextStyle(
                     fontSize: 12,
-                    color: status!.contains('erfolgreich')
-                        ? Colors.green.shade700
-                        : null,
+                    color: statusSuccess ? Colors.green.shade700 : null,
                   ),
                 ),
               ],
@@ -2331,12 +3085,24 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
         OutlinedButton(
           key: const Key('account-test'),
           onPressed: busy ? null : testConnection,
-          child: const Text('Verbindung testen'),
+          child: Text(
+            authentication == 'oauth2'
+                ? 'Anmelden und testen'
+                : manualMode
+                ? 'Verbindung testen'
+                : 'Automatisch erkennen',
+          ),
         ),
         FilledButton(
           key: const Key('account-save'),
           onPressed: busy ? null : save,
-          child: const Text('Speichern'),
+          child: Text(
+            authentication == 'oauth2' && widget.existing == null
+                ? 'Anmelden und hinzufügen'
+                : !manualMode && widget.existing == null
+                ? 'Konto hinzufügen'
+                : 'Speichern',
+          ),
         ),
       ],
     );
@@ -3295,7 +4061,9 @@ class MailWorkspace extends StatelessWidget {
     required this.selectedMessage,
     required this.selectedFolder,
     required this.onMessageSelected,
+    required this.onMessageContextSelected,
     required this.onMessageOpened,
+    required this.onMessageContextAction,
     required this.onFolderSelected,
     required this.onMessageDropped,
     required this.onFavoriteFolderOrderChanged,
@@ -3307,6 +4075,7 @@ class MailWorkspace extends StatelessWidget {
     required this.onForward,
     required this.onEditDraft,
     required this.onSaveAttachment,
+    required this.onReloadContent,
     required this.onAccountSettings,
     required this.onNewFolder,
     required this.filter,
@@ -3326,7 +4095,10 @@ class MailWorkspace extends StatelessWidget {
   final int selectedMessage;
   final String selectedFolder;
   final ValueChanged<int> onMessageSelected;
+  final ValueChanged<int> onMessageContextSelected;
   final ValueChanged<int> onMessageOpened;
+  final Future<void> Function(DemoMessage message, MailContextAction action)
+  onMessageContextAction;
   final ValueChanged<String> onFolderSelected;
   final void Function(DemoMessage message, MailFolder folder) onMessageDropped;
   final ValueChanged<List<String>> onFavoriteFolderOrderChanged;
@@ -3338,6 +4110,7 @@ class MailWorkspace extends StatelessWidget {
   final VoidCallback onForward;
   final VoidCallback onEditDraft;
   final ValueChanged<MailAttachmentData> onSaveAttachment;
+  final Future<DemoMessage?> Function(DemoMessage message) onReloadContent;
   final VoidCallback onAccountSettings;
   final VoidCallback onNewFolder;
   final MailListFilter filter;
@@ -3360,6 +4133,7 @@ class MailWorkspace extends StatelessWidget {
             : messages[selectedMessage.clamp(0, messages.length - 1)];
 
         return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (folderPaneShown)
               FolderPane(
@@ -3385,6 +4159,7 @@ class MailWorkspace extends StatelessWidget {
                   : constraints.maxWidth - (folderPaneShown ? 245 : 0),
               child: MessageList(
                 messages: messages,
+                folders: folders,
                 selectedIndex: selectedMessage,
                 folder: folderDisplayName(context, folders, selectedFolder),
                 totalMessageCount: totalMessageCount,
@@ -3392,7 +4167,10 @@ class MailWorkspace extends StatelessWidget {
                 loadingMore: loadingMoreMessages,
                 onLoadMore: onLoadMoreMessages,
                 onSelected: onMessageSelected,
+                onContextSelected: onMessageContextSelected,
                 onOpened: onMessageOpened,
+                onContextAction: onMessageContextAction,
+                onMoved: onMessageDropped,
                 filter: filter,
                 onFilterChanged: onFilterChanged,
               ),
@@ -3406,6 +4184,7 @@ class MailWorkspace extends StatelessWidget {
                   onForward: onForward,
                   onEditDraft: onEditDraft,
                   onSaveAttachment: onSaveAttachment,
+                  onReloadContent: onReloadContent,
                   zoom: readingZoom,
                 ),
               ),
@@ -3940,6 +4719,7 @@ class MessageList extends StatelessWidget {
   const MessageList({
     super.key,
     required this.messages,
+    required this.folders,
     required this.selectedIndex,
     required this.folder,
     required this.totalMessageCount,
@@ -3947,12 +4727,16 @@ class MessageList extends StatelessWidget {
     required this.loadingMore,
     required this.onLoadMore,
     required this.onSelected,
+    required this.onContextSelected,
     required this.onOpened,
+    required this.onContextAction,
+    required this.onMoved,
     required this.filter,
     required this.onFilterChanged,
   });
 
   final List<DemoMessage> messages;
+  final List<MailFolder> folders;
   final int selectedIndex;
   final String folder;
   final int totalMessageCount;
@@ -3960,7 +4744,11 @@ class MessageList extends StatelessWidget {
   final bool loadingMore;
   final VoidCallback onLoadMore;
   final ValueChanged<int> onSelected;
+  final ValueChanged<int> onContextSelected;
   final ValueChanged<int> onOpened;
+  final Future<void> Function(DemoMessage message, MailContextAction action)
+  onContextAction;
+  final void Function(DemoMessage message, MailFolder folder) onMoved;
   final MailListFilter filter;
   final ValueChanged<MailListFilter> onFilterChanged;
 
@@ -4096,9 +4884,13 @@ class MessageList extends StatelessWidget {
                 final message = messages[index];
                 return MessageTile(
                   message: message,
+                  folders: folders,
                   selected: index == selectedIndex,
                   onTap: () => onSelected(index),
+                  onContextSelect: () => onContextSelected(index),
                   onDoubleTap: () => onOpened(index),
+                  onContextAction: (action) => onContextAction(message, action),
+                  onMoved: (folder) => onMoved(message, folder),
                 );
               },
             ),
@@ -4154,15 +4946,23 @@ class MessageTile extends StatefulWidget {
   const MessageTile({
     super.key,
     required this.message,
+    required this.folders,
     required this.selected,
     required this.onTap,
+    required this.onContextSelect,
     required this.onDoubleTap,
+    required this.onContextAction,
+    required this.onMoved,
   });
 
   final DemoMessage message;
+  final List<MailFolder> folders;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback onContextSelect;
   final VoidCallback onDoubleTap;
+  final ValueChanged<MailContextAction> onContextAction;
+  final ValueChanged<MailFolder> onMoved;
 
   @override
   State<MessageTile> createState() => _MessageTileState();
@@ -4170,6 +4970,25 @@ class MessageTile extends StatefulWidget {
 
 class _MessageTileState extends State<MessageTile> {
   DateTime? lastTapAt;
+
+  MailFolder? get currentFolder => widget.folders
+      .where((folder) => folder.id == widget.message.mailboxId)
+      .firstOrNull;
+
+  MailFolder? folderForRole(String role) => widget.folders
+      .where(
+        (folder) =>
+            folder.accountId == widget.message.accountId && folder.role == role,
+      )
+      .firstOrNull;
+
+  List<MailFolder> get moveDestinations => widget.folders
+      .where(
+        (folder) =>
+            folder.accountId == widget.message.accountId &&
+            folder.id != widget.message.mailboxId,
+      )
+      .toList(growable: false);
 
   void handleTap() {
     final now = DateTime.now();
@@ -4183,10 +5002,149 @@ class _MessageTileState extends State<MessageTile> {
     }
   }
 
+  RelativeRect menuPosition(TapDownDetails details) {
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    return RelativeRect.fromRect(
+      Rect.fromPoints(details.globalPosition, details.globalPosition),
+      Offset.zero & overlay.size,
+    );
+  }
+
+  Future<void> showContextMenu(TapDownDetails details) async {
+    widget.onContextSelect();
+    final currentRole = currentFolder?.role;
+    final archive = folderForRole('archive');
+    final trash = folderForRole('trash');
+    final junk = folderForRole('junk');
+    final destinations = moveDestinations;
+    final position = menuPosition(details);
+    final action = await showMenu<MailContextAction>(
+      context: context,
+      position: position,
+      items: [
+        _mailContextItem(
+          action: MailContextAction.open,
+          icon: widget.message.draft
+              ? Icons.edit_outlined
+              : Icons.open_in_new_outlined,
+          label: widget.message.draft ? 'Entwurf bearbeiten' : 'Öffnen',
+        ),
+        if (!widget.message.draft) ...[
+          const PopupMenuDivider(),
+          _mailContextItem(
+            action: MailContextAction.reply,
+            icon: Icons.reply,
+            label: 'Antworten',
+          ),
+          _mailContextItem(
+            action: MailContextAction.replyAll,
+            icon: Icons.reply_all,
+            label: 'Allen antworten',
+          ),
+          _mailContextItem(
+            action: MailContextAction.forward,
+            icon: Icons.forward,
+            label: 'Weiterleiten',
+          ),
+        ],
+        const PopupMenuDivider(),
+        if (!widget.message.draft)
+          _mailContextItem(
+            action: MailContextAction.toggleRead,
+            icon: widget.message.unread
+                ? Icons.mark_email_read_outlined
+                : Icons.mark_email_unread_outlined,
+            label: widget.message.unread
+                ? 'Als gelesen markieren'
+                : 'Als ungelesen markieren',
+          ),
+        _mailContextItem(
+          action: MailContextAction.toggleFlag,
+          icon: widget.message.flagged ? Icons.flag : Icons.outlined_flag,
+          label: widget.message.flagged
+              ? 'Nachverfolgung löschen'
+              : 'Zur Nachverfolgung',
+        ),
+        if (archive != null && currentRole != 'archive')
+          _mailContextItem(
+            action: MailContextAction.archive,
+            icon: Icons.archive_outlined,
+            label: 'Archivieren',
+          ),
+        if (destinations.isNotEmpty)
+          _mailContextItem(
+            action: MailContextAction.move,
+            icon: Icons.drive_file_move_outlined,
+            label: 'Verschieben',
+            trailing: Icons.chevron_right,
+          ),
+        if (!widget.message.draft && currentRole == 'junk')
+          _mailContextItem(
+            action: MailContextAction.notSpam,
+            icon: Icons.mark_email_read_outlined,
+            label: 'Kein Spam',
+            enabled: folderForRole('inbox') != null,
+          )
+        else if (!widget.message.draft && junk != null)
+          _mailContextItem(
+            action: MailContextAction.spam,
+            icon: Icons.report_gmailerrorred_outlined,
+            label: 'Als Spam behandeln',
+          ),
+        if (trash != null && currentRole != 'trash') ...[
+          const PopupMenuDivider(),
+          _mailContextItem(
+            action: MailContextAction.delete,
+            icon: Icons.delete_outline,
+            label: 'Löschen',
+            destructive: true,
+          ),
+        ],
+      ],
+    );
+    if (!mounted || action == null) return;
+    if (action != MailContextAction.move) {
+      widget.onContextAction(action);
+      return;
+    }
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+    final mailboxId = await showMenu<String>(
+      context: context,
+      position: position,
+      items: [
+        for (final folder in destinations)
+          PopupMenuItem<String>(
+            key: Key('mail-context-move-${folder.id}'),
+            value: folder.id,
+            child: Row(
+              children: [
+                Icon(folderIcon(folder.role), size: 18),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    mailboxDisplayName(context, folder),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+    if (!mounted || mailboxId == null) return;
+    final destination = destinations
+        .where((folder) => folder.id == mailboxId)
+        .firstOrNull;
+    if (destination != null) widget.onMoved(destination);
+  }
+
   @override
   Widget build(BuildContext context) {
     final tile = InkWell(
       onTap: handleTap,
+      onSecondaryTapDown: showContextMenu,
       child: Container(
         height: 70,
         padding: const EdgeInsets.fromLTRB(11, 7, 9, 6),
@@ -4301,6 +5259,37 @@ class _MessageTileState extends State<MessageTile> {
   }
 }
 
+PopupMenuItem<MailContextAction> _mailContextItem({
+  required MailContextAction action,
+  required IconData icon,
+  required String label,
+  IconData? trailing,
+  bool enabled = true,
+  bool destructive = false,
+}) {
+  final color = !enabled
+      ? const Color(0xFF999999)
+      : destructive
+      ? const Color(0xFFC42B1C)
+      : null;
+  return PopupMenuItem<MailContextAction>(
+    key: Key('mail-context-${action.name}'),
+    value: action,
+    enabled: enabled,
+    height: 38,
+    child: Row(
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 11),
+        Expanded(
+          child: Text(label, style: TextStyle(fontSize: 12, color: color)),
+        ),
+        if (trailing != null) Icon(trailing, size: 17, color: color),
+      ],
+    ),
+  );
+}
+
 class _MessageDragFeedback extends StatelessWidget {
   const _MessageDragFeedback({required this.message});
 
@@ -4355,7 +5344,7 @@ class _MessageDragFeedback extends StatelessWidget {
   }
 }
 
-class ReadingPane extends StatelessWidget {
+class ReadingPane extends StatefulWidget {
   const ReadingPane({
     super.key,
     required this.message,
@@ -4363,6 +5352,7 @@ class ReadingPane extends StatelessWidget {
     required this.onForward,
     required this.onEditDraft,
     required this.onSaveAttachment,
+    this.onReloadContent,
     required this.zoom,
   });
 
@@ -4371,10 +5361,61 @@ class ReadingPane extends StatelessWidget {
   final VoidCallback onForward;
   final VoidCallback onEditDraft;
   final ValueChanged<MailAttachmentData> onSaveAttachment;
+  final Future<DemoMessage?> Function(DemoMessage message)? onReloadContent;
   final double zoom;
 
   @override
+  State<ReadingPane> createState() => _ReadingPaneState();
+}
+
+class _ReadingPaneState extends State<ReadingPane> {
+  bool externalImagesAllowed = false;
+  bool loadingRemoteContent = false;
+
+  @override
+  void didUpdateWidget(covariant ReadingPane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.message?.id != widget.message?.id) {
+      externalImagesAllowed = false;
+      loadingRemoteContent = false;
+    }
+  }
+
+  Future<void> showExternalContent(DemoMessage current) async {
+    if (hasBlockedRemoteImages(current.body)) {
+      setState(() => externalImagesAllowed = true);
+      return;
+    }
+
+    final reload = widget.onReloadContent;
+    if (reload == null || loadingRemoteContent) return;
+    setState(() => loadingRemoteContent = true);
+    final refreshed = await reload(current);
+    if (!mounted) return;
+    setState(() {
+      loadingRemoteContent = false;
+      externalImagesAllowed =
+          refreshed != null && hasBlockedRemoteImages(refreshed.body);
+    });
+    if (refreshed != null && !externalImagesAllowed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Die Serverkopie enthält keine darstellbaren externen Bilder.',
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final message = widget.message;
+    final onReply = widget.onReply;
+    final onForward = widget.onForward;
+    final onEditDraft = widget.onEditDraft;
+    final onSaveAttachment = widget.onSaveAttachment;
+    final zoom = widget.zoom;
     if (message == null) {
       return const Center(
         child: Column(
@@ -4388,8 +5429,19 @@ class ReadingPane extends StatelessWidget {
       );
     }
 
-    final current = message!;
+    final current = message;
+    final blockedRemoteImages = hasBlockedRemoteImages(current.body);
+    final unresolvedImages = hasUnresolvedMessageImages(current.body);
+    final hasVisibleText = hasDisplayableMessageText(
+      current.body,
+      current.plainText,
+    );
+    final canRequestRemoteContent =
+        !current.draft &&
+        current.accountId != 'personal' &&
+        (blockedRemoteImages || unresolvedImages || !hasVisibleText);
     return Container(
+      key: const Key('reading-pane'),
       color: MaicentaPalette.of(context).window,
       child: SingleChildScrollView(
         key: const Key('reading-pane-scroll'),
@@ -4441,19 +5493,61 @@ class ReadingPane extends StatelessWidget {
                                       ? 'IMAP-Entwurf · Lokal bearbeitbar und synchronisiert'
                                       : 'Lokaler Entwurf · IMAP-Synchronisierung ausstehend'
                                 : 'Serverentwurf · Remote-Bestandteile schützen die Nachricht vor unvollständiger Bearbeitung'
+                          : externalImagesAllowed
+                          ? 'Sichere HTML-Ansicht · Externe Bilder für diese Nachricht geladen · Skripte blockiert'
+                          : blockedRemoteImages
+                          ? 'Sichere HTML-Ansicht · Externe Bilder und Skripte sind blockiert'
                           : 'Sichere HTML-Ansicht · Skripte und externe Inhalte sind blockiert',
                       style: const TextStyle(fontSize: 11),
                     ),
                   ),
+                  if (canRequestRemoteContent) ...[
+                    const SizedBox(width: 8),
+                    TextButton.icon(
+                      key: const Key('reading-load-external-content'),
+                      onPressed: loadingRemoteContent
+                          ? null
+                          : () => showExternalContent(current),
+                      icon: loadingRemoteContent
+                          ? const SizedBox.square(
+                              dimension: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.image_outlined, size: 16),
+                      label: Text(
+                        blockedRemoteImages || unresolvedImages
+                            ? 'Bilder laden'
+                            : 'Inhalt erneut laden',
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
+            if (!hasVisibleText && !externalImagesAllowed)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(22, 18, 28, 0),
+                child: Text(
+                  blockedRemoteImages
+                      ? 'Diese Nachricht enthält keinen lokal darstellbaren Text. Sie besteht möglicherweise nur aus externen Bildern.'
+                      : 'Für diese Nachricht ist kein darstellbarer Text lokal gespeichert. Der Inhalt kann erneut vom Mailserver geladen werden.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: MaicentaPalette.of(context).mutedText,
+                  ),
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(22, 22, 28, 28),
               child: SelectionArea(
                 child: HtmlWidget(
                   key: const Key('sanitized-html-body'),
                   current.body,
+                  factoryBuilder: () => SafeMailWidgetFactory(
+                    allowRemoteImages: () => externalImagesAllowed,
+                  ),
+                  rebuildTriggers: [externalImagesAllowed, current.body],
                   textStyle: TextStyle(fontSize: 13 * zoom, height: 1.48),
                   onTapUrl: (url) {
                     ScaffoldMessenger.of(context).showSnackBar(
