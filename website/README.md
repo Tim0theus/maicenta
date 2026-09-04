@@ -48,11 +48,18 @@ Set `available`, prices and the checkout and customer-portal URLs in `sync` in
 
 ## Deployment
 
-`.github/workflows/website.yml` builds on every change under `website/` and
-deploys `main` to Cloudflare Pages. It needs the repository secrets
-`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` and a Pages project named
-`maicenta`. Point the `maicenta.com` custom domain at that project in the
-Cloudflare dashboard.
+The site is deployed by Cloudflare's Git integration as a Worker with static
+assets (project `maicenta`, config in `wrangler.jsonc`). Cloudflare builds
+every push and publishes `main` to maicenta.com; other branches get preview
+URLs. Settings in the Cloudflare project:
+
+- Root directory: `website`
+- Build command: `npm run build`
+- Deploy command: `npx wrangler deploy`
+
+`.github/workflows/website.yml` only verifies that the site type-checks and
+builds; it does not deploy. Point the `maicenta.com` custom domain at the
+Worker in the Cloudflare dashboard.
 
 ## Before going live
 
