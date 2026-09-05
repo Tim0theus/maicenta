@@ -59,6 +59,9 @@ const OAUTH_SCOPES_KEY: &str = "oauth.scopes";
 const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const MICROSOFT_TOKEN_ENDPOINT: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const OAUTH_REFRESH_SKEW_MS: i64 = 120_000;
+/// Prefix of collapsed-state entries that describe folder-pane groups rather
+/// than mailboxes (`group.favorites`, `group.<account id>`).
+const COLLAPSED_GROUP_PREFIX: &str = "group.";
 const PROVIDER_IMAP: &str = "imap";
 const PROVIDER_MICROSOFT_GRAPH: &str = "microsoft_graph";
 const OAUTH_PROVIDER_MICROSOFT_GRAPH: &str = "microsoft_graph";
@@ -3287,11 +3290,17 @@ fn load_snapshot(store: &SqliteMailStore) -> Result<WorkspaceSnapshot, String> {
             .map(|mailbox| mailbox.id.to_string())
             .collect(),
     };
+    // Folder-pane group headers (Favorites, one per account) share this
+    // preference under the reserved `group.` prefix; they are not mailboxes
+    // and therefore bypass the known-mailbox filter.
     let collapsed_mailbox_ids = store
         .collapsed_mailbox_ids()
         .map_err(|error| error.to_string())?
         .into_iter()
-        .filter(|id| known_mailbox_ids.contains(id.as_str()))
+        .filter(|id| {
+            id.as_str().starts_with(COLLAPSED_GROUP_PREFIX)
+                || known_mailbox_ids.contains(id.as_str())
+        })
         .map(|id| id.to_string())
         .collect();
     let mut messages = Vec::new();
@@ -3908,11 +3917,18 @@ mod tests {
         );
         save_collapsed_mailboxes(
             path.to_string_lossy().into_owned(),
-            vec!["personal.inbox".into(), "unknown.folder".into()],
+            vec![
+                "personal.inbox".into(),
+                "unknown.folder".into(),
+                "group.favorites".into(),
+            ],
         )
         .expect("save collapsed folders");
         let collapsed = open_workspace(path.to_string_lossy().into_owned()).expect("reopen");
-        assert_eq!(collapsed.collapsed_mailbox_ids, ["personal.inbox"]);
+        assert_eq!(
+            collapsed.collapsed_mailbox_ids,
+            ["personal.inbox", "group.favorites"]
+        );
         save_dark_mode(path.to_string_lossy().into_owned(), true).expect("save dark mode");
         assert!(
             open_workspace(path.to_string_lossy().into_owned())

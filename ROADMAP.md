@@ -98,6 +98,14 @@ The first usable release will focus on a stable, local desktop mail client.
   tenants where IMAP/SMTP AUTH is disabled: per-folder delta synchronization,
   immutable message IDs, bounded HTML bodies with inline images, on-demand
   attachments, read/flag/move mutations, server drafts, and sending.
+- [x] Replace the protocol-first account dialog with an e-mail-first flow:
+  probe public signals (Entra ID tenant discovery, MX records, Google hosting,
+  IMAP autodiscovery, `_autodiscover` SRV), preselect the recommended method,
+  keep every alternative one click away, and move protocol vocabulary into an
+  "Erweitert" section.
+- [x] Show nested folders as a collapsible tree with a persisted collapsed
+  state for folders, the Favorites section, and each account group; indicate
+  running synchronization and remaining catalogue work in the status bar.
 - [ ] Add on-premises Exchange/EWS discovery and an explicit support policy.
   Exchange Online retires EWS in October 2026, so EWS is relevant only for
   on-premises servers.
