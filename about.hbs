@@ -1,0 +1,14 @@
+MAICENTA Rust third-party notices
+=================================
+
+The Rust core of MAICENTA links the open-source crates listed below. Each
+block names one license text and the crates it covers. Generated with
+`cargo about generate about.hbs` from about.toml; do not edit by hand.
+
+{{#each licenses}}
+==== LICENSE: {{{name}}}
+PACKAGES: {{#each used_by}}{{crate.name}} {{crate.version}}{{#unless @last}}, {{/unless}}{{/each}}
+
+{{{text}}}
+
+{{/each}}

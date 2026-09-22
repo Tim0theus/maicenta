@@ -1,11 +1,15 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:desktop_drop/desktop_drop.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:maicenta/main.dart';
+import 'package:maicenta/build_version.dart';
+import 'package:maicenta/features/about/about_dialog.dart';
 import 'package:maicenta/features/mail/account_autodiscovery.dart';
 import 'package:maicenta/features/mail/account_setup_detection.dart';
 import 'package:maicenta/features/mail/mail_data.dart';
@@ -2425,6 +2429,65 @@ void main() {
     );
     expect(find.byKey(const Key('status-sync-indicator')), findsNothing);
     expect(find.textContaining('Alle Ordner sind verfügbar'), findsOneWidget);
+  });
+  testWidgets('shows version and platform in the about dialog', (tester) async {
+    tester.view.physicalSize = const Size(1440, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaicentaApp(
+        mailDataSource: RecordingMailDataSource(configuredMessages: const []),
+        loadBuildInfo: () async => const MaicentaBuildInfo(
+          version: '0.1.0-beta.1',
+          buildNumber: '2',
+          platform: 'macOS Version 15.6',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('ribbon-tab-Datei')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('ribbon-action-Optionen')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('options-about')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('about-dialog')), findsOneWidget);
+    expect(find.text('Version 0.1.0-beta.1 (2)'), findsOneWidget);
+    expect(find.text('Beta'), findsOneWidget);
+    expect(
+      find.text('MAICENTA 0.1.0-beta.1 (2) · macOS Version 15.6'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('about-licenses')), findsOneWidget);
+  });
+
+  test('build version constant matches pubspec.yaml', () {
+    final pubspec = File('pubspec.yaml').readAsLinesSync();
+    final line = pubspec.firstWhere((line) => line.startsWith('version:'));
+    final version = line.substring('version:'.length).trim().split('+').first;
+    expect(maicentaVersion, version);
+  });
+
+  test('parses the generated Rust license notice into blocks', () {
+    const notice = """
+MAICENTA Rust third-party notices
+==== LICENSE: MIT
+PACKAGES: serde 1.0.0, tokio 1.47.1
+
+Permission is hereby granted, free of charge.
+
+==== LICENSE: Apache-2.0
+PACKAGES: reqwest 0.12.0
+
+Licensed under the Apache License, Version 2.0.
+""";
+    final blocks = parseRustLicenseNotice(notice);
+    expect(blocks, hasLength(2));
+    expect(blocks.first.packages, ['serde 1.0.0', 'tokio 1.47.1']);
+    expect(blocks.first.text, startsWith('Permission is hereby granted'));
+    expect(blocks.last.packages, ['reqwest 0.12.0']);
   });
 }
 

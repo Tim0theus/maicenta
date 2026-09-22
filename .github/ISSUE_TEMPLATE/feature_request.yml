@@ -1,0 +1,33 @@
+name: Idee vorschlagen / Feature request
+description: Ein Wunsch oder eine Verbesserung für MAICENTA.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Welches Problem soll gelöst werden?
+      description: Beschreibe die Situation, nicht nur die gewünschte Lösung.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Vorschlag
+    validations:
+      required: true
+  - type: dropdown
+    id: module
+    attributes:
+      label: Bereich
+      options:
+        - E-Mail
+        - Kontoeinrichtung / Synchronisierung
+        - Kalender, Aufgaben, Kontakte
+        - Oberfläche allgemein
+        - Sicherheit / Profil / Backup
+        - Sonstiges
+  - type: input
+    id: version
+    attributes:
+      label: Version (optional)
+      placeholder: "MAICENTA 0.1.0-beta.1 (2) · Windows 11"

@@ -9,6 +9,7 @@ import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart
 import 'package:path_provider/path_provider.dart';
 
 import 'app_theme.dart';
+import 'features/about/about_dialog.dart';
 import 'features/compose/compose_window.dart';
 import 'features/mail/account_autodiscovery.dart';
 import 'features/mail/account_setup_detection.dart';
@@ -25,6 +26,7 @@ const maicentaSymbolAsset = 'assets/branding/maicenta-symbol.png';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  registerRustLicenses();
   try {
     await RustLib.init();
     final supportDirectory = await getApplicationSupportDirectory();
@@ -97,10 +99,14 @@ class MaicentaApp extends StatefulWidget {
     super.key,
     this.mailDataSource = const DemoMailDataSource(),
     this.locale = const Locale('de'),
+    this.loadBuildInfo,
   });
 
   final MailDataSource mailDataSource;
   final Locale? locale;
+
+  /// Overrides how the about dialog reads version and platform, for tests.
+  final Future<MaicentaBuildInfo> Function()? loadBuildInfo;
 
   static const primaryBlue = maicentaPrimaryBlue;
 
@@ -158,6 +164,7 @@ class _MaicentaAppState extends State<MaicentaApp> {
         mailDataSource: widget.mailDataSource,
         darkModeEnabled: darkModeEnabled,
         onDarkModeChanged: setDarkMode,
+        loadBuildInfo: widget.loadBuildInfo,
       ),
     );
   }
@@ -239,11 +246,13 @@ class WorkspaceShell extends StatefulWidget {
     this.mailDataSource = const DemoMailDataSource(),
     this.darkModeEnabled = false,
     this.onDarkModeChanged,
+    this.loadBuildInfo,
   });
 
   final MailDataSource mailDataSource;
   final bool darkModeEnabled;
   final Future<void> Function(bool enabled)? onDarkModeChanged;
+  final Future<MaicentaBuildInfo> Function()? loadBuildInfo;
 
   @override
   State<WorkspaceShell> createState() => _WorkspaceShellState();
@@ -2085,6 +2094,19 @@ class _WorkspaceShellState extends State<WorkspaceShell>
                   leading: Icon(Icons.shield_outlined),
                   title: Text('HTML-Sicherheitsfilter'),
                   subtitle: Text('Immer aktiv'),
+                ),
+                ListTile(
+                  key: const Key('options-about'),
+                  leading: const Icon(Icons.info_outline),
+                  title: const Text('Über MAICENTA'),
+                  subtitle: const Text(
+                    'Version, Plattform, Lizenzen und Fehlermeldung',
+                  ),
+                  trailing: const Icon(Icons.chevron_right, size: 18),
+                  onTap: () => showMaicentaAboutDialog(
+                    dialogContext,
+                    loadBuildInfo: widget.loadBuildInfo,
+                  ),
                 ),
               ],
             ),

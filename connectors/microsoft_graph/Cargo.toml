@@ -1,6 +1,6 @@
 [package]
 name = "maicenta-graph-connector"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 description = "Microsoft Graph mail connector for Exchange Online tenants without IMAP/SMTP."
 edition.workspace = true
 license.workspace = true
