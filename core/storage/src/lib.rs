@@ -27,6 +27,7 @@ const CURRENT_SCHEMA_VERSION: u32 = 15;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const FAVORITE_MAILBOXES_KEY: &str = "favorite_mailbox_ids";
 const COLLAPSED_MAILBOXES_KEY: &str = "collapsed_mailbox_ids";
+const MAILBOX_ORDER_KEY: &str = "mailbox_order_ids";
 const DARK_MODE_KEY: &str = "dark_mode_enabled";
 
 static DATABASE_OPERATION_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
@@ -507,6 +508,28 @@ impl MailStore for SqliteMailStore {
             .map_err(storage_error)?;
         let rows = statement
             .query_map([message_id.as_str()], raw_attachment)
+            .map_err(storage_error)?;
+        rows.map(|row| row.map_err(storage_error).and_then(attachment_from_raw))
+            .collect()
+    }
+
+    fn list_account_attachments(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Vec<MessageAttachment>, ApplicationError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT a.id, a.message_id, a.file_name, a.content_type, a.size_bytes,
+                        a.object_key, a.remote_section, a.transfer_encoding
+                 FROM message_attachments a
+                 JOIN messages m ON m.id = a.message_id
+                 WHERE m.account_id = ?1
+                 ORDER BY a.message_id, a.id",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([account_id.as_str()], raw_attachment)
             .map_err(storage_error)?;
         rows.map(|row| row.map_err(storage_error).and_then(attachment_from_raw))
             .collect()
@@ -1638,6 +1661,60 @@ impl WorkspaceStore for SqliteMailStore {
                  VALUES (?1, ?2)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 params![COLLAPSED_MAILBOXES_KEY, value],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn mailbox_order_ids(&self) -> Result<Vec<MailboxId>, ApplicationError> {
+        let connection = self.connection()?;
+        let value = connection
+            .query_row(
+                "SELECT value FROM workspace_preferences WHERE key = ?1",
+                [MAILBOX_ORDER_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        value
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|id| MailboxId::parse(id).map_err(invalid_data))
+            .collect()
+    }
+
+    fn save_mailbox_order_ids(
+        &mut self,
+        mailbox_ids: &[MailboxId],
+    ) -> Result<(), ApplicationError> {
+        if mailbox_ids.len() > 2_000 {
+            return Err(ApplicationError::Storage(
+                "ordered mailbox count exceeds 2000".into(),
+            ));
+        }
+        let unique = mailbox_ids
+            .iter()
+            .map(MailboxId::as_str)
+            .collect::<HashSet<_>>();
+        if unique.len() != mailbox_ids.len() {
+            return Err(ApplicationError::Storage(
+                "ordered mailboxes contain a duplicate".into(),
+            ));
+        }
+        // Unknown identifiers are tolerated for the same reason as collapsed
+        // folders: the bridge filters them against the current mailbox list.
+        let value = mailbox_ids
+            .iter()
+            .map(MailboxId::as_str)
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.connection()?
+            .execute(
+                "INSERT INTO workspace_preferences (key, value)
+                 VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![MAILBOX_ORDER_KEY, value],
             )
             .map_err(storage_error)?;
         Ok(())
@@ -5385,6 +5462,66 @@ mod tests {
             .save_collapsed_mailbox_ids(&[])
             .expect("clear collapsed");
         assert_eq!(store.collapsed_mailbox_ids(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn persists_the_folder_order_inside_workspace_preferences() {
+        let mut store = SqliteMailStore::open_in_memory().expect("profile");
+        assert_eq!(store.mailbox_order_ids(), Ok(Vec::new()));
+        let sent = MailboxId::parse("work.sent").expect("id");
+        let projects = MailboxId::parse("work.projects").expect("id");
+        store
+            .save_mailbox_order_ids(&[projects.clone(), sent.clone()])
+            .expect("save order");
+        assert_eq!(
+            store.mailbox_order_ids(),
+            Ok(vec![projects.clone(), sent.clone()])
+        );
+        assert!(
+            store
+                .save_mailbox_order_ids(&[sent.clone(), sent.clone()])
+                .is_err()
+        );
+        store.save_mailbox_order_ids(&[]).expect("clear order");
+        assert_eq!(store.mailbox_order_ids(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn lists_cached_attachments_of_one_account_at_once() {
+        let mut store = SqliteMailStore::open_in_memory().expect("profile");
+        let mailbox = mailbox();
+        store
+            .save_mailboxes(std::slice::from_ref(&mailbox))
+            .expect("mailbox");
+        let message = summary();
+        let body = MessageBody {
+            message_id: message.id.clone(),
+            plain_text: Some("Anhang im Test".into()),
+            sanitized_html: None,
+        };
+        let stored_attachment = attachment(message.id.clone());
+        store
+            .save_remote_message(
+                &message,
+                &body,
+                &recipients(message.id.clone()),
+                &remote_metadata(message.id.clone()),
+                std::slice::from_ref(&stored_attachment),
+            )
+            .expect("cached message");
+
+        assert_eq!(
+            store
+                .list_account_attachments(&mailbox.account_id)
+                .expect("account attachments"),
+            vec![stored_attachment]
+        );
+        assert!(
+            store
+                .list_account_attachments(&AccountId::parse("other").expect("id"))
+                .expect("other account")
+                .is_empty()
+        );
     }
 
     #[test]

@@ -255,6 +255,7 @@ class WorkspaceDataSnapshot {
     required this.folders,
     this.favoriteFolderIds = const [],
     this.collapsedFolderIds = const [],
+    this.folderOrderIds = const [],
     this.darkModeEnabled = false,
     required this.messages,
     required this.calendarEvents,
@@ -274,6 +275,9 @@ class WorkspaceDataSnapshot {
 
   /// Folders whose subtree is collapsed in the folder pane.
   final List<String> collapsedFolderIds;
+
+  /// User-defined folder order: listed folders precede unlisted siblings.
+  final List<String> folderOrderIds;
   final bool darkModeEnabled;
   final List<DemoMessage> messages;
   final List<LocalCalendarItem> calendarEvents;
@@ -317,6 +321,7 @@ abstract interface class MailDataSource {
   List<MailFolder> get folders;
   List<String> get favoriteFolderIds;
   List<String> get collapsedFolderIds;
+  List<String> get folderOrderIds;
   bool get darkModeEnabled;
   List<DemoMessage> get messages;
   List<LocalCalendarItem> get calendarEvents;
@@ -370,6 +375,7 @@ abstract interface class MailDataSource {
   Future<void> deleteFolder(String folderId, String fallbackFolderId);
   Future<void> saveFavoriteFolders(List<String> folderIds);
   Future<void> saveCollapsedFolders(List<String> folderIds);
+  Future<void> saveFolderOrder(List<String> folderIds);
   Future<void> saveDarkMode(bool enabled);
   Future<void> saveCalendarEvent(LocalCalendarItem event);
   Future<void> saveTask(LocalTaskItem task);
@@ -419,6 +425,9 @@ class DemoMailDataSource implements MailDataSource {
 
   @override
   List<String> get collapsedFolderIds => const [];
+
+  @override
+  List<String> get folderOrderIds => const [];
 
   @override
   bool get darkModeEnabled => false;
@@ -556,6 +565,9 @@ class DemoMailDataSource implements MailDataSource {
   Future<void> saveCollapsedFolders(List<String> folderIds) async {}
 
   @override
+  Future<void> saveFolderOrder(List<String> folderIds) async {}
+
+  @override
   Future<void> saveDarkMode(bool enabled) async {}
 
   @override
@@ -641,6 +653,7 @@ class RustMailDataSource implements MailDataSource {
     required this.folders,
     required this.favoriteFolderIds,
     required this.collapsedFolderIds,
+    required this.folderOrderIds,
     required this.darkModeEnabled,
     required this.messages,
     required this.calendarEvents,
@@ -658,6 +671,7 @@ class RustMailDataSource implements MailDataSource {
       folders: data.folders,
       favoriteFolderIds: data.favoriteFolderIds,
       collapsedFolderIds: data.collapsedFolderIds,
+      folderOrderIds: data.folderOrderIds,
       darkModeEnabled: data.darkModeEnabled,
       messages: data.messages,
       calendarEvents: data.calendarEvents,
@@ -676,6 +690,9 @@ class RustMailDataSource implements MailDataSource {
 
   @override
   final List<String> collapsedFolderIds;
+
+  @override
+  final List<String> folderOrderIds;
 
   @override
   final bool darkModeEnabled;
@@ -887,6 +904,14 @@ class RustMailDataSource implements MailDataSource {
   }
 
   @override
+  Future<void> saveFolderOrder(List<String> folderIds) {
+    return rust.saveMailboxOrder(
+      databasePath: databasePath,
+      mailboxIds: folderIds,
+    );
+  }
+
+  @override
   Future<void> saveDarkMode(bool enabled) {
     return rust.saveDarkMode(databasePath: databasePath, enabled: enabled);
   }
@@ -1055,6 +1080,7 @@ WorkspaceDataSnapshot _workspaceData(rust.WorkspaceSnapshot snapshot) {
         .toList(growable: false),
     favoriteFolderIds: snapshot.favoriteMailboxIds,
     collapsedFolderIds: snapshot.collapsedMailboxIds,
+    folderOrderIds: snapshot.mailboxOrderIds,
     darkModeEnabled: snapshot.darkModeEnabled,
     messages: snapshot.messages.map(_messageData).toList(growable: false),
     calendarEvents: snapshot.calendarEvents

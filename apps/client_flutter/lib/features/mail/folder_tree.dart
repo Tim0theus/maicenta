@@ -76,21 +76,59 @@ CustomFolderPath customFolderPath(String serverName, {String? inboxName}) {
   );
 }
 
+/// Mutable tree node used while assembling the folder pane rows.
+class _FolderNode {
+  _FolderNode({
+    required this.folder,
+    required this.leafName,
+    required this.path,
+    required this.defaultIndex,
+  });
+
+  final MailFolder folder;
+  final String leafName;
+  final String path;
+
+  /// Position in the provider-neutral default order, used for siblings the
+  /// user has not arranged manually.
+  final int defaultIndex;
+  final List<_FolderNode> children = [];
+}
+
 /// Orders one account's folders as a tree: standard folders first in their
 /// given order, custom folders below the inbox directly after it, remaining
 /// custom folders afterwards, each sorted by path and nested under the
 /// nearest existing ancestor.
-List<FolderTreeEntry> buildFolderTree(List<MailFolder> accountFolders) {
-  final inbox = accountFolders
-      .where((folder) => folder.role == 'inbox')
-      .firstOrNull;
+///
+/// [orderIds] is the user-defined order: siblings listed there come first in
+/// that sequence, unlisted siblings follow in the default order. Because only
+/// siblings are compared, one flat list serves every level of every account.
+List<FolderTreeEntry> buildFolderTree(
+  List<MailFolder> accountFolders, {
+  List<String> orderIds = const [],
+}) {
+  final roots = <_FolderNode>[];
+  _FolderNode? inboxNode;
+  var nextIndex = 0;
+  for (final folder in accountFolders) {
+    if (folder.role == 'custom') continue;
+    final node = _FolderNode(
+      folder: folder,
+      leafName: folder.displayName,
+      path: folder.displayName,
+      defaultIndex: nextIndex++,
+    );
+    roots.add(node);
+    if (folder.role == 'inbox') inboxNode ??= node;
+  }
+
   final inboxChildren = <(MailFolder, CustomFolderPath)>[];
   final others = <(MailFolder, CustomFolderPath)>[];
   for (final folder in accountFolders) {
     if (folder.role != 'custom') continue;
     final path = customFolderPath(
       folder.displayName,
-      inboxName: inbox?.displayName,
+      inboxName: inboxNode?.folder.displayName,
     );
     (path.underInbox ? inboxChildren : others).add((folder, path));
   }
@@ -101,56 +139,106 @@ List<FolderTreeEntry> buildFolderTree(List<MailFolder> accountFolders) {
   inboxChildren.sort(byPath);
   others.sort(byPath);
 
-  List<FolderTreeEntry> nest(
-    List<(MailFolder, CustomFolderPath)> group, {
-    String? rootId,
-    required int rootDepth,
-  }) {
-    final byLowerPath = <String, FolderTreeEntry>{};
-    final entries = <FolderTreeEntry>[];
+  void attach(List<(MailFolder, CustomFolderPath)> group, _FolderNode? root) {
+    final byLowerPath = <String, _FolderNode>{};
     for (final (folder, path) in group) {
-      FolderTreeEntry? parent;
+      _FolderNode? parent;
       for (var length = path.segments.length - 1; length > 0; length -= 1) {
         parent =
             byLowerPath[path.segments.take(length).join('/').toLowerCase()];
         if (parent != null) break;
       }
-      final entry = FolderTreeEntry(
+      final node = _FolderNode(
         folder: folder,
-        depth: parent == null ? rootDepth : parent.depth + 1,
         leafName: path.leaf,
         path: path.joined,
-        parentId: parent?.folder.id ?? rootId,
+        defaultIndex: nextIndex++,
       );
-      byLowerPath.putIfAbsent(path.joined.toLowerCase(), () => entry);
-      entries.add(entry);
+      byLowerPath.putIfAbsent(path.joined.toLowerCase(), () => node);
+      final target = parent ?? root;
+      if (target == null) {
+        roots.add(node);
+      } else {
+        target.children.add(node);
+      }
     }
-    return entries;
   }
 
-  final nestedInboxChildren = nest(
-    inboxChildren,
-    rootId: inbox?.id,
-    rootDepth: inbox == null ? 0 : 1,
-  );
-  final nestedOthers = nest(others, rootDepth: 0);
+  attach(inboxChildren, inboxNode);
+  attach(others, null);
+
+  final rank = <String, int>{};
+  for (var index = 0; index < orderIds.length; index += 1) {
+    rank.putIfAbsent(orderIds[index], () => index);
+  }
+  int compare(_FolderNode left, _FolderNode right) {
+    final leftRank = rank[left.folder.id];
+    final rightRank = rank[right.folder.id];
+    if (leftRank != null && rightRank != null) {
+      return leftRank.compareTo(rightRank);
+    }
+    if (leftRank != null) return -1;
+    if (rightRank != null) return 1;
+    return left.defaultIndex.compareTo(right.defaultIndex);
+  }
 
   final tree = <FolderTreeEntry>[];
-  for (final folder in accountFolders) {
-    if (folder.role == 'custom') continue;
-    tree.add(
-      FolderTreeEntry(
-        folder: folder,
-        depth: 0,
-        leafName: folder.displayName,
-        path: folder.displayName,
-      ),
-    );
-    if (folder.role == 'inbox') tree.addAll(nestedInboxChildren);
+  void flatten(List<_FolderNode> nodes, int depth, String? parentId) {
+    nodes.sort(compare);
+    for (final node in nodes) {
+      tree.add(
+        FolderTreeEntry(
+          folder: node.folder,
+          depth: depth,
+          leafName: node.leafName,
+          path: node.path,
+          parentId: parentId,
+        ),
+      );
+      flatten(node.children, depth + 1, node.folder.id);
+    }
   }
-  if (inbox == null) tree.addAll(nestedInboxChildren);
-  tree.addAll(nestedOthers);
+
+  flatten(roots, 0, null);
   return tree;
+}
+
+/// User-defined order after dropping [draggedId] onto [targetId].
+///
+/// Dragging downwards places the folder below the target, dragging upwards
+/// above it, so every arrangement is reachable. Returns `null` when the two
+/// folders are not siblings in [tree] or are the same folder; the caller
+/// then leaves the order untouched. The result replaces [orderIds]: the
+/// affected siblings are listed completely so their order no longer depends
+/// on the default sort.
+List<String>? folderOrderAfterMove({
+  required List<FolderTreeEntry> tree,
+  required List<String> orderIds,
+  required String draggedId,
+  required String targetId,
+}) {
+  if (draggedId == targetId) return null;
+  final dragged = tree
+      .where((entry) => entry.folder.id == draggedId)
+      .firstOrNull;
+  final target = tree.where((entry) => entry.folder.id == targetId).firstOrNull;
+  if (dragged == null ||
+      target == null ||
+      dragged.parentId != target.parentId) {
+    return null;
+  }
+  final siblings = [
+    for (final entry in tree)
+      if (entry.parentId == dragged.parentId) entry.folder.id,
+  ];
+  final from = siblings.indexOf(draggedId);
+  final to = siblings.indexOf(targetId);
+  siblings.removeAt(from);
+  // After the removal the target sits at `to - 1` when the folder moves
+  // down, so inserting at `to` lands below it; moving up lands above it.
+  siblings.insert(to, draggedId);
+  final siblingIds = siblings.toSet();
+  return [...orderIds.where((id) => !siblingIds.contains(id)), ...siblings];
 }
 
 /// Identifiers of every folder that has at least one nested child.

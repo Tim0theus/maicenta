@@ -421,6 +421,8 @@ pub struct WorkspaceSnapshot {
     pub favorite_mailbox_ids: Vec<String>,
     /// Mailboxes whose folder subtree is collapsed in the folder pane.
     pub collapsed_mailbox_ids: Vec<String>,
+    /// User-defined folder order: listed mailboxes precede unlisted siblings.
+    pub mailbox_order_ids: Vec<String>,
     pub dark_mode_enabled: bool,
     pub messages: Vec<MessageDto>,
     pub calendar_events: Vec<CalendarEventDto>,
@@ -1555,6 +1557,26 @@ pub fn save_collapsed_mailboxes(
         .map_err(|error| error.to_string())
 }
 
+/// Replaces the user-defined folder order stored in the encrypted profile.
+///
+/// Mailboxes listed here are shown before unlisted siblings in the folder
+/// pane, in the stored sequence; identifiers of vanished folders are ignored
+/// when the workspace is loaded.
+///
+/// # Errors
+///
+/// Returns an error when an identifier is invalid or duplicated, or the
+/// encrypted preference cannot be committed.
+pub fn save_mailbox_order(database_path: String, mailbox_ids: Vec<String>) -> Result<(), String> {
+    let mailbox_ids = mailbox_ids
+        .into_iter()
+        .map(|id| MailboxId::parse(id).map_err(|error| error.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    open_profile_store(Path::new(&database_path))?
+        .save_mailbox_order_ids(&mailbox_ids)
+        .map_err(|error| error.to_string())
+}
+
 /// Persists the selected light or dark desktop color scheme in the encrypted
 /// profile.
 ///
@@ -1808,23 +1830,11 @@ pub fn delete_mail_account(
         .into_iter()
         .find(|account| account.id == account_id)
         .ok_or_else(|| "mail account not found".to_owned())?;
-    let mut cached_attachments = Vec::new();
-    let all_messages_limit = usize::try_from(i64::MAX).unwrap_or(usize::MAX);
-    for mailbox in store
-        .list_mailboxes(&account.id)
-        .map_err(|error| error.to_string())?
-    {
-        for message in store
-            .list_messages(&mailbox.id, all_messages_limit)
-            .map_err(|error| error.to_string())?
-        {
-            cached_attachments.extend(
-                store
-                    .list_attachments(&message.id)
-                    .map_err(|error| error.to_string())?,
-            );
-        }
-    }
+    // One query instead of loading every cached message of the account: a
+    // large mailbox otherwise keeps the removal running for a long time.
+    let cached_attachments = store
+        .list_account_attachments(&account.id)
+        .map_err(|error| error.to_string())?;
     store
         .delete_mail_account(&account.id)
         .map_err(|error| error.to_string())?;
@@ -3303,6 +3313,13 @@ fn load_snapshot(store: &SqliteMailStore) -> Result<WorkspaceSnapshot, String> {
         })
         .map(|id| id.to_string())
         .collect();
+    let mailbox_order_ids = store
+        .mailbox_order_ids()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|id| known_mailbox_ids.contains(id.as_str()))
+        .map(|id| id.to_string())
+        .collect();
     let mut messages = Vec::new();
 
     for mailbox in &mailboxes {
@@ -3318,6 +3335,7 @@ fn load_snapshot(store: &SqliteMailStore) -> Result<WorkspaceSnapshot, String> {
             .map_err(|error| error.to_string())?,
         favorite_mailbox_ids,
         collapsed_mailbox_ids,
+        mailbox_order_ids,
         mailboxes: mailboxes.into_iter().map(mailbox_dto).collect(),
         messages,
         calendar_events: store
@@ -3822,7 +3840,8 @@ mod tests {
         open_profile_store, open_workspace, remote_mailbox_id, remote_message_id,
         rename_local_mailbox, save_collapsed_mailboxes, save_dark_mode, save_favorite_mailboxes,
         save_local_calendar_event, save_local_contact, save_local_message, save_local_task,
-        save_mail_account, save_oauth_mail_account, search_profile_messages, update_local_message,
+        save_mail_account, save_mailbox_order, save_oauth_mail_account, search_profile_messages,
+        update_local_message,
     };
     use maicenta_application::{MailAccountStore, MailStore, SecretStore};
     use maicenta_domain::{AccountId, Mailbox, MailboxRole, MessageBody, MessageId};
@@ -3928,6 +3947,20 @@ mod tests {
         assert_eq!(
             collapsed.collapsed_mailbox_ids,
             ["personal.inbox", "group.favorites"]
+        );
+        save_mailbox_order(
+            path.to_string_lossy().into_owned(),
+            vec![
+                "personal.sent".into(),
+                "unknown.folder".into(),
+                "personal.inbox".into(),
+            ],
+        )
+        .expect("save folder order");
+        let ordered = open_workspace(path.to_string_lossy().into_owned()).expect("reopen");
+        assert_eq!(
+            ordered.mailbox_order_ids,
+            ["personal.sent", "personal.inbox"]
         );
         save_dark_mode(path.to_string_lossy().into_owned(), true).expect("save dark mode");
         assert!(
