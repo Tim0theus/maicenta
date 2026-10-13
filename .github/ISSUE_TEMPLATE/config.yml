@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Sicherheitslücke vertraulich melden
+    url: https://github.com/Tim0theus/maicenta/security/advisories/new
+    about: Bitte keine Exploits oder Zugangsdaten in öffentlichen Issues.
+  - name: Downloads und Versionshinweise
+    url: https://github.com/Tim0theus/maicenta/releases
+    about: Aktuelle Beta-Builds mit Prüfsummen und bekannten Einschränkungen.

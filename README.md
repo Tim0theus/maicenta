@@ -13,10 +13,11 @@ application under active development. It brings email, calendars, tasks,
 contacts, notes, and optional AI assistants together in one personal workspace.
 
 > [!IMPORTANT]
-> MAICENTA currently provides an early desktop alpha with real IMAP/SMTP
-> connectivity. Test it with a non-critical account first: synchronization is
-> deliberately bounded and several provider-specific and recovery workflows
-> are not complete yet.
+> MAICENTA is in public beta. Downloads with SHA-256 checksums, release notes,
+> and the current list of known limitations are on the
+> [releases page](https://github.com/Tim0theus/maicenta/releases). Profiles
+> are migrated in place between versions; keep a password-protected export
+> before upgrading a beta.
 
 ## Vision
 
@@ -243,6 +244,10 @@ and enabled IMAP/SMTP AUTH remain prerequisites outside MAICENTA.
 
 Current account limitations are important:
 
+- Google sign-in in the browser is offered only in builds that carry a Google
+  OAuth client ID; until Google's verification of the project completes, Gmail
+  and Google Workspace accounts are set up through IMAP with an app password,
+  which the account dialog recommends automatically.
 - Authentication supports a password/app password or OAuth 2.0 with PKCE and
   automatic refresh for Microsoft 365/Exchange Online and Google. Exchange
   Online can be connected in two ways: through its standards endpoints (IMAP
@@ -383,8 +388,10 @@ email layouts, and blocks remote images by default. This avoids coupling the
 viewer to Outlook's historical HTML renderer while retaining a plain-text
 fallback for malformed or incompatible messages.
 
-Please do not report security vulnerabilities in public issues. A private
-reporting process will be documented before the first public release.
+Please do not report security vulnerabilities in public issues. Use GitHub's
+[private vulnerability reporting](https://github.com/Tim0theus/maicenta/security/advisories/new);
+[SECURITY.md](SECURITY.md) describes scope, supported versions, and response
+times.
 
 ## License
 
