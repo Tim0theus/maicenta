@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:desktop_drop/desktop_drop.dart';
@@ -542,6 +543,72 @@ void main() {
       find.byKey(const Key('favorite-folder-personal.archive')),
       findsNothing,
     );
+  });
+
+  testWidgets('rearranges sibling folders of an account by drag and drop', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final dataSource = RecordingMailDataSource();
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.pumpAndSettle();
+
+    double rowTop(String folderId) =>
+        tester.getTopLeft(find.byKey(Key('folder-$folderId'))).dy;
+    expect(rowTop('personal.drafts'), lessThan(rowTop('personal.archive')));
+
+    // Dragging upwards lands above the target folder.
+    final archive = tester.getCenter(
+      find.byKey(const Key('folder-personal.archive')),
+    );
+    final drafts = tester.getCenter(
+      find.byKey(const Key('folder-personal.drafts')),
+    );
+    await tester.dragFrom(archive, drafts - archive);
+    await tester.pumpAndSettle();
+
+    expect(dataSource.folderOrderSaves.single, [
+      'personal.inbox',
+      'personal.archive',
+      'personal.drafts',
+      'personal.sent',
+      'personal.trash',
+      'personal.junk',
+    ]);
+    expect(rowTop('personal.archive'), lessThan(rowTop('personal.drafts')));
+
+    // Dragging downwards lands below the target folder.
+    final inbox = tester.getCenter(
+      find.byKey(const Key('folder-personal.inbox')),
+    );
+    final sent = tester.getCenter(
+      find.byKey(const Key('folder-personal.sent')),
+    );
+    await tester.dragFrom(inbox, sent - inbox);
+    await tester.pumpAndSettle();
+    expect(dataSource.folderOrderSaves.last, [
+      'personal.archive',
+      'personal.drafts',
+      'personal.sent',
+      'personal.inbox',
+      'personal.trash',
+      'personal.junk',
+    ]);
+
+    // A favorite dropped onto the account tree does not rearrange it.
+    final favorite = tester.getCenter(
+      find.byKey(const Key('favorite-folder-personal.drafts')),
+    );
+    final junk = tester.getCenter(
+      find.byKey(const Key('folder-personal.junk')),
+    );
+    await tester.dragFrom(favorite, junk - favorite);
+    await tester.pumpAndSettle();
+    expect(dataSource.folderOrderSaves, hasLength(2));
   });
 
   testWidgets('opens a detailed classic message window on double click', (
@@ -1815,6 +1882,94 @@ void main() {
     );
   });
 
+  testWidgets(
+    'waits for a running synchronization before removing an account',
+    (tester) async {
+      tester.view.physicalSize = const Size(1400, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      const account = MailAccountConfig(
+        id: 'account.work',
+        displayName: 'Arbeit',
+        email: 'user@example.org',
+        imapHost: 'imap.example.org',
+        imapPort: 993,
+        imapSecurity: 'tls',
+        imapUsername: 'user@example.org',
+        smtpHost: 'smtp.example.org',
+        smtpPort: 587,
+        smtpSecurity: 'starttls',
+        smtpUsername: 'user@example.org',
+      );
+      final gate = Completer<void>();
+      final dataSource = RecordingMailDataSource(
+        configuredAccounts: const [account],
+        synchronizeGate: gate,
+      );
+      await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+      await tester.tap(find.byKey(const Key('ribbon-tab-Senden/Empfangen')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('ribbon-action-Alle Ordner')));
+      await tester.pump();
+      expect(dataSource.synchronizeCalls, 1);
+
+      // Notices queue behind earlier snack bars, so poll frame by frame.
+      Future<void> pumpUntilFound(Finder finder) async {
+        for (var frame = 0; frame < 60 && finder.evaluate().isEmpty; frame++) {
+          await tester.pump(const Duration(milliseconds: 300));
+        }
+        expect(finder, findsOneWidget);
+      }
+
+      Future<void> requestRemoval() async {
+        await tester.tap(find.byKey(const Key('ribbon-tab-Datei')));
+        await tester.pump();
+        await tester.tap(
+          find.byKey(const Key('ribbon-action-Kontoeinstellungen')),
+        );
+        // The status bar animates while the pass runs, so settle by time.
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.tap(find.byKey(const Key('account-delete-account.work')));
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.tap(find.byKey(const Key('account-delete-confirm')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+      }
+
+      await requestRemoval();
+      expect(find.byKey(const Key('account-removal-progress')), findsOneWidget);
+      expect(
+        find.textContaining('Die laufende Synchronisierung wird zuerst'),
+        findsOneWidget,
+      );
+      expect(dataSource.deletedAccountIds, isEmpty);
+
+      // Keeping the account aborts the removal while the pass is still running.
+      await tester.tap(find.byKey(const Key('account-removal-keep')));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byKey(const Key('account-removal-progress')), findsNothing);
+      await pumpUntilFound(find.text('„Arbeit“ bleibt eingerichtet.'));
+      expect(dataSource.deletedAccountIds, isEmpty);
+
+      // The second attempt waits for the pass and removes the account after it.
+      await requestRemoval();
+      expect(find.byKey(const Key('account-removal-progress')), findsOneWidget);
+      expect(dataSource.deletedAccountIds, isEmpty);
+      gate.complete();
+      await tester.pumpAndSettle();
+      expect(dataSource.deletedAccountIds, ['account.work']);
+      expect(find.byKey(const Key('account-removal-progress')), findsNothing);
+      await pumpUntilFound(
+        find.text(
+          'Das Konto und seine Zugangsdaten wurden aus dem Profil entfernt.',
+        ),
+      );
+    },
+  );
+
   testWidgets('toggles reading pane and offline mode from ribbon tabs', (
     tester,
   ) async {
@@ -2562,6 +2717,8 @@ class RecordingMailDataSource implements MailDataSource {
       'personal.sent',
     ],
     this.configuredDarkModeEnabled = false,
+    this.configuredFolderOrderIds = const [],
+    this.synchronizeGate,
     this.configuredMessages = demoMessages,
     this.configuredSearchResults,
     this.loadedMessage,
@@ -2581,6 +2738,11 @@ class RecordingMailDataSource implements MailDataSource {
   final List<MailFolder> configuredFolders;
   final List<String> configuredFavoriteFolderIds;
   final bool configuredDarkModeEnabled;
+  final List<String> configuredFolderOrderIds;
+
+  /// Holds every synchronization pass until completed, simulating a long
+  /// running server exchange.
+  final Completer<void>? synchronizeGate;
   final List<DemoMessage> configuredMessages;
   final List<DemoMessage>? configuredSearchResults;
   final DemoMessage? loadedMessage;
@@ -2648,7 +2810,11 @@ class RecordingMailDataSource implements MailDataSource {
   @override
   List<String> get collapsedFolderIds => const [];
 
+  @override
+  List<String> get folderOrderIds => configuredFolderOrderIds;
+
   final collapsedFolderSaves = <List<String>>[];
+  final folderOrderSaves = <List<String>>[];
 
   @override
   bool get darkModeEnabled => configuredDarkModeEnabled;
@@ -2825,6 +2991,11 @@ class RecordingMailDataSource implements MailDataSource {
   }
 
   @override
+  Future<void> saveFolderOrder(List<String> folderIds) async {
+    folderOrderSaves.add(List<String>.of(folderIds));
+  }
+
+  @override
   Future<void> saveDarkMode(bool enabled) async {
     darkModeSaves.add(enabled);
   }
@@ -2891,6 +3062,7 @@ class RecordingMailDataSource implements MailDataSource {
   @override
   Future<WorkspaceDataSnapshot> synchronizeAccounts() async {
     synchronizeCalls += 1;
+    if (synchronizeGate != null) await synchronizeGate!.future;
     final remainingIndex = synchronizeCalls - 1;
     return WorkspaceDataSnapshot(
       folders: folders,

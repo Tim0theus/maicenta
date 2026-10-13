@@ -17,12 +17,8 @@ class CargoKitExtension {
 
 abstract class CargoKitBuildTask extends DefaultTask {
 
-    private final ExecOperations execOperations
-
     @Inject
-    CargoKitBuildTask(ExecOperations execOperations) {
-        this.execOperations = execOperations
-    }
+    abstract ExecOperations getExecOperations()
 
     @Input
     String buildMode

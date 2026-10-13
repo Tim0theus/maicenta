@@ -254,6 +254,16 @@ pub trait MailStore: Send + Sync {
         message_id: &MessageId,
     ) -> Result<Vec<MessageAttachment>, ApplicationError>;
 
+    /// Lists attachment metadata of every message cached for one account.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the data cannot be read.
+    fn list_account_attachments(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Vec<MessageAttachment>, ApplicationError>;
+
     /// Loads one attachment metadata record.
     ///
     /// # Errors
@@ -598,6 +608,23 @@ pub trait WorkspaceStore: Send + Sync {
         mailbox_ids: &[MailboxId],
     ) -> Result<(), ApplicationError>;
 
+    /// Loads the user-defined folder order. Mailboxes listed here precede
+    /// unlisted siblings in the folder pane, in the stored sequence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the preference cannot be read or decoded.
+    fn mailbox_order_ids(&self) -> Result<Vec<MailboxId>, ApplicationError>;
+
+    /// Replaces the user-defined folder order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or storage error when the list is too large,
+    /// contains duplicates, or cannot be committed.
+    fn save_mailbox_order_ids(&mut self, mailbox_ids: &[MailboxId])
+    -> Result<(), ApplicationError>;
+
     /// Loads calendar events ordered by their start time.
     ///
     /// # Errors
@@ -804,6 +831,13 @@ mod tests {
         fn list_attachments(
             &self,
             _message_id: &maicenta_domain::MessageId,
+        ) -> Result<Vec<maicenta_domain::MessageAttachment>, ApplicationError> {
+            Ok(Vec::new())
+        }
+
+        fn list_account_attachments(
+            &self,
+            _account_id: &AccountId,
         ) -> Result<Vec<maicenta_domain::MessageAttachment>, ApplicationError> {
             Ok(Vec::new())
         }

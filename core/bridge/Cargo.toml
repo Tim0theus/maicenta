@@ -9,7 +9,7 @@ rust-version.workspace = true
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-flutter_rust_bridge = "=2.12.0"
+flutter_rust_bridge = "=2.13.0"
 maicenta-application = { path = "../application" }
 maicenta-domain = { path = "../domain" }
 maicenta-graph-connector = { path = "../../connectors/microsoft_graph" }

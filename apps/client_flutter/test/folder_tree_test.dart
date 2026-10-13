@@ -113,6 +113,109 @@ void main() {
     expect(visibleFolderTree(tree, const {}), same(tree));
   });
 
+  test('applies the user-defined order among siblings only', () {
+    final folders = [
+      _folder('inbox', 'Posteingang', role: 'inbox'),
+      _folder('drafts', 'Entwürfe', role: 'drafts'),
+      _folder('sent', 'Gesendet', role: 'sent'),
+      _folder('trade', 'Posteingang/12 Level Trade'),
+      _folder('open', 'Posteingang/Offen'),
+      _folder('sync', 'Synchronisierungsprobleme'),
+      _folder('sync-conflicts', 'Synchronisierungsprobleme/Konflikte'),
+    ];
+    // Listed siblings lead in the given sequence, unlisted ones keep the
+    // default order behind them; identifiers of other levels do not leak.
+    final tree = buildFolderTree(
+      folders,
+      orderIds: ['open', 'sync', 'sent', 'missing'],
+    );
+    expect(tree.map((entry) => entry.folder.id).toList(), [
+      'sync',
+      'sync-conflicts',
+      'sent',
+      'inbox',
+      'open',
+      'trade',
+      'drafts',
+    ]);
+    expect(tree.map((entry) => entry.depth).toList(), [0, 1, 0, 0, 1, 1, 0]);
+    expect(buildFolderTree(folders).map((entry) => entry.folder.id).toList(), [
+      'inbox',
+      'trade',
+      'open',
+      'drafts',
+      'sent',
+      'sync',
+      'sync-conflicts',
+    ]);
+  });
+
+  test('moves a dragged folder above or below a sibling', () {
+    final tree = buildFolderTree([
+      _folder('inbox', 'Posteingang', role: 'inbox'),
+      _folder('drafts', 'Entwürfe', role: 'drafts'),
+      _folder('sent', 'Gesendet', role: 'sent'),
+      _folder('trade', 'Posteingang/12 Level Trade'),
+      _folder('open', 'Posteingang/Offen'),
+    ]);
+    // Dragging downwards lands below the target, upwards above it.
+    expect(
+      folderOrderAfterMove(
+        tree: tree,
+        orderIds: const ['open', 'trade'],
+        draggedId: 'inbox',
+        targetId: 'sent',
+      ),
+      ['open', 'trade', 'drafts', 'sent', 'inbox'],
+    );
+    expect(
+      folderOrderAfterMove(
+        tree: tree,
+        orderIds: const [],
+        draggedId: 'sent',
+        targetId: 'inbox',
+      ),
+      ['sent', 'inbox', 'drafts'],
+    );
+    expect(
+      folderOrderAfterMove(
+        tree: tree,
+        orderIds: const ['sent'],
+        draggedId: 'open',
+        targetId: 'trade',
+      ),
+      ['sent', 'open', 'trade'],
+    );
+    // Different levels, unknown folders and self-drops leave the order alone.
+    expect(
+      folderOrderAfterMove(
+        tree: tree,
+        orderIds: const [],
+        draggedId: 'trade',
+        targetId: 'drafts',
+      ),
+      isNull,
+    );
+    expect(
+      folderOrderAfterMove(
+        tree: tree,
+        orderIds: const [],
+        draggedId: 'ghost',
+        targetId: 'drafts',
+      ),
+      isNull,
+    );
+    expect(
+      folderOrderAfterMove(
+        tree: tree,
+        orderIds: const [],
+        draggedId: 'drafts',
+        targetId: 'drafts',
+      ),
+      isNull,
+    );
+  });
+
   test('keeps custom folders visible when the account has no inbox', () {
     final tree = buildFolderTree([
       _folder('a', 'INBOX/Alpha'),

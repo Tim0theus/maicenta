@@ -267,6 +267,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   late List<MailFolder> folders;
   late List<String> favoriteFolderIds;
   late Set<String> collapsedFolderIds;
+  late List<String> folderOrderIds;
   String query = '';
   List<DemoMessage>? profileSearchResults;
   bool searchInProgress = false;
@@ -275,6 +276,12 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   final Set<String> markingMessagesRead = <String>{};
   bool loadingMoreMessages = false;
   bool synchronizing = false;
+
+  /// Set while an account is being removed: no synchronization may start.
+  bool removingAccount = false;
+
+  /// Ends the catalogue continuation loop after the current pass.
+  bool stopSynchronizationRequested = false;
   int catalogMessagesRemaining = 0;
   int deltaMailboxesSynchronized = 0;
   int fullMailboxesReconciled = 0;
@@ -305,6 +312,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     folders = widget.mailDataSource.folders.toList();
     favoriteFolderIds = widget.mailDataSource.favoriteFolderIds.toList();
     collapsedFolderIds = widget.mailDataSource.collapsedFolderIds.toSet();
+    folderOrderIds = widget.mailDataSource.folderOrderIds.toList();
     calendarItems = widget.mailDataSource.calendarEvents.toList();
     tasks = widget.mailDataSource.tasks.toList();
     contacts = widget.mailDataSource.contacts.toList();
@@ -1212,6 +1220,25 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     }
   }
 
+  Future<void> updateFolderOrder(List<String> orderedIds) async {
+    final knownIds = folders.map((folder) => folder.id).toSet();
+    final normalized = orderedIds
+        .where(knownIds.contains)
+        .toSet()
+        .take(2000)
+        .toList(growable: false);
+    if (listEquals(normalized, folderOrderIds)) return;
+    final previous = folderOrderIds;
+    setState(() => folderOrderIds = normalized);
+    try {
+      await widget.mailDataSource.saveFolderOrder(normalized);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => folderOrderIds = previous);
+      showPersistenceError(error);
+    }
+  }
+
   Future<void> toggleFolderCollapsed(String folderId) async {
     final previous = collapsedFolderIds;
     final next = Set<String>.of(previous);
@@ -1314,6 +1341,14 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   }
 
   Future<void> synchronize({bool automatic = false}) async {
+    if (removingAccount) {
+      if (!automatic) {
+        showNotice(
+          'Ein Konto wird gerade entfernt. Danach kann erneut synchronisiert werden.',
+        );
+      }
+      return;
+    }
     if (synchronizing) {
       if (!automatic) {
         showNotice('Die Synchronisierung läuft bereits.');
@@ -1340,7 +1375,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     final warnings = <String>{};
     int? previousRemaining;
     try {
-      while (mounted && !offlineMode) {
+      while (mounted && !offlineMode && !stopSynchronizationRequested) {
         final snapshot = await widget.mailDataSource.synchronizeAccounts();
         if (!mounted) return;
         warnings.addAll(snapshot.syncWarnings);
@@ -1651,20 +1686,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         ),
       );
       if (confirmed != true || !mounted) return;
-      try {
-        final snapshot = await widget.mailDataSource.deleteAccount(account.id);
-        if (!mounted) return;
-        replaceWorkspace(snapshot);
-        showNotice(
-          'Das Konto und seine Zugangsdaten wurden aus dem Profil entfernt.',
-        );
-      } on Object catch (error) {
-        if (!mounted) return;
-        showInformation(
-          'Konto nicht entfernt',
-          'Das verschlüsselte Profil hat die Änderung nicht übernommen.\n\n$error',
-        );
-      }
+      await removeAccount(account);
       return;
     }
 
@@ -1716,6 +1738,73 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     await synchronize();
   }
 
+  /// Removes [account] from the profile and shows what is happening meanwhile.
+  ///
+  /// A running synchronization pass writes to the same profile, so the removal
+  /// waits until that pass has finished and stops further passes. The progress
+  /// dialog explains the wait and lets the user keep the account instead.
+  Future<void> removeAccount(MailAccountConfig account) async {
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final waitingForSync = ValueNotifier<bool>(synchronizing);
+    var cancelled = false;
+    final progress = DialogRoute<void>(
+      context: context,
+      barrierDismissible: false,
+      themes: InheritedTheme.capture(from: context, to: navigator.context),
+      builder: (_) => AccountRemovalDialog(
+        accountName: account.displayName,
+        waitingForSync: waitingForSync,
+        onKeepAccount: () => cancelled = true,
+      ),
+    );
+    void closeProgress() {
+      if (!progress.isActive) return;
+      if (progress.isCurrent) {
+        navigator.pop();
+      } else {
+        navigator.removeRoute(progress);
+      }
+    }
+
+    removingAccount = true;
+    stopSynchronizationRequested = synchronizing;
+    unawaited(navigator.push(progress));
+    try {
+      while (synchronizing && !cancelled && mounted) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      if (!mounted) return;
+      if (cancelled) {
+        closeProgress();
+        showNotice('„${account.displayName}“ bleibt eingerichtet.');
+        return;
+      }
+      waitingForSync.value = false;
+      final WorkspaceDataSnapshot snapshot;
+      try {
+        snapshot = await widget.mailDataSource.deleteAccount(account.id);
+      } on Object catch (error) {
+        if (!mounted) return;
+        closeProgress();
+        showInformation(
+          'Konto nicht entfernt',
+          'Das verschlüsselte Profil hat die Änderung nicht übernommen.\n\n$error',
+        );
+        return;
+      }
+      if (!mounted) return;
+      closeProgress();
+      replaceWorkspace(snapshot);
+      showNotice(
+        'Das Konto und seine Zugangsdaten wurden aus dem Profil entfernt.',
+      );
+    } finally {
+      removingAccount = false;
+      stopSynchronizationRequested = false;
+      if (mounted) closeProgress();
+    }
+  }
+
   void replaceWorkspace(WorkspaceDataSnapshot snapshot) {
     searchDebounce?.cancel();
     searchGeneration += 1;
@@ -1732,6 +1821,9 @@ class _WorkspaceShellState extends State<WorkspaceShell>
           .where((id) => snapshot.folders.any((folder) => folder.id == id))
           .toList();
       collapsedFolderIds = snapshot.collapsedFolderIds.toSet();
+      folderOrderIds = snapshot.folderOrderIds
+          .where((id) => snapshot.folders.any((folder) => folder.id == id))
+          .toList();
       messages = snapshot.messages.toList();
       calendarItems = snapshot.calendarEvents.toList();
       tasks = snapshot.tasks.toList();
@@ -2233,6 +2325,9 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         collapsedFolderIds: collapsedFolderIds,
         onToggleFolderCollapsed: (folderId) =>
             unawaited(toggleFolderCollapsed(folderId)),
+        folderOrderIds: folderOrderIds,
+        onFolderOrderChanged: (folderIds) =>
+            unawaited(updateFolderOrder(folderIds)),
         selectedMessage: selectedMessage,
         selectedFolder: selectedFolder,
         onMessageSelected: selectMessage,
@@ -4389,6 +4484,8 @@ class MailWorkspace extends StatelessWidget {
     required this.favoriteFolderIds,
     required this.collapsedFolderIds,
     required this.onToggleFolderCollapsed,
+    required this.folderOrderIds,
+    required this.onFolderOrderChanged,
     required this.selectedMessage,
     required this.selectedFolder,
     required this.onMessageSelected,
@@ -4425,6 +4522,8 @@ class MailWorkspace extends StatelessWidget {
   final List<String> favoriteFolderIds;
   final Set<String> collapsedFolderIds;
   final ValueChanged<String> onToggleFolderCollapsed;
+  final List<String> folderOrderIds;
+  final ValueChanged<List<String>> onFolderOrderChanged;
   final int selectedMessage;
   final String selectedFolder;
   final ValueChanged<int> onMessageSelected;
@@ -4475,6 +4574,8 @@ class MailWorkspace extends StatelessWidget {
                 favoriteFolderIds: favoriteFolderIds,
                 collapsedFolderIds: collapsedFolderIds,
                 onToggleFolderCollapsed: onToggleFolderCollapsed,
+                folderOrderIds: folderOrderIds,
+                onFolderOrderChanged: onFolderOrderChanged,
                 selectedFolder: selectedFolder,
                 onSelected: onFolderSelected,
                 onMessageDropped: onMessageDropped,
@@ -4530,6 +4631,16 @@ class MailWorkspace extends StatelessWidget {
   }
 }
 
+/// Payload of a folder drag: the folder and whether the drag started in the
+/// favorites list, which adds or reorders favorites but never rearranges the
+/// account tree.
+class FolderDragData {
+  const FolderDragData(this.folder, {required this.fromFavorites});
+
+  final MailFolder folder;
+  final bool fromFavorites;
+}
+
 class FolderPane extends StatelessWidget {
   const FolderPane({
     super.key,
@@ -4538,6 +4649,8 @@ class FolderPane extends StatelessWidget {
     required this.favoriteFolderIds,
     this.collapsedFolderIds = const {},
     this.onToggleFolderCollapsed,
+    this.folderOrderIds = const [],
+    this.onFolderOrderChanged,
     required this.selectedFolder,
     required this.onSelected,
     required this.onMessageDropped,
@@ -4554,6 +4667,13 @@ class FolderPane extends StatelessWidget {
   final List<String> favoriteFolderIds;
   final Set<String> collapsedFolderIds;
   final ValueChanged<String>? onToggleFolderCollapsed;
+
+  /// User-defined sibling order, see [buildFolderTree].
+  final List<String> folderOrderIds;
+
+  /// Receives the complete new order after a folder was dropped onto a
+  /// sibling; `null` disables rearranging.
+  final ValueChanged<List<String>>? onFolderOrderChanged;
   final String selectedFolder;
   final ValueChanged<String> onSelected;
   final void Function(DemoMessage message, MailFolder folder) onMessageDropped;
@@ -4623,14 +4743,14 @@ class FolderPane extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.only(top: 5),
               children: [
-                DragTarget<MailFolder>(
+                DragTarget<FolderDragData>(
                   key: const Key('favorite-drop-zone'),
                   onWillAcceptWithDetails: (_) => true,
                   onAcceptWithDetails: (details) {
                     final reordered = favoriteFolderIds
-                        .where((id) => id != details.data.id)
+                        .where((id) => id != details.data.folder.id)
                         .toList();
-                    reordered.add(details.data.id);
+                    reordered.add(details.data.folder.id);
                     onFavoriteFolderOrderChanged(reordered);
                   },
                   builder: (context, candidates, _) => DecoratedBox(
@@ -4687,15 +4807,15 @@ class FolderPane extends StatelessWidget {
                 ],
                 const Divider(height: 11, indent: 10, endIndent: 10),
                 for (final groupId in groupIds) ...[
-                  DragTarget<MailFolder>(
+                  DragTarget<FolderDragData>(
                     key: Key('favorite-remove-account-$groupId'),
                     onWillAcceptWithDetails: (details) =>
-                        details.data.accountId == groupId &&
-                        favoriteFolderIds.contains(details.data.id),
+                        details.data.folder.accountId == groupId &&
+                        favoriteFolderIds.contains(details.data.folder.id),
                     onAcceptWithDetails: (details) =>
                         onFavoriteFolderOrderChanged(
                           favoriteFolderIds
-                              .where((id) => id != details.data.id)
+                              .where((id) => id != details.data.folder.id)
                               .toList(growable: false),
                         ),
                     builder: (context, candidates, _) => Container(
@@ -4814,17 +4934,17 @@ class FolderPane extends StatelessWidget {
     required MailFolder folder,
     String? secondaryLabel,
   }) {
-    return DragTarget<MailFolder>(
+    return DragTarget<FolderDragData>(
       key: Key('favorite-drop-before-${folder.id}'),
-      onWillAcceptWithDetails: (details) => details.data.id != folder.id,
+      onWillAcceptWithDetails: (details) => details.data.folder.id != folder.id,
       onAcceptWithDetails: (details) {
         final reordered = favoriteFolderIds
-            .where((id) => id != details.data.id)
+            .where((id) => id != details.data.folder.id)
             .toList();
         final targetIndex = reordered.indexOf(folder.id);
         reordered.insert(
           targetIndex < 0 ? reordered.length : targetIndex,
-          details.data.id,
+          details.data.folder.id,
         );
         onFavoriteFolderOrderChanged(reordered);
       },
@@ -4844,30 +4964,89 @@ class FolderPane extends StatelessWidget {
           folder: folder,
           keyPrefix: 'favorite-folder',
           secondaryLabel: secondaryLabel,
+          inFavorites: true,
         ),
       ),
     );
   }
 
-  /// Rows of one account as a collapsible tree.
+  /// Rows of one account as a collapsible tree whose siblings the user can
+  /// rearrange by dropping one folder onto another.
   List<Widget> _accountFolderTiles(BuildContext context, String groupId) {
     final tree = buildFolderTree(
       folders
           .where((folder) => folder.accountId == groupId)
           .toList(growable: false),
+      orderIds: folderOrderIds,
     );
     final parents = folderTreeParentIds(tree);
+    final rowIndex = <String, int>{
+      for (var index = 0; index < tree.length; index += 1)
+        tree[index].folder.id: index,
+    };
     return [
       for (final entry in visibleFolderTree(tree, collapsedFolderIds))
-        _draggableFolderTile(
-          context,
-          folder: entry.folder,
-          depth: entry.depth,
-          tooltip: entry.folder.role == 'custom' ? entry.path : null,
-          expandable: parents.contains(entry.folder.id),
-          collapsed: collapsedFolderIds.contains(entry.folder.id),
+        _reorderTarget(
+          tree: tree,
+          rowIndex: rowIndex,
+          entry: entry,
+          child: _draggableFolderTile(
+            context,
+            folder: entry.folder,
+            depth: entry.depth,
+            tooltip: entry.folder.role == 'custom' ? entry.path : null,
+            expandable: parents.contains(entry.folder.id),
+            collapsed: collapsedFolderIds.contains(entry.folder.id),
+          ),
         ),
     ];
+  }
+
+  /// Drop zone that moves a sibling folder above or below [entry].
+  ///
+  /// A bar at the top or bottom edge previews where the folder will land;
+  /// drops from the favorites list or from another level are refused.
+  Widget _reorderTarget({
+    required List<FolderTreeEntry> tree,
+    required Map<String, int> rowIndex,
+    required FolderTreeEntry entry,
+    required Widget child,
+  }) {
+    List<String>? orderFor(FolderDragData data) {
+      if (data.fromFavorites || onFolderOrderChanged == null) return null;
+      return folderOrderAfterMove(
+        tree: tree,
+        orderIds: folderOrderIds,
+        draggedId: data.folder.id,
+        targetId: entry.folder.id,
+      );
+    }
+
+    return DragTarget<FolderDragData>(
+      key: Key('folder-reorder-${entry.folder.id}'),
+      onWillAcceptWithDetails: (details) => orderFor(details.data) != null,
+      onAcceptWithDetails: (details) {
+        final reordered = orderFor(details.data);
+        if (reordered != null) onFolderOrderChanged!(reordered);
+      },
+      builder: (context, candidates, _) {
+        final dragged = candidates.firstOrNull;
+        if (dragged == null) return child;
+        final movesDown =
+            (rowIndex[dragged.folder.id] ?? -1) <
+            (rowIndex[entry.folder.id] ?? 0);
+        final indicator = BorderSide(color: MaicentaApp.primaryBlue, width: 2);
+        return Container(
+          foregroundDecoration: BoxDecoration(
+            border: Border(
+              top: movesDown ? BorderSide.none : indicator,
+              bottom: movesDown ? indicator : BorderSide.none,
+            ),
+          ),
+          child: child,
+        );
+      },
+    );
   }
 
   Widget _draggableFolderTile(
@@ -4879,6 +5058,7 @@ class FolderPane extends StatelessWidget {
     String? tooltip,
     bool? expandable,
     bool collapsed = false,
+    bool inFavorites = false,
   }) {
     final label = mailboxDisplayName(context, folder);
     final tile = DragTarget<DemoMessage>(
@@ -4915,8 +5095,8 @@ class FolderPane extends StatelessWidget {
         ),
       ),
     );
-    return Draggable<MailFolder>(
-      data: folder,
+    return Draggable<FolderDragData>(
+      data: FolderDragData(folder, fromFavorites: inFavorites),
       dragAnchorStrategy: pointerDragAnchorStrategy,
       rootOverlay: true,
       feedback: _FolderDragFeedback(
@@ -4991,6 +5171,62 @@ class _FolderGroupLabel extends StatelessWidget {
             if (trailing != null) Icon(trailing, size: 16),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Progress dialog shown while an account is removed from the profile.
+class AccountRemovalDialog extends StatelessWidget {
+  const AccountRemovalDialog({
+    super.key,
+    required this.accountName,
+    required this.waitingForSync,
+    required this.onKeepAccount,
+  });
+
+  final String accountName;
+
+  /// `true` while a synchronization pass has to finish before the removal
+  /// can start; the user may still keep the account during that time.
+  final ValueListenable<bool> waitingForSync;
+  final VoidCallback onKeepAccount;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: waitingForSync,
+      builder: (context, waiting, _) => AlertDialog(
+        key: const Key('account-removal-progress'),
+        title: const Text('Konto entfernen'),
+        content: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox.square(
+              dimension: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 16),
+            Flexible(
+              child: Text(
+                waiting
+                    ? 'Die laufende Synchronisierung wird zuerst abgeschlossen, '
+                          'damit keine Daten dieses Kontos mehr geschrieben werden. '
+                          '„$accountName“ wird danach entfernt.'
+                    : '„$accountName“ und die lokal zwischengespeicherten '
+                          'Nachrichten werden entfernt …',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          if (waiting)
+            TextButton(
+              key: const Key('account-removal-keep'),
+              onPressed: onKeepAccount,
+              child: const Text('Konto behalten'),
+            ),
+        ],
       ),
     );
   }
