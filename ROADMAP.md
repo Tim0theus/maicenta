@@ -180,7 +180,10 @@ The first usable release will focus on a stable, local desktop mail client.
 - Validate supported workflows on Windows, macOS, and Linux.
 - Add Swift Package Manager support to the generated macOS Rust bridge before
   Flutter removes its current CocoaPods compatibility path.
-- Publish an initial alpha release.
+- [x] Publish an initial beta release: versioned builds for macOS, Windows,
+  and Linux from a tag-driven release workflow with SHA-256 checksums, an
+  in-app version and license dialog, a changelog, issue templates, and a
+  private vulnerability reporting process.
 
 ## Phase 2: Personal workspace
 

@@ -173,10 +173,18 @@ typedef MailSetupDetector =
     Future<MailSetupDetection> Function(String emailAddress);
 
 /// Detects how [emailAddress] can be connected using a temporary HTTP client.
+///
+/// Google sign-in is offered only when this build carries a Google OAuth
+/// client ID; otherwise Gmail accounts are set up through IMAP with an app
+/// password, which Google supports without any client registration.
 Future<MailSetupDetection> detectMailSetup(String emailAddress) async {
   final client = http.Client();
   try {
-    return await MailSetupProbe(client).detect(emailAddress);
+    return await MailSetupProbe(
+      client,
+      googleSignInAvailable:
+          MailOAuthProvider.google.configuredClientId.isNotEmpty,
+    ).detect(emailAddress);
   } finally {
     client.close();
   }
@@ -195,6 +203,7 @@ class MailSetupProbe {
   MailSetupProbe(
     this._client, {
     this.discover,
+    this.googleSignInAvailable = true,
     this.timeout = const Duration(seconds: 6),
   });
 
@@ -219,6 +228,9 @@ class MailSetupProbe {
 
   /// Overrides the IMAP/SMTP autodiscovery, for example in tests.
   final MailSettingsDiscovery? discover;
+
+  /// Whether browser sign-in with Google can be offered by this build.
+  final bool googleSignInAvailable;
   final Duration timeout;
 
   Future<MailSetupDetection> detect(String emailAddress) async {
@@ -278,18 +290,33 @@ class MailSetupProbe {
         );
       }
     } else if (isGoogle) {
-      summary = 'Google-Konto erkannt.';
-      suggestions.add(
-        const MailSetupSuggestion(
-          method: MailSetupMethod.google,
-          recommended: true,
-        ),
-      );
-      if (settings.isNotEmpty) {
+      final googleServers = settings.isNotEmpty
+          ? settings
+          : [_gmailImapSettings(email)];
+      if (googleSignInAvailable) {
+        summary = 'Google-Konto erkannt.';
+        suggestions.add(
+          const MailSetupSuggestion(
+            method: MailSetupMethod.google,
+            recommended: true,
+          ),
+        );
         suggestions.add(
           MailSetupSuggestion(
             method: MailSetupMethod.imapPassword,
-            settingsCandidates: settings,
+            settingsCandidates: googleServers,
+          ),
+        );
+      } else {
+        summary =
+            'Google-Konto erkannt. Diese Version meldet sich bei Google noch '
+            'nicht im Browser an: Bitte in den Google-Kontoeinstellungen ein '
+            'App-Passwort erstellen und hier als Passwort verwenden.';
+        suggestions.add(
+          MailSetupSuggestion(
+            method: MailSetupMethod.imapPassword,
+            settingsCandidates: googleServers,
+            recommended: true,
           ),
         );
       }
@@ -324,6 +351,19 @@ class MailSetupProbe {
       summary: summary,
     );
   }
+
+  static DiscoveredMailSettings _gmailImapSettings(String email) =>
+      DiscoveredMailSettings(
+        imapHost: 'imap.gmail.com',
+        imapPort: 993,
+        imapSecurity: 'tls',
+        imapUsername: email,
+        smtpHost: 'smtp.gmail.com',
+        smtpPort: 587,
+        smtpSecurity: 'starttls',
+        smtpUsername: email,
+        source: 'Google-Standardserver',
+      );
 
   Future<List<DiscoveredMailSettings>> _discoverSettings(String email) async {
     try {

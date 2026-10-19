@@ -1,0 +1,230 @@
+name: Release
+
+# Builds the desktop client for macOS, Windows, and Linux when a version tag is
+# pushed (v0.1.0-beta.1, v1.2.0, …), packages each build, writes SHA-256
+# checksums, and publishes a GitHub Release. Tags containing a hyphen become
+# pre-releases. `workflow_dispatch` runs the same matrix without publishing so
+# the packaging can be verified on every platform before a tag exists.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_NAME: MAICENTA
+  FLUTTER_CHANNEL: stable
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS
+            target: macos
+            artifact: macos
+          - os: windows-latest
+            label: Windows
+            target: windows
+            artifact: windows
+          - os: ubuntu-latest
+            label: Linux
+            target: linux
+            artifact: linux
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve version from tag or pubspec
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+          else
+            version="$(grep -E '^version:' apps/client_flutter/pubspec.yaml | sed -E 's/^version: *([^+ ]+).*/\1/')"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Building ${version}"
+
+      - name: Verify the tag matches pubspec.yaml and build_version.dart
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          pubspec="$(grep -E '^version:' apps/client_flutter/pubspec.yaml | sed -E 's/^version: *([^+ ]+).*/\1/')"
+          constant="$(grep -oE "maicentaVersion = '[^']+'" apps/client_flutter/lib/build_version.dart | sed -E "s/.*'([^']+)'/\1/")"
+          for value in "${pubspec}" "${constant}"; do
+            if [[ "${value}" != "${{ steps.version.outputs.version }}" ]]; then
+              echo "version ${value} does not match tag ${{ steps.version.outputs.version }}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Install Linux build dependencies
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ninja-build clang cmake pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev libssl-dev libsecret-1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Enable desktop targets
+        run: flutter config --enable-${{ matrix.target }}-desktop
+
+      - name: Resolve dependencies
+        working-directory: apps/client_flutter
+        run: flutter pub get
+
+      - name: Build release
+        working-directory: apps/client_flutter
+        run: flutter build ${{ matrix.target }} --release
+
+      # ------------------------------------------------------------------
+      # Packaging
+      # ------------------------------------------------------------------
+      - name: Package macOS DMG
+        if: matrix.target == 'macos'
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          app="apps/client_flutter/build/macos/Build/Products/Release/${APP_NAME}.app"
+          staging="$(mktemp -d)"
+          cp -R "${app}" "${staging}/"
+          ln -s /Applications "${staging}/Applications"
+          cat > "${staging}/Erste Schritte.txt" <<'TXT'
+          MAICENTA Beta für macOS
+
+          Diese Vorabversion ist noch nicht von Apple beglaubigt. Beim ersten
+          Start meldet macOS deshalb, die App könne nicht geöffnet werden.
+
+          So startest du sie trotzdem:
+            1. MAICENTA in den Ordner „Programme“ ziehen.
+            2. Im Finder mit der rechten Maustaste auf MAICENTA klicken und
+               „Öffnen“ wählen. Den Hinweis mit „Öffnen“ bestätigen.
+            3. Falls die Meldung bleibt: Systemeinstellungen → Datenschutz &
+               Sicherheit → unten bei MAICENTA auf „Dennoch öffnen“ klicken.
+
+          Prüfsumme und Hinweise: https://github.com/Tim0theus/maicenta/releases
+          TXT
+          mkdir -p dist
+          hdiutil create -volname "${APP_NAME} ${version}" -srcfolder "${staging}" \
+            -ov -format UDZO "dist/${APP_NAME}-${version}-macos.dmg"
+
+      - name: Package Windows ZIP
+        if: matrix.target == 'windows'
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          out="apps/client_flutter/build/windows/x64/runner/Release"
+          mkdir -p dist
+          cat > "${out}/Erste Schritte.txt" <<'TXT'
+          MAICENTA Beta für Windows
+
+          Diese Vorabversion ist noch nicht mit einem Zertifikat signiert.
+          Windows SmartScreen zeigt beim ersten Start deshalb eine Warnung.
+
+          So startest du sie trotzdem:
+            1. Den Ordner entpacken, zum Beispiel nach C:\Programme\MAICENTA.
+            2. maicenta.exe starten. Bei „Der Computer wurde durch Windows
+               geschützt“ auf „Weitere Informationen“ und dann „Trotzdem
+               ausführen“ klicken.
+
+          Prüfsumme und Hinweise: https://github.com/Tim0theus/maicenta/releases
+          TXT
+          (cd "${out}" && 7z a -tzip "${GITHUB_WORKSPACE}/dist/${APP_NAME}-${version}-windows-x64.zip" . >/dev/null)
+
+      - name: Package Linux tarball
+        if: matrix.target == 'linux'
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          out="apps/client_flutter/build/linux/x64/release/bundle"
+          staging="$(mktemp -d)/maicenta-${version}"
+          mkdir -p "${staging}" dist
+          cp -R "${out}/." "${staging}/"
+          cat > "${staging}/README.txt" <<'TXT'
+          MAICENTA Beta für Linux (x86_64)
+
+          Entpacken und ./maicenta starten. Benötigt GTK 3, libsecret (für den
+          Profilschlüssel im Schlüsselbund) und einen laufenden Secret Service
+          wie GNOME Keyring oder KWallet.
+
+          Prüfsumme und Hinweise: https://github.com/Tim0theus/maicenta/releases
+          TXT
+          tar -C "$(dirname "${staging}")" -czf "dist/${APP_NAME}-${version}-linux-x64.tar.gz" "$(basename "${staging}")"
+
+      - name: Write checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          for file in *; do
+            if command -v sha256sum >/dev/null; then
+              sha256sum "${file}" > "${file}.sha256"
+            else
+              shasum -a 256 "${file}" > "${file}.sha256"
+            fi
+          done
+          cat ./*.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Combine checksums
+        run: |
+          cd dist
+          cat ./*.sha256 > SHA256SUMS.txt
+          rm ./*.sha256
+          ls -la
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          version="${GITHUB_REF#refs/tags/v}"
+          awk -v ver="${version}" '
+            /^## / { printing = index($0, "[" ver "]") > 0; next }
+            printing { print }
+          ' CHANGELOG.md > release-notes.md
+          if [[ ! -s release-notes.md ]]; then
+            echo "Release notes for ${version} were not found in CHANGELOG.md; using the section header only." >&2
+            echo "Siehe CHANGELOG.md." > release-notes.md
+          fi
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: MAICENTA ${{ github.ref_name }}
+          body_path: release-notes.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: dist/*
+          fail_on_unmatched_files: true

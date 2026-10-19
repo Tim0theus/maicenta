@@ -754,8 +754,14 @@ iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAA
         assert_eq!(rendered.from_address.as_deref(), Some("anna@example.org"));
         assert_eq!(rendered.from_display_name.as_deref(), Some("Anna"));
         assert_eq!(rendered.to_recipients, "Tim <tim@example.org>");
-        assert!(rendered.cc_recipients.is_empty());
-        assert!(rendered.bcc_recipients.is_empty());
+        assert!(
+            rendered.cc_recipients.is_empty(),
+            "cc recipients should be empty"
+        );
+        assert!(
+            rendered.bcc_recipients.is_empty(),
+            "bcc recipients should be empty"
+        );
     }
 
     #[test]
@@ -780,7 +786,10 @@ iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAA
         let html = rendered.sanitized_html.expect("HTML body");
 
         assert_eq!(rendered.attachment_count, 0);
-        assert!(rendered.attachments.is_empty());
+        assert!(
+            rendered.attachments.is_empty(),
+            "inline resources must not be listed as attachments"
+        );
         assert!(html.contains("src=\"data:image/png;base64,iVBORw0KGgo"));
         assert!(!html.contains("cid:"));
         assert!(!html.contains("http://"));
@@ -817,7 +826,10 @@ iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAA
             .expect("valid message");
 
         assert_eq!(rendered.attachment_count, MAX_CACHED_ATTACHMENTS + 1);
-        assert!(rendered.attachments.is_empty());
+        assert!(
+            rendered.attachments.is_empty(),
+            "attachments beyond the cache limit are not stored"
+        );
         assert!(!rendered.attachments_complete);
     }
 

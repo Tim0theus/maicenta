@@ -1,0 +1,59 @@
+name: Fehler melden / Bug report
+description: Etwas funktioniert in MAICENTA nicht wie erwartet.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke für den Bericht. Bitte keine Passwörter, Tokens, echten E-Mail-Inhalte oder Profil-Exporte anhängen.
+        Sicherheitslücken bitte nicht hier, sondern vertraulich über den Security-Tab melden.
+  - type: input
+    id: version
+    attributes:
+      label: Version und Plattform
+      description: Die Zeile aus Datei → Optionen → Über MAICENTA (Knopf „Kopieren“).
+      placeholder: "MAICENTA 0.1.0-beta.1 (2) · macOS Version 15.6"
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Kontotyp
+      options:
+        - Microsoft 365 / Exchange Online (Graph API)
+        - Microsoft 365 klassisch (IMAP/SMTP mit Anmeldung im Browser)
+        - Google / Gmail
+        - Anderer IMAP/SMTP-Anbieter mit Passwort
+        - Kein Konto betroffen (lokales Profil, Oberfläche, Kalender …)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Schritte zum Nachstellen
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Erwartetes Verhalten
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Tatsächliches Verhalten
+      description: Fehlermeldungen bitte wörtlich einfügen. Screenshots sind willkommen, aber bitte private Daten abdecken.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Datenschutz
+      options:
+        - label: Der Bericht enthält keine Zugangsdaten, Tokens oder privaten Nachrichteninhalte.
+          required: true

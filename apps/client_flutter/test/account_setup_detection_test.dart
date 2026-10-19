@@ -106,6 +106,25 @@ void main() {
   });
 
   test(
+    'falls back to Gmail IMAP with an app password without a client ID',
+    () async {
+      final detection = await MailSetupProbe(
+        client(mx: 'aspmx.l.google.com'),
+        discover: (_) async => const [],
+        googleSignInAvailable: false,
+      ).detect('user@example.org');
+
+      expect(detection.recommended.method, MailSetupMethod.imapPassword);
+      expect(detection.recommended.settings?.imapHost, 'imap.gmail.com');
+      expect(detection.summary, contains('App-Passwort'));
+      expect(
+        detection.suggestions.map((suggestion) => suggestion.method),
+        isNot(contains(MailSetupMethod.google)),
+      );
+    },
+  );
+
+  test(
     'recommends discovered IMAP servers with a password otherwise',
     () async {
       final detection = await MailSetupProbe(

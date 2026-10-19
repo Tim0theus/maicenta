@@ -2930,7 +2930,7 @@ mod tests {
         }];
         let work = plan_incremental_mailbox_work("INBOX", 42, &[1, 2, 3, 4, 5, 6], &known, 2);
         assert_eq!(work.catalog_uids, [1, 2, 3, 4, 5, 6]);
-        assert!(work.body_uids.is_empty());
+        assert!(work.body_uids.is_empty(), "no body UIDs should be planned");
         assert_eq!(work.catalog_remaining, 0);
     }
 

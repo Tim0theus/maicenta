@@ -1,6 +1,6 @@
 [package]
 name = "maicenta-mail-connector"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 description = "IMAP/SMTP connector and legacy credential migration adapter for MAICENTA."
 edition.workspace = true
 license.workspace = true

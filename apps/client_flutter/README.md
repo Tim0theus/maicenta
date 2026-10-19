@@ -153,7 +153,22 @@ flutter run -d macos \
 
 These defines override the project's built-in public client IDs in
 `lib/features/mail/oauth_client_ids.dart`; they are only needed for forks or
-when no project registration is compiled in yet.
+when no project registration is compiled in yet. The Google ID is currently
+empty, so Google browser sign-in is hidden and Gmail accounts use IMAP with an
+app password.
+
+## Release builds
+
+Pushing a tag `vX.Y.Z[-pre]` runs `.github/workflows/release.yml`: it builds
+`flutter build {macos,windows,linux} --release` on the matching runners,
+packages a DMG, a ZIP, and a tar.gz, writes `SHA256SUMS.txt`, and publishes a
+GitHub Release whose notes come from the matching `CHANGELOG.md` section. The
+tag must equal the version in `pubspec.yaml`. Run the workflow manually from
+the Actions tab to verify packaging on all platforms without publishing.
+
+The Rust third-party notice shown under "Über MAICENTA" is generated with
+`cargo about generate about.hbs -o assets/licenses/rust-third-party.txt` from
+the repository root; regenerate it when Rust dependencies change.
 
 The callback can be overridden with `MAICENTA_OAUTH_REDIRECT_URI`. Custom app
 schemes must also be registered in the corresponding Android manifest or Apple

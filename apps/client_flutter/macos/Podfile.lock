@@ -10,6 +10,8 @@ PODS:
   - FlutterMacOS (1.0.0)
   - maicenta_bridge (0.0.1):
     - FlutterMacOS
+  - package_info_plus (0.0.1):
+    - FlutterMacOS
   - quill_native_bridge_macos (0.0.1):
     - FlutterMacOS
   - url_launcher_macos (0.0.1):
@@ -24,6 +26,7 @@ DEPENDENCIES:
   - flutter_web_auth_2 (from `Flutter/ephemeral/.symlinks/plugins/flutter_web_auth_2/macos`)
   - FlutterMacOS (from `Flutter/ephemeral`)
   - maicenta_bridge (from `Flutter/ephemeral/.symlinks/plugins/maicenta_bridge/macos`)
+  - package_info_plus (from `Flutter/ephemeral/.symlinks/plugins/package_info_plus/macos`)
   - quill_native_bridge_macos (from `Flutter/ephemeral/.symlinks/plugins/quill_native_bridge_macos/macos`)
   - url_launcher_macos (from `Flutter/ephemeral/.symlinks/plugins/url_launcher_macos/macos`)
   - window_to_front (from `Flutter/ephemeral/.symlinks/plugins/window_to_front/macos`)
@@ -41,6 +44,8 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral
   maicenta_bridge:
     :path: Flutter/ephemeral/.symlinks/plugins/maicenta_bridge/macos
+  package_info_plus:
+    :path: Flutter/ephemeral/.symlinks/plugins/package_info_plus/macos
   quill_native_bridge_macos:
     :path: Flutter/ephemeral/.symlinks/plugins/quill_native_bridge_macos/macos
   url_launcher_macos:
@@ -55,6 +60,7 @@ SPEC CHECKSUMS:
   flutter_web_auth_2: 7fe624ff12ddcb4c19e5dbcd56c9e9ea4899d967
   FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
   maicenta_bridge: 42f260a6e69cc2559436cad308ec06d378c23163
+  package_info_plus: f0052d280d17aa382b932f399edf32507174e870
   quill_native_bridge_macos: 2b005cb56902bb740e0cd9620aa399dfac6b4882
   url_launcher_macos: f87a979182d112f911de6820aefddaf56ee9fbfd
   window_to_front: 2d7d31f268d0b13b7e63b26e31eb0a2e9612239e
