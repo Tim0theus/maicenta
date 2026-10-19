@@ -2644,6 +2644,201 @@ Licensed under the Apache License, Version 2.0.
     expect(blocks.first.text, startsWith('Permission is hereby granted'));
     expect(blocks.last.packages, ['reqwest 0.12.0']);
   });
+
+  testWidgets('stores sender aliases from the account settings', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const account = MailAccountConfig(
+      id: 'account.strato',
+      displayName: 'Timm Beckmann',
+      email: 'timm@example.org',
+      imapHost: 'imap.strato.de',
+      imapPort: 993,
+      imapSecurity: 'tls',
+      imapUsername: 'timm@example.org',
+      smtpHost: 'smtp.strato.de',
+      smtpPort: 465,
+      smtpSecurity: 'tls',
+      smtpUsername: 'timm@example.org',
+    );
+    final dataSource = RecordingMailDataSource(
+      configuredAccounts: const [account],
+    );
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.tap(find.byKey(const Key('ribbon-tab-Datei')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('ribbon-action-Kontoeinstellungen')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('account-aliases-account.strato')));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const Key('alias-address-0')),
+      'TIMM@example.org',
+    );
+    await tester.tap(find.byKey(const Key('alias-save')));
+    await tester.pump();
+    expect(find.byKey(const Key('alias-error')), findsOneWidget);
+    expect(dataSource.savedAliases, isEmpty);
+
+    await tester.enterText(
+      find.byKey(const Key('alias-address-0')),
+      'kontakt@example.org',
+    );
+    await tester.enterText(
+      find.byKey(const Key('alias-name-0')),
+      'Example Support',
+    );
+    await tester.tap(find.byKey(const Key('alias-add')));
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('alias-address-1')),
+      'info@example.org',
+    );
+    await tester.tap(find.byKey(const Key('alias-save')));
+    await tester.pumpAndSettle();
+
+    expect(dataSource.savedAliases['account.strato'], const [
+      MailSenderAlias(
+        address: 'kontakt@example.org',
+        displayName: 'Example Support',
+      ),
+      MailSenderAlias(address: 'info@example.org'),
+    ]);
+  });
+
+  testWidgets('sends from a selected alias and keeps it on the saved copy', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const account = MailAccountConfig(
+      id: 'account.strato',
+      displayName: 'Timm Beckmann',
+      email: 'timm@example.org',
+      imapHost: 'imap.strato.de',
+      imapPort: 993,
+      imapSecurity: 'tls',
+      imapUsername: 'timm@example.org',
+      smtpHost: 'smtp.strato.de',
+      smtpPort: 465,
+      smtpSecurity: 'tls',
+      smtpUsername: 'timm@example.org',
+      aliases: [
+        MailSenderAlias(
+          address: 'kontakt@example.org',
+          displayName: 'Example Support',
+        ),
+      ],
+    );
+    final dataSource = RecordingMailDataSource(
+      configuredAccounts: const [account],
+      configuredFolders: const [
+        MailFolder(
+          id: 'account.strato.inbox',
+          accountId: 'account.strato',
+          displayName: 'Posteingang',
+          role: 'inbox',
+          unreadCount: 0,
+          totalCount: 0,
+        ),
+        MailFolder(
+          id: 'account.strato.sent',
+          accountId: 'account.strato',
+          displayName: 'Gesendet',
+          role: 'sent',
+          unreadCount: 0,
+          totalCount: 0,
+        ),
+      ],
+    );
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.tap(find.byKey(const Key('new-item-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Timm Beckmann <timm@example.org>'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('compose-from')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Example Support <kontakt@example.org>').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('compose-to')),
+      'anna@example.org',
+    );
+    await tester.enterText(
+      find.byKey(const Key('compose-subject')),
+      'Antwort vom Support',
+    );
+    await tester.tap(find.byKey(const Key('compose-send')));
+    await tester.pumpAndSettle();
+
+    expect(dataSource.sentEnvelopes, hasLength(1));
+    expect(dataSource.sentEnvelopes.single.accountId, 'account.strato');
+    expect(dataSource.sentEnvelopes.single.fromAddress, 'kontakt@example.org');
+    expect(
+      dataSource.savedMessages.single.message.email,
+      'kontakt@example.org',
+    );
+  });
+
+  test('replies come from the alias the original message was sent to', () {
+    const account = MailAccountConfig(
+      id: 'account.strato',
+      displayName: 'Timm Beckmann',
+      email: 'timm@example.org',
+      imapHost: 'imap.strato.de',
+      imapPort: 993,
+      imapSecurity: 'tls',
+      imapUsername: 'timm@example.org',
+      smtpHost: 'smtp.strato.de',
+      smtpPort: 465,
+      smtpSecurity: 'tls',
+      smtpUsername: 'timm@example.org',
+      aliases: [MailSenderAlias(address: 'kontakt@example.org')],
+    );
+    const toAlias = DemoMessage(
+      id: 'm1',
+      accountId: 'account.strato',
+      mailboxId: 'account.strato.inbox',
+      sender: 'Anna',
+      email: 'anna@example.org',
+      subject: 'Frage',
+      preview: '',
+      body: '',
+      plainText: '',
+      time: 'Jetzt',
+      toRecipients: 'Example <Kontakt@Example.org>',
+    );
+    const toPrimary = DemoMessage(
+      id: 'm2',
+      accountId: 'account.strato',
+      mailboxId: 'account.strato.inbox',
+      sender: 'Anna',
+      email: 'anna@example.org',
+      subject: 'Frage',
+      preview: '',
+      body: '',
+      plainText: '',
+      time: 'Jetzt',
+      toRecipients: 'timm@example.org',
+    );
+
+    expect(replySenderAddress(account, toAlias), 'kontakt@example.org');
+    expect(replySenderAddress(account, toPrimary), 'timm@example.org');
+    expect(replySenderAddress(null, toAlias), '');
+    expect(account.senderIdentities.map((identity) => identity.label), [
+      'Timm Beckmann <timm@example.org>',
+      'Timm Beckmann <kontakt@example.org>',
+    ]);
+  });
 }
 
 Future<void> _enterIdentity(
@@ -2786,9 +2981,11 @@ class RecordingMailDataSource implements MailDataSource {
   exportedAttachments = [];
   final List<LocalTaskItem> savedTasks = [];
   final List<String> deletedAccountIds = [];
+  final Map<String, List<MailSenderAlias>> savedAliases = {};
   final List<
     ({
       String accountId,
+      String? fromAddress,
       List<String> to,
       List<String> cc,
       List<String> bcc,
@@ -3030,6 +3227,15 @@ class RecordingMailDataSource implements MailDataSource {
   ) async {}
 
   @override
+  Future<List<MailSenderAlias>> saveAccountAliases(
+    String accountId,
+    List<MailSenderAlias> aliases,
+  ) async {
+    savedAliases[accountId] = List.of(aliases);
+    return List.unmodifiable(aliases);
+  }
+
+  @override
   Future<WorkspaceDataSnapshot> deleteAccount(String accountId) async {
     deletedAccountIds.add(accountId);
     return WorkspaceDataSnapshot(
@@ -3095,6 +3301,7 @@ class RecordingMailDataSource implements MailDataSource {
   @override
   Future<String> sendAccountMessage({
     required String accountId,
+    String? fromAddress,
     required List<String> to,
     required List<String> cc,
     required List<String> bcc,
@@ -3107,6 +3314,7 @@ class RecordingMailDataSource implements MailDataSource {
   }) async {
     sentEnvelopes.add((
       accountId: accountId,
+      fromAddress: fromAddress,
       to: to,
       cc: cc,
       bcc: bcc,

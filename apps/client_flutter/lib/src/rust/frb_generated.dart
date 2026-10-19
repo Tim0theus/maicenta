@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 1390969903;
+  int get rustContentHash => -576407006;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -176,6 +176,12 @@ abstract class RustLibApi extends BaseApi {
     required String databasePath,
     required MailAccountInput input,
     required String password,
+  });
+
+  Future<List<SenderAliasDto>> crateApiWorkspaceSaveMailAccountAliases({
+    required String databasePath,
+    required String accountId,
+    required List<SenderAliasDto> aliases,
   });
 
   Future<void> crateApiWorkspaceSaveMailboxOrder({
@@ -917,6 +923,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<List<SenderAliasDto>> crateApiWorkspaceSaveMailAccountAliases({
+    required String databasePath,
+    required String accountId,
+    required List<SenderAliasDto> aliases,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(databasePath, serializer);
+          sse_encode_String(accountId, serializer);
+          sse_encode_list_sender_alias_dto(aliases, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 20,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_sender_alias_dto,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWorkspaceSaveMailAccountAliasesConstMeta,
+        argValues: [databasePath, accountId, aliases],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWorkspaceSaveMailAccountAliasesConstMeta =>
+      const TaskConstMeta(
+        debugName: "save_mail_account_aliases",
+        argNames: ["databasePath", "accountId", "aliases"],
+      );
+
+  @override
   Future<void> crateApiWorkspaceSaveMailboxOrder({
     required String databasePath,
     required List<String> mailboxIds,
@@ -930,7 +973,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 21,
             port: port_,
           );
         },
@@ -967,7 +1010,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 22,
             port: port_,
           );
         },
@@ -1006,7 +1049,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 23,
             port: port_,
           );
         },
@@ -1041,7 +1084,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 24,
             port: port_,
           );
         },
@@ -1076,7 +1119,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1109,7 +1152,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1144,7 +1187,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 27,
             port: port_,
           );
         },
@@ -1179,7 +1222,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1220,7 +1263,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 29,
             port: port_,
           );
         },
@@ -1263,7 +1306,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1454,6 +1497,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<SenderAliasDto> dco_decode_list_sender_alias_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_sender_alias_dto).toList();
+  }
+
+  @protected
   List<TaskDto> dco_decode_list_task_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_task_dto).toList();
@@ -1535,8 +1584,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MailAccountDto dco_decode_mail_account_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 15)
-      throw Exception('unexpected arr length: expect 15 but see ${arr.length}');
+    if (arr.length != 16)
+      throw Exception('unexpected arr length: expect 16 but see ${arr.length}');
     return MailAccountDto(
       id: dco_decode_String(arr[0]),
       provider: dco_decode_String(arr[1]),
@@ -1552,7 +1601,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       smtpUsername: dco_decode_String(arr[11]),
       authentication: dco_decode_String(arr[12]),
       oauthProvider: dco_decode_opt_String(arr[13]),
-      lastSyncAtMs: dco_decode_opt_box_autoadd_i_64(arr[14]),
+      aliases: dco_decode_list_sender_alias_dto(arr[14]),
+      lastSyncAtMs: dco_decode_opt_box_autoadd_i_64(arr[15]),
     );
   }
 
@@ -1560,8 +1610,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MailAccountInput dco_decode_mail_account_input(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 12)
-      throw Exception('unexpected arr length: expect 12 but see ${arr.length}');
+    if (arr.length != 13)
+      throw Exception('unexpected arr length: expect 13 but see ${arr.length}');
     return MailAccountInput(
       id: dco_decode_String(arr[0]),
       provider: dco_decode_String(arr[1]),
@@ -1575,6 +1625,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       smtpPort: dco_decode_u_16(arr[9]),
       smtpSecurity: dco_decode_String(arr[10]),
       smtpUsername: dco_decode_String(arr[11]),
+      aliases: dco_decode_list_sender_alias_dto(arr[12]),
     );
   }
 
@@ -1694,19 +1745,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   OutgoingMessageInput dco_decode_outgoing_message_input(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 10)
-      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    if (arr.length != 11)
+      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
     return OutgoingMessageInput(
       accountId: dco_decode_String(arr[0]),
-      to: dco_decode_list_String(arr[1]),
-      cc: dco_decode_list_String(arr[2]),
-      bcc: dco_decode_list_String(arr[3]),
-      subject: dco_decode_String(arr[4]),
-      plainText: dco_decode_String(arr[5]),
-      htmlText: dco_decode_String(arr[6]),
-      attachmentPaths: dco_decode_list_String(arr[7]),
-      storedAttachmentIds: dco_decode_list_String(arr[8]),
-      highImportance: dco_decode_bool(arr[9]),
+      fromAddress: dco_decode_opt_String(arr[1]),
+      to: dco_decode_list_String(arr[2]),
+      cc: dco_decode_list_String(arr[3]),
+      bcc: dco_decode_list_String(arr[4]),
+      subject: dco_decode_String(arr[5]),
+      plainText: dco_decode_String(arr[6]),
+      htmlText: dco_decode_String(arr[7]),
+      attachmentPaths: dco_decode_list_String(arr[8]),
+      storedAttachmentIds: dco_decode_list_String(arr[9]),
+      highImportance: dco_decode_bool(arr[10]),
+    );
+  }
+
+  @protected
+  SenderAliasDto dco_decode_sender_alias_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return SenderAliasDto(
+      address: dco_decode_String(arr[0]),
+      displayName: dco_decode_opt_String(arr[1]),
     );
   }
 
@@ -1998,6 +2062,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<SenderAliasDto> sse_decode_list_sender_alias_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <SenderAliasDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_sender_alias_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<TaskDto> sse_decode_list_task_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -2120,6 +2198,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_smtpUsername = sse_decode_String(deserializer);
     var var_authentication = sse_decode_String(deserializer);
     var var_oauthProvider = sse_decode_opt_String(deserializer);
+    var var_aliases = sse_decode_list_sender_alias_dto(deserializer);
     var var_lastSyncAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     return MailAccountDto(
       id: var_id,
@@ -2136,6 +2215,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       smtpUsername: var_smtpUsername,
       authentication: var_authentication,
       oauthProvider: var_oauthProvider,
+      aliases: var_aliases,
       lastSyncAtMs: var_lastSyncAtMs,
     );
   }
@@ -2155,6 +2235,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_smtpPort = sse_decode_u_16(deserializer);
     var var_smtpSecurity = sse_decode_String(deserializer);
     var var_smtpUsername = sse_decode_String(deserializer);
+    var var_aliases = sse_decode_list_sender_alias_dto(deserializer);
     return MailAccountInput(
       id: var_id,
       provider: var_provider,
@@ -2168,6 +2249,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       smtpPort: var_smtpPort,
       smtpSecurity: var_smtpSecurity,
       smtpUsername: var_smtpUsername,
+      aliases: var_aliases,
     );
   }
 
@@ -2337,6 +2419,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_accountId = sse_decode_String(deserializer);
+    var var_fromAddress = sse_decode_opt_String(deserializer);
     var var_to = sse_decode_list_String(deserializer);
     var var_cc = sse_decode_list_String(deserializer);
     var var_bcc = sse_decode_list_String(deserializer);
@@ -2348,6 +2431,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_highImportance = sse_decode_bool(deserializer);
     return OutgoingMessageInput(
       accountId: var_accountId,
+      fromAddress: var_fromAddress,
       to: var_to,
       cc: var_cc,
       bcc: var_bcc,
@@ -2358,6 +2442,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       storedAttachmentIds: var_storedAttachmentIds,
       highImportance: var_highImportance,
     );
+  }
+
+  @protected
+  SenderAliasDto sse_decode_sender_alias_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_address = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_opt_String(deserializer);
+    return SenderAliasDto(address: var_address, displayName: var_displayName);
   }
 
   @protected
@@ -2665,6 +2757,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_sender_alias_dto(
+    List<SenderAliasDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_sender_alias_dto(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_task_dto(List<TaskDto> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
@@ -2757,6 +2861,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.smtpUsername, serializer);
     sse_encode_String(self.authentication, serializer);
     sse_encode_opt_String(self.oauthProvider, serializer);
+    sse_encode_list_sender_alias_dto(self.aliases, serializer);
     sse_encode_opt_box_autoadd_i_64(self.lastSyncAtMs, serializer);
   }
 
@@ -2778,6 +2883,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_16(self.smtpPort, serializer);
     sse_encode_String(self.smtpSecurity, serializer);
     sse_encode_String(self.smtpUsername, serializer);
+    sse_encode_list_sender_alias_dto(self.aliases, serializer);
   }
 
   @protected
@@ -2901,6 +3007,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.accountId, serializer);
+    sse_encode_opt_String(self.fromAddress, serializer);
     sse_encode_list_String(self.to, serializer);
     sse_encode_list_String(self.cc, serializer);
     sse_encode_list_String(self.bcc, serializer);
@@ -2910,6 +3017,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_list_String(self.attachmentPaths, serializer);
     sse_encode_list_String(self.storedAttachmentIds, serializer);
     sse_encode_bool(self.highImportance, serializer);
+  }
+
+  @protected
+  void sse_encode_sender_alias_dto(
+    SenderAliasDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.address, serializer);
+    sse_encode_opt_String(self.displayName, serializer);
   }
 
   @protected

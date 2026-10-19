@@ -13,16 +13,27 @@ const _outlookBlue = Color(0xFF0F6CBD);
 
 enum ComposeDisposition { sent, draft }
 
+/// One selectable sender: an account's primary address or one of its
+/// send-as aliases.
 class ComposeSender {
-  const ComposeSender({required this.accountId, required this.label});
+  const ComposeSender({
+    required this.accountId,
+    required this.address,
+    required this.label,
+  });
 
   final String accountId;
+  final String address;
   final String label;
+
+  /// Unique value for menus; one account can offer several addresses.
+  String get key => '$accountId\u0000${address.toLowerCase()}';
 }
 
 const _personalComposeSenders = [
   ComposeSender(
     accountId: 'personal',
+    address: 'demo@maicenta.local',
     label: 'Persönliches Konto <demo@maicenta.local>',
   ),
 ];
@@ -31,6 +42,7 @@ class ComposeResult {
   const ComposeResult({
     required this.disposition,
     required this.accountId,
+    required this.fromAddress,
     required this.to,
     required this.cc,
     required this.bcc,
@@ -44,6 +56,9 @@ class ComposeResult {
 
   final ComposeDisposition disposition;
   final String accountId;
+
+  /// Address the message is sent from: the account address or an alias.
+  final String fromAddress;
   final String to;
   final String cc;
   final String bcc;
@@ -102,6 +117,7 @@ Future<ComposeResult?> showComposeWindow(
   String initialCc = '',
   String initialBcc = '',
   String initialAccountId = '',
+  String initialFromAddress = '',
   String initialEditorDeltaJson = '',
   List<ComposeAttachment> initialAttachments = const [],
   bool initialHighImportance = false,
@@ -118,6 +134,7 @@ Future<ComposeResult?> showComposeWindow(
         initialCc: initialCc,
         initialBcc: initialBcc,
         initialAccountId: initialAccountId,
+        initialFromAddress: initialFromAddress,
         initialEditorDeltaJson: initialEditorDeltaJson,
         initialAttachments: initialAttachments,
         initialHighImportance: initialHighImportance,
@@ -136,6 +153,7 @@ class ComposeWindow extends StatefulWidget {
     this.initialCc = '',
     this.initialBcc = '',
     this.initialAccountId = '',
+    this.initialFromAddress = '',
     this.initialEditorDeltaJson = '',
     this.initialAttachments = const [],
     this.initialHighImportance = false,
@@ -148,6 +166,11 @@ class ComposeWindow extends StatefulWidget {
   final String initialCc;
   final String initialBcc;
   final String initialAccountId;
+
+  /// Preferred sender address within [initialAccountId], e.g. the alias a
+  /// replied-to message was addressed to. Falls back to the first sender of
+  /// the account when it is not offered.
+  final String initialFromAddress;
   final String initialEditorDeltaJson;
   final List<ComposeAttachment> initialAttachments;
   final bool initialHighImportance;
@@ -171,7 +194,8 @@ class _ComposeWindowState extends State<ComposeWindow> {
   final List<ComposeAttachment> attachments = [];
   bool highImportance = false;
   String activeTab = 'Nachricht';
-  late String selectedAccountId;
+  late ComposeSender selectedSender;
+  String get selectedAccountId => selectedSender.accountId;
   String? validationMessage;
   bool draggingFiles = false;
   bool handedOffSecurityScopes = false;
@@ -179,12 +203,19 @@ class _ComposeWindowState extends State<ComposeWindow> {
   @override
   void initState() {
     super.initState();
-    selectedAccountId =
-        widget.senders.any(
-          (sender) => sender.accountId == widget.initialAccountId,
-        )
-        ? widget.initialAccountId
-        : widget.senders.first.accountId;
+    final preferredAddress = widget.initialFromAddress.trim().toLowerCase();
+    selectedSender =
+        widget.senders
+            .where(
+              (sender) =>
+                  sender.accountId == widget.initialAccountId &&
+                  sender.address.toLowerCase() == preferredAddress,
+            )
+            .firstOrNull ??
+        widget.senders
+            .where((sender) => sender.accountId == widget.initialAccountId)
+            .firstOrNull ??
+        widget.senders.first;
     toController.text = widget.initialTo;
     ccController.text = widget.initialCc;
     bccController.text = widget.initialBcc;
@@ -400,14 +431,14 @@ class _ComposeWindowState extends State<ComposeWindow> {
                     label: 'Von',
                     child: DropdownButton<String>(
                       key: const Key('compose-from'),
-                      value: selectedAccountId,
+                      value: selectedSender.key,
                       isDense: true,
                       isExpanded: true,
                       underline: const SizedBox.shrink(),
                       items: [
                         for (final sender in widget.senders)
                           DropdownMenuItem(
-                            value: sender.accountId,
+                            value: sender.key,
                             child: Text(
                               sender.label,
                               style: const TextStyle(fontSize: 12),
@@ -415,8 +446,11 @@ class _ComposeWindowState extends State<ComposeWindow> {
                           ),
                       ],
                       onChanged: (value) {
-                        if (value != null) {
-                          setState(() => selectedAccountId = value);
+                        final sender = widget.senders
+                            .where((sender) => sender.key == value)
+                            .firstOrNull;
+                        if (sender != null) {
+                          setState(() => selectedSender = sender);
                         }
                       },
                     ),
@@ -850,6 +884,7 @@ class _ComposeWindowState extends State<ComposeWindow> {
     return ComposeResult(
       disposition: disposition,
       accountId: selectedAccountId,
+      fromAddress: selectedSender.address,
       to: toController.text.trim(),
       cc: ccController.text.trim(),
       bcc: bccController.text.trim(),

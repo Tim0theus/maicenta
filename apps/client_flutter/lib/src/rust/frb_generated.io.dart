@@ -94,6 +94,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<SenderAliasDto> dco_decode_list_sender_alias_dto(dynamic raw);
+
+  @protected
   List<TaskDto> dco_decode_list_task_dto(dynamic raw);
 
   @protected
@@ -140,6 +143,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   OutgoingMessageInput dco_decode_outgoing_message_input(dynamic raw);
+
+  @protected
+  SenderAliasDto dco_decode_sender_alias_dto(dynamic raw);
 
   @protected
   TaskDto dco_decode_task_dto(dynamic raw);
@@ -249,6 +255,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<SenderAliasDto> sse_decode_list_sender_alias_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<TaskDto> sse_decode_list_task_dto(SseDeserializer deserializer);
 
   @protected
@@ -307,6 +318,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   OutgoingMessageInput sse_decode_outgoing_message_input(
     SseDeserializer deserializer,
   );
+
+  @protected
+  SenderAliasDto sse_decode_sender_alias_dto(SseDeserializer deserializer);
 
   @protected
   TaskDto sse_decode_task_dto(SseDeserializer deserializer);
@@ -450,6 +464,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_sender_alias_dto(
+    List<SenderAliasDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_task_dto(List<TaskDto> self, SseSerializer serializer);
 
   @protected
@@ -530,6 +550,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_outgoing_message_input(
     OutgoingMessageInput self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_sender_alias_dto(
+    SenderAliasDto self,
     SseSerializer serializer,
   );
 
