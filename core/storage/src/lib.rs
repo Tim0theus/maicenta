@@ -4147,7 +4147,8 @@ mod tests {
                     std::slice::from_ref(&metadata.identity),
                 )
                 .expect("matching mailbox snapshot")
-                .is_empty()
+                .is_empty(),
+            "reconciling a matching snapshot removes nothing"
         );
         assert_eq!(
             store
@@ -4386,7 +4387,8 @@ mod tests {
             store
                 .pending_draft_operations(&account.id)
                 .expect("draft queue")
-                .is_empty()
+                .is_empty(),
+            "draft queue should be empty"
         );
     }
 
@@ -4643,7 +4645,8 @@ mod tests {
             store
                 .remote_mailbox_sync_states(&account.id)
                 .expect("states after account deletion")
-                .is_empty()
+                .is_empty(),
+            "sync states are removed with the account"
         );
     }
 
@@ -4683,7 +4686,8 @@ mod tests {
                     }],
                 )
                 .expect("different UIDVALIDITY")
-                .is_empty()
+                .is_empty(),
+            "a different UIDVALIDITY removes nothing"
         );
         assert!(
             store
@@ -4696,7 +4700,8 @@ mod tests {
                     }],
                 )
                 .expect("different UID")
-                .is_empty()
+                .is_empty(),
+            "a different UID removes nothing"
         );
         assert_eq!(
             store
@@ -4712,7 +4717,8 @@ mod tests {
             store
                 .list_messages(&mailbox.id, 20)
                 .expect("mailbox after deletion")
-                .is_empty()
+                .is_empty(),
+            "mailbox should be empty after deletion"
         );
     }
 
@@ -4739,7 +4745,8 @@ mod tests {
             store
                 .search_messages("verschlusselungsbericht", false, 20)
                 .expect("metadata-only search")
-                .is_empty()
+                .is_empty(),
+            "metadata-only search must not match body text"
         );
 
         message.subject = "Roadmap".into();
@@ -4768,7 +4775,8 @@ mod tests {
             store
                 .search_messages("projektubersicht", false, 20)
                 .expect("metadata search excludes attachments")
-                .is_empty()
+                .is_empty(),
+            "metadata-only search must not match attachment names"
         );
         assert_eq!(
             store
@@ -4798,7 +4806,8 @@ mod tests {
             store
                 .search_messages("***", false, 20)
                 .expect("empty query")
-                .is_empty()
+                .is_empty(),
+            "an empty query yields no results"
         );
     }
 
@@ -5020,8 +5029,14 @@ mod tests {
             )
             .expect("migrated local draft")
             .expect("editable metadata");
-        assert!(migrated_draft.to.is_empty());
-        assert!(migrated_draft.editor_delta_json.is_empty());
+        assert!(
+            migrated_draft.to.is_empty(),
+            "migrated draft has no recipients"
+        );
+        assert!(
+            migrated_draft.editor_delta_json.is_empty(),
+            "migrated draft has no editor delta"
+        );
     }
 
     #[test]
@@ -5239,7 +5254,8 @@ mod tests {
             store
                 .list_attachments(&message.id)
                 .expect("attachments")
-                .is_empty()
+                .is_empty(),
+            "attachment metadata should be removed"
         );
 
         message.has_attachments = true;
@@ -5377,7 +5393,8 @@ mod tests {
             store
                 .list_messages(&archive.id, 20)
                 .expect("archive")
-                .is_empty()
+                .is_empty(),
+            "archive should be empty"
         );
     }
 
@@ -5520,7 +5537,8 @@ mod tests {
             store
                 .list_account_attachments(&AccountId::parse("other").expect("id"))
                 .expect("other account")
-                .is_empty()
+                .is_empty(),
+            "other account has no attachments"
         );
     }
 
@@ -5644,12 +5662,16 @@ mod tests {
             .delete_mail_account(&account.id)
             .expect("delete account");
 
-        assert!(store.list_mail_accounts().expect("accounts").is_empty());
+        assert!(
+            store.list_mail_accounts().expect("accounts").is_empty(),
+            "accounts should be empty after deletion"
+        );
         assert!(
             store
                 .list_mailboxes(&account.id)
                 .expect("account mailboxes")
-                .is_empty()
+                .is_empty(),
+            "mailboxes are removed with the account"
         );
         assert_eq!(
             store.message_body(&account_message_id),
