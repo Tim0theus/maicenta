@@ -38,7 +38,10 @@ jobs:
             label: Windows
             target: windows
             artifact: windows
-          - os: ubuntu-latest
+          # Pinned instead of ubuntu-latest: the bundle links against the
+          # runner's glibc and WebKitGTK, so an older base keeps it runnable on
+          # current LTS distributions.
+          - os: ubuntu-24.04
             label: Linux
             target: linux
             artifact: linux
