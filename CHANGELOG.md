@@ -7,7 +7,7 @@ section of the tagged version into the GitHub Release notes.
 
 ## [Unreleased]
 
-## [0.1.0-beta.1] - 2026-09-22
+## [0.1.0-beta.1] - 2026-10-23
 
 First public beta of the desktop client for macOS, Windows, and Linux.
 
@@ -36,6 +36,10 @@ First public beta of the desktop client for macOS, Windows, and Linux.
   inline `cid:` images resolved from memory.
 - Rich-text composer with attachments, drafts with an encrypted offline
   queue, reply, reply all, forward, importance.
+- Sending from provider aliases ("send as"): each account keeps a list of
+  additional sender addresses, the composer offers them in the "Von" field,
+  replies default to the alias the original message was addressed to, and
+  drafts remember their sender.
 - Profile-wide weighted search over subjects, senders, recipients, and, on
   request, cached bodies and attachment names.
 - Local calendar, tasks, and contacts persisted in the profile.
