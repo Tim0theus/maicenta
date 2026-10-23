@@ -143,15 +143,21 @@ The first usable release will focus on a stable, local desktop mail client.
   inline raster resources. Normal attachment sections are not requested.
 - [ ] Add download and synchronization progress, cancellation, resumable large
   transfers, and additional safe inline formats.
+- [x] Send from provider aliases ("send as"): each account keeps a list of
+  additional sender addresses with optional display names, the composer offers
+  them in the "Von" field, replies default to the alias the original message
+  was addressed to, drafts remember their sender, and the SMTP envelope as
+  well as the Graph MIME `From` follow the chosen address. Addresses outside
+  the account's own list are rejected before submission.
 - Support drafts, signatures, sender identities, read state, and flags.
   Local drafts reopen with persisted To/Cc/Bcc fields, Quill rich-text state,
   importance, and retained attachment objects. Read state, flags, mailbox
   moves, and custom-folder mutations are persisted through the Rust bridge and
   SQLite. Remote-message flags, moves, and complete rich MIME draft lifecycle
   operations are queued for IMAP. Fully cached server drafts without
-  remote-only attachments become editable. Identity management, safe editing
-  of server drafts with deferred attachments, and remote custom-folder
-  mutations remain.
+  remote-only attachments become editable. Send-as aliases are managed per
+  account. Signatures per sender, safe editing of server drafts with deferred
+  attachments, and remote custom-folder mutations remain.
 
 ### Local data and recovery
 

@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `attachment_content_type`, `attachment_object_path`, `cache_remote_message`, `calendar_event_dto`, `cleanup_import_backups`, `compact_preview`, `connector_credential`, `contact_dto`, `copy_local_attachment`, `current_timestamp_ms`, `draft_recipient_list`, `imap_identities`, `import_backup_path`, `install_staged_profile`, `load_account_credential`, `load_outgoing_attachments`, `load_snapshot`, `load_stored_outgoing_attachments`, `mail_account_dto`, `mail_account_from_input`, `mail_provider_name`, `mailbox_dto`, `mailbox_role_name`, `message_dto`, `message_dtos`, `migrate_legacy_credentials`, `oauth_access_token`, `open_profile_store`, `parse_mail_provider`, `parse_transport_security`, `persist_attachment_objects`, `plain_text_as_html`, `profile_object_root`, `profile_vault`, `prototype_body`, `prototype_mailbox`, `prototype_messages`, `remote_mailbox_id`, `remote_message_id`, `remove_attachment_objects`, `remove_oauth_secrets`, `replace_cached_vault`, `required_secret`, `rollback_imported_profile`, `seed_prototype`, `synchronize_account`, `synchronize_graph_account`, `synchronize_imap_account`, `synchronize_pending_drafts`, `synchronized_draft_ids`, `task_dto`, `transport_security_name`, `upgrade_prototype_content`, `validate_combined_outgoing_attachments`, `validate_draft_metadata`, `validate_oauth_provider_for_account`, `validate_oauth_token_endpoint`, `validate_oauth_token_input`, `validate_outgoing_attachment_set`, `validated_display_name`, `validated_server_name`, `validated_text`, `write_exported_attachment`
+// These functions are ignored because they are not marked as `pub`: `attachment_content_type`, `attachment_object_path`, `cache_remote_message`, `calendar_event_dto`, `cleanup_import_backups`, `compact_preview`, `connector_credential`, `contact_dto`, `copy_local_attachment`, `current_timestamp_ms`, `draft_recipient_list`, `imap_identities`, `import_backup_path`, `install_staged_profile`, `load_account_credential`, `load_outgoing_attachments`, `load_snapshot`, `load_stored_outgoing_attachments`, `mail_account_dto`, `mail_account_from_input`, `mail_provider_name`, `mailbox_dto`, `mailbox_role_name`, `message_dto`, `message_dtos`, `migrate_legacy_credentials`, `oauth_access_token`, `open_profile_store`, `parse_mail_provider`, `parse_transport_security`, `persist_attachment_objects`, `plain_text_as_html`, `profile_object_root`, `profile_vault`, `prototype_body`, `prototype_mailbox`, `prototype_messages`, `remote_mailbox_id`, `remote_message_id`, `remove_attachment_objects`, `remove_oauth_secrets`, `replace_cached_vault`, `required_secret`, `rollback_imported_profile`, `seed_prototype`, `sender_aliases_from_input`, `synchronize_account`, `synchronize_graph_account`, `synchronize_imap_account`, `synchronize_pending_drafts`, `synchronized_draft_ids`, `task_dto`, `transport_security_name`, `upgrade_prototype_content`, `validate_combined_outgoing_attachments`, `validate_draft_metadata`, `validate_oauth_provider_for_account`, `validate_oauth_token_endpoint`, `validate_oauth_token_input`, `validate_outgoing_attachment_set`, `validated_display_name`, `validated_server_name`, `validated_text`, `write_exported_attachment`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AccountSyncReport`, `CachedRemoteInput`, `PendingDraftUpload`, `RemoteAttachmentDescriptor`, `StoredMailCredential`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `from`, `from`
 
@@ -360,6 +360,27 @@ Future<void> saveMailAccount({
   databasePath: databasePath,
   input: input,
   password: password,
+);
+
+/// Replaces the send-as aliases of an existing account and returns the
+/// normalized list as stored.
+///
+/// Aliases are plain configuration, so this works for password and OAuth
+/// accounts alike without touching credentials. The provider decides whether
+/// it accepts mail from an alias; a rejected alias surfaces as a send error.
+///
+/// # Errors
+///
+/// Returns an error for an unknown account, a malformed alias, or a profile
+/// storage failure.
+Future<List<SenderAliasDto>> saveMailAccountAliases({
+  required String databasePath,
+  required String accountId,
+  required List<SenderAliasDto> aliases,
+}) => RustLib.instance.api.crateApiWorkspaceSaveMailAccountAliases(
+  databasePath: databasePath,
+  accountId: accountId,
+  aliases: aliases,
 );
 
 /// Saves an OAuth-backed IMAP/SMTP account and its refreshable token set in
@@ -739,6 +760,9 @@ class MailAccountDto {
   final String smtpUsername;
   final String authentication;
   final String? oauthProvider;
+
+  /// Send-as aliases in their configured order.
+  final List<SenderAliasDto> aliases;
   final PlatformInt64? lastSyncAtMs;
 
   const MailAccountDto({
@@ -756,6 +780,7 @@ class MailAccountDto {
     required this.smtpUsername,
     required this.authentication,
     this.oauthProvider,
+    required this.aliases,
     this.lastSyncAtMs,
   });
 
@@ -775,6 +800,7 @@ class MailAccountDto {
       smtpUsername.hashCode ^
       authentication.hashCode ^
       oauthProvider.hashCode ^
+      aliases.hashCode ^
       lastSyncAtMs.hashCode;
 
   @override
@@ -796,6 +822,7 @@ class MailAccountDto {
           smtpUsername == other.smtpUsername &&
           authentication == other.authentication &&
           oauthProvider == other.oauthProvider &&
+          aliases == other.aliases &&
           lastSyncAtMs == other.lastSyncAtMs;
 }
 
@@ -819,6 +846,11 @@ class MailAccountInput {
   final String smtpSecurity;
   final String smtpUsername;
 
+  /// Complete replacement list of send-as aliases. Saving an account with an
+  /// empty list removes all aliases, so callers must pass the existing ones
+  /// when only credentials or server settings change.
+  final List<SenderAliasDto> aliases;
+
   const MailAccountInput({
     required this.id,
     required this.provider,
@@ -832,6 +864,7 @@ class MailAccountInput {
     required this.smtpPort,
     required this.smtpSecurity,
     required this.smtpUsername,
+    required this.aliases,
   });
 
   @override
@@ -847,7 +880,8 @@ class MailAccountInput {
       smtpHost.hashCode ^
       smtpPort.hashCode ^
       smtpSecurity.hashCode ^
-      smtpUsername.hashCode;
+      smtpUsername.hashCode ^
+      aliases.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -865,7 +899,8 @@ class MailAccountInput {
           smtpHost == other.smtpHost &&
           smtpPort == other.smtpPort &&
           smtpSecurity == other.smtpSecurity &&
-          smtpUsername == other.smtpUsername;
+          smtpUsername == other.smtpUsername &&
+          aliases == other.aliases;
 }
 
 /// Mailbox data transferred to the Flutter interface.
@@ -1124,6 +1159,10 @@ class OAuthTokenInput {
 /// Rich message submitted from the desktop composer.
 class OutgoingMessageInput {
   final String accountId;
+
+  /// Sender address chosen in the composer: the account address or one of
+  /// its aliases. `None` sends from the account address.
+  final String? fromAddress;
   final List<String> to;
   final List<String> cc;
   final List<String> bcc;
@@ -1136,6 +1175,7 @@ class OutgoingMessageInput {
 
   const OutgoingMessageInput({
     required this.accountId,
+    this.fromAddress,
     required this.to,
     required this.cc,
     required this.bcc,
@@ -1150,6 +1190,7 @@ class OutgoingMessageInput {
   @override
   int get hashCode =>
       accountId.hashCode ^
+      fromAddress.hashCode ^
       to.hashCode ^
       cc.hashCode ^
       bcc.hashCode ^
@@ -1166,6 +1207,7 @@ class OutgoingMessageInput {
       other is OutgoingMessageInput &&
           runtimeType == other.runtimeType &&
           accountId == other.accountId &&
+          fromAddress == other.fromAddress &&
           to == other.to &&
           cc == other.cc &&
           bcc == other.bcc &&
@@ -1175,6 +1217,26 @@ class OutgoingMessageInput {
           attachmentPaths == other.attachmentPaths &&
           storedAttachmentIds == other.storedAttachmentIds &&
           highImportance == other.highImportance;
+}
+
+/// One additional sender address of an account. Used in snapshots and in
+/// account input. `display_name` falls back to the account name when absent.
+class SenderAliasDto {
+  final String address;
+  final String? displayName;
+
+  const SenderAliasDto({required this.address, this.displayName});
+
+  @override
+  int get hashCode => address.hashCode ^ displayName.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SenderAliasDto &&
+          runtimeType == other.runtimeType &&
+          address == other.address &&
+          displayName == other.displayName;
 }
 
 class TaskDto {

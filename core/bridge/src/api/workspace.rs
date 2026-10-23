@@ -473,6 +473,13 @@ pub struct ContactDto {
     pub email: String,
 }
 
+/// One additional sender address of an account. Used in snapshots and in
+/// account input. `display_name` falls back to the account name when absent.
+pub struct SenderAliasDto {
+    pub address: String,
+    pub display_name: Option<String>,
+}
+
 pub struct MailAccountDto {
     pub id: String,
     /// `imap` for the standards connector or `microsoft_graph`.
@@ -489,6 +496,8 @@ pub struct MailAccountDto {
     pub smtp_username: String,
     pub authentication: String,
     pub oauth_provider: Option<String>,
+    /// Send-as aliases in their configured order.
+    pub aliases: Vec<SenderAliasDto>,
     pub last_sync_at_ms: Option<i64>,
 }
 
@@ -556,6 +565,10 @@ pub struct MailAccountInput {
     pub smtp_port: u16,
     pub smtp_security: String,
     pub smtp_username: String,
+    /// Complete replacement list of send-as aliases. Saving an account with an
+    /// empty list removes all aliases, so callers must pass the existing ones
+    /// when only credentials or server settings change.
+    pub aliases: Vec<SenderAliasDto>,
 }
 
 /// OAuth token set returned by an Authorization Code + PKCE exchange.
@@ -574,6 +587,9 @@ pub struct OAuthTokenInput {
 /// Rich message submitted from the desktop composer.
 pub struct OutgoingMessageInput {
     pub account_id: String,
+    /// Sender address chosen in the composer: the account address or one of
+    /// its aliases. `None` sends from the account address.
+    pub from_address: Option<String>,
     pub to: Vec<String>,
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
@@ -1687,6 +1703,44 @@ pub fn save_mail_account(
     Ok(())
 }
 
+/// Replaces the send-as aliases of an existing account and returns the
+/// normalized list as stored.
+///
+/// Aliases are plain configuration, so this works for password and OAuth
+/// accounts alike without touching credentials. The provider decides whether
+/// it accepts mail from an alias; a rejected alias surfaces as a send error.
+///
+/// # Errors
+///
+/// Returns an error for an unknown account, a malformed alias, or a profile
+/// storage failure.
+pub fn save_mail_account_aliases(
+    database_path: String,
+    account_id: String,
+    aliases: Vec<SenderAliasDto>,
+) -> Result<Vec<SenderAliasDto>, String> {
+    let account_id = AccountId::parse(account_id).map_err(|error| error.to_string())?;
+    let mut store = open_profile_store(database_path)?;
+    let mut account = store
+        .list_mail_accounts()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|account| account.id == account_id)
+        .ok_or_else(|| "mail account not found".to_owned())?;
+    account.aliases = sender_aliases_from_input(aliases, account.email.address())?;
+    store
+        .save_mail_account(&account)
+        .map_err(|error| error.to_string())?;
+    Ok(account
+        .aliases
+        .into_iter()
+        .map(|alias| SenderAliasDto {
+            address: alias.address().to_owned(),
+            display_name: alias.display_name().map(str::to_owned),
+        })
+        .collect())
+}
+
 /// Saves an OAuth-backed IMAP/SMTP account and its refreshable token set in
 /// the encrypted profile vault.
 ///
@@ -1998,6 +2052,7 @@ pub async fn send_account_message(
     drop(store);
     let credential = load_account_credential(&database_path, &account.id).await?;
     let outgoing = OutgoingMessage {
+        from_address: input.from_address,
         to: input.to,
         cc: input.cc,
         bcc: input.bcc,
@@ -2271,7 +2326,14 @@ async fn synchronize_pending_drafts(
                     let sanitized_html = body
                         .sanitized_html
                         .unwrap_or_else(|| plain_text_as_html(&plain_text));
+                    // A draft remembers its sender in the cached summary. Keep
+                    // it only while it is still an address of this account,
+                    // so a removed alias falls back to the primary address
+                    // instead of blocking the draft upload.
+                    let from_address = Some(summary.from.address().to_owned())
+                        .filter(|address| account.sender_identity(address).is_some());
                     Ok(OutgoingMessage {
+                        from_address,
                         to: draft_recipient_list(&draft.to),
                         cc: draft_recipient_list(&draft.cc),
                         bcc: draft_recipient_list(&draft.bcc),
@@ -3131,6 +3193,7 @@ fn mail_account_from_input(input: MailAccountInput) -> Result<MailAccount, Strin
     if input.imap_port == 0 || input.smtp_port == 0 {
         return Err("mail server ports must be between 1 and 65535".into());
     }
+    let aliases = sender_aliases_from_input(input.aliases, input.email.trim())?;
     Ok(MailAccount {
         id,
         provider,
@@ -3145,8 +3208,56 @@ fn mail_account_from_input(input: MailAccountInput) -> Result<MailAccount, Strin
         smtp_port: input.smtp_port,
         smtp_security: parse_transport_security(&input.smtp_security)?,
         smtp_username,
+        aliases,
         last_sync_at_ms: None,
     })
+}
+
+const MAX_SENDER_ALIASES: usize = 50;
+
+/// Validates the alias list of an account input. Blank rows are ignored,
+/// duplicates and the primary address are dropped, and each address must be
+/// a plausible mailbox. The provider remains the authority on whether it
+/// accepts an alias; MAICENTA only prevents malformed `From` headers.
+fn sender_aliases_from_input(
+    aliases: Vec<SenderAliasDto>,
+    primary: &str,
+) -> Result<Vec<MailAddress>, String> {
+    let mut validated: Vec<MailAddress> = Vec::new();
+    for alias in aliases {
+        let address = alias.address.trim().to_owned();
+        if address.is_empty() {
+            continue;
+        }
+        if address.len() > 320 || address.chars().any(char::is_control) {
+            return Err(format!("alias {address} is not a valid email address"));
+        }
+        let display_name = alias
+            .display_name
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty());
+        if let Some(name) = &display_name {
+            if name.chars().count() > 100 || name.chars().any(char::is_control) {
+                return Err(format!("the display name of alias {address} is invalid"));
+            }
+        }
+        let parsed = MailAddress::new(address.clone(), display_name)
+            .map_err(|_| format!("alias {address} is not a valid email address"))?;
+        if parsed.address().eq_ignore_ascii_case(primary)
+            || validated
+                .iter()
+                .any(|existing| existing.address().eq_ignore_ascii_case(parsed.address()))
+        {
+            continue;
+        }
+        validated.push(parsed);
+    }
+    if validated.len() > MAX_SENDER_ALIASES {
+        return Err(format!(
+            "at most {MAX_SENDER_ALIASES} aliases are supported"
+        ));
+    }
+    Ok(validated)
 }
 
 fn parse_mail_provider(value: &str) -> Result<MailProvider, String> {
@@ -3565,6 +3676,14 @@ fn mail_account_dto(account: MailAccount, oauth_provider: Option<String>) -> Mai
         smtp_username: account.smtp_username,
         authentication: authentication.into(),
         oauth_provider,
+        aliases: account
+            .aliases
+            .into_iter()
+            .map(|alias| SenderAliasDto {
+                address: alias.address().to_owned(),
+                display_name: alias.display_name().map(str::to_owned),
+            })
+            .collect(),
         last_sync_at_ms: account.last_sync_at_ms,
     }
 }
@@ -3840,15 +3959,15 @@ mod tests {
         open_profile_store, open_workspace, remote_mailbox_id, remote_message_id,
         rename_local_mailbox, save_collapsed_mailboxes, save_dark_mode, save_favorite_mailboxes,
         save_local_calendar_event, save_local_contact, save_local_message, save_local_task,
-        save_mail_account, save_mailbox_order, save_oauth_mail_account, search_profile_messages,
-        update_local_message,
+        save_mail_account, save_mail_account_aliases, save_mailbox_order, save_oauth_mail_account,
+        search_profile_messages, update_local_message,
     };
     use maicenta_application::{MailAccountStore, MailStore, SecretStore};
-    use maicenta_domain::{AccountId, Mailbox, MailboxRole, MessageBody, MessageId};
+    use maicenta_domain::{AccountId, MailAddress, Mailbox, MailboxRole, MessageBody, MessageId};
     use maicenta_graph_connector::GraphMessage;
     use maicenta_mail_connector::{RemoteAttachmentPart, RemoteMessage};
 
-    use super::CachedRemoteInput;
+    use super::{CachedRemoteInput, SenderAliasDto, sender_aliases_from_input};
 
     static NEXT_DATABASE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -4331,6 +4450,7 @@ mod tests {
             smtp_port: 587,
             smtp_security: "starttls".into(),
             smtp_username: "user@example.org".into(),
+            aliases: Vec::new(),
         })
         .expect("account");
         let inbox = RemoteMessage {
@@ -4396,6 +4516,7 @@ mod tests {
             smtp_port: 587,
             smtp_security: "starttls".into(),
             smtp_username: "user@example.org".into(),
+            aliases: Vec::new(),
         })
         .expect("account");
         let remote = RemoteMessage {
@@ -4502,6 +4623,7 @@ aW5jb21pbmcgYnl0ZXM=
             smtp_port: 587,
             smtp_security: "starttls".into(),
             smtp_username: "user@example.org".into(),
+            aliases: Vec::new(),
         })
         .expect("account");
         let remote = RemoteMessage {
@@ -4588,6 +4710,7 @@ aW5jb21pbmcgYnl0ZXM=
                 smtp_port: 587,
                 smtp_security: "starttls".into(),
                 smtp_username: "alex@example.org".into(),
+                aliases: Vec::new(),
             },
             OAuthTokenInput {
                 provider: "microsoft365".into(),
@@ -4601,7 +4724,7 @@ aW5jb21pbmcgYnl0ZXM=
         )
         .expect("save OAuth account");
 
-        let snapshot = open_workspace(database_path).expect("snapshot");
+        let snapshot = open_workspace(database_path.clone()).expect("snapshot");
         let account = snapshot
             .mail_accounts
             .iter()
@@ -4653,6 +4776,7 @@ aW5jb21pbmcgYnl0ZXM=
                 smtp_port: 587,
                 smtp_security: "starttls".into(),
                 smtp_username: "portable@example.org".into(),
+                aliases: Vec::new(),
             },
             "vault-secret-marker".into(),
         )
@@ -4697,6 +4821,7 @@ aW5jb21pbmcgYnl0ZXM=
             smtp_port: 587,
             smtp_security: "starttls".into(),
             smtp_username: "portable@example.org".into(),
+            aliases: Vec::new(),
         })
         .expect("restored account id");
         assert_eq!(
@@ -4723,5 +4848,117 @@ aW5jb21pbmcgYnl0ZXM=
             "maicenta-bridge-{}-{unique}-{serial}.sqlite",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn validates_and_normalizes_sender_aliases_from_account_input() {
+        let aliases = sender_aliases_from_input(
+            vec![
+                SenderAliasDto {
+                    address: " kontakt@example.org ".into(),
+                    display_name: Some(" Support ".into()),
+                },
+                SenderAliasDto {
+                    address: String::new(),
+                    display_name: None,
+                },
+                SenderAliasDto {
+                    address: "USER@example.org".into(),
+                    display_name: None,
+                },
+                SenderAliasDto {
+                    address: "Kontakt@example.org".into(),
+                    display_name: None,
+                },
+                SenderAliasDto {
+                    address: "info@example.org".into(),
+                    display_name: Some("   ".into()),
+                },
+            ],
+            "user@example.org",
+        )
+        .expect("valid aliases");
+
+        assert_eq!(
+            aliases,
+            vec![
+                MailAddress::new("kontakt@example.org", Some("Support".into())).expect("alias"),
+                MailAddress::new("info@example.org", None).expect("alias"),
+            ]
+        );
+        assert!(
+            sender_aliases_from_input(
+                vec![SenderAliasDto {
+                    address: "not an address".into(),
+                    display_name: None,
+                }],
+                "user@example.org",
+            )
+            .is_err(),
+            "malformed alias addresses are rejected"
+        );
+    }
+
+    #[test]
+    fn exposes_saved_aliases_in_the_account_snapshot() {
+        let path = temporary_database_path();
+        let database_path = path.to_string_lossy().into_owned();
+        open_workspace(database_path.clone()).expect("seed workspace");
+        save_mail_account(
+            database_path.clone(),
+            MailAccountInput {
+                id: "alias-test".into(),
+                provider: "imap".into(),
+                display_name: "Alias Test".into(),
+                email: "user@example.org".into(),
+                imap_host: "imap.example.org".into(),
+                imap_port: 993,
+                imap_security: "tls".into(),
+                imap_username: "user@example.org".into(),
+                smtp_host: "smtp.example.org".into(),
+                smtp_port: 465,
+                smtp_security: "tls".into(),
+                smtp_username: "user@example.org".into(),
+                aliases: vec![SenderAliasDto {
+                    address: "kontakt@example.org".into(),
+                    display_name: Some("Support".into()),
+                }],
+            },
+            "app-password".into(),
+        )
+        .expect("save account");
+
+        let snapshot = open_workspace(database_path.clone()).expect("snapshot");
+        let account = snapshot
+            .mail_accounts
+            .iter()
+            .find(|account| account.id == "alias-test")
+            .expect("saved account");
+        assert_eq!(account.aliases.len(), 1);
+        assert_eq!(account.aliases[0].address, "kontakt@example.org");
+        assert_eq!(account.aliases[0].display_name.as_deref(), Some("Support"));
+
+        let replaced = save_mail_account_aliases(
+            database_path.clone(),
+            "alias-test".into(),
+            vec![
+                SenderAliasDto {
+                    address: "info@example.org".into(),
+                    display_name: None,
+                },
+                SenderAliasDto {
+                    address: "user@example.org".into(),
+                    display_name: None,
+                },
+            ],
+        )
+        .expect("replace aliases");
+        assert_eq!(replaced.len(), 1, "the primary address is not an alias");
+        assert_eq!(replaced[0].address, "info@example.org");
+        assert!(
+            save_mail_account_aliases(database_path, "missing".into(), Vec::new()).is_err(),
+            "unknown accounts are rejected"
+        );
+        let _ = std::fs::remove_file(path);
     }
 }

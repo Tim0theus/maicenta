@@ -23,7 +23,7 @@ use maicenta_domain::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-const CURRENT_SCHEMA_VERSION: u32 = 15;
+const CURRENT_SCHEMA_VERSION: u32 = 16;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const FAVORITE_MAILBOXES_KEY: &str = "favorite_mailbox_ids";
 const COLLAPSED_MAILBOXES_KEY: &str = "collapsed_mailbox_ids";
@@ -1906,15 +1906,47 @@ impl MailAccountStore for SqliteMailStore {
             })
             .map_err(storage_error)?;
 
-        rows.map(|row| {
-            row.map_err(storage_error)
-                .and_then(RawMailAccount::into_domain)
-        })
-        .collect()
+        let mut accounts = rows
+            .map(|row| {
+                row.map_err(storage_error)
+                    .and_then(RawMailAccount::into_domain)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        let mut aliases = connection
+            .prepare(
+                "SELECT account_id, address, display_name
+                 FROM mail_account_aliases
+                 ORDER BY account_id, position",
+            )
+            .map_err(storage_error)?;
+        let alias_rows = aliases
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(storage_error)?;
+        for row in alias_rows {
+            let (account_id, address, display_name) = row.map_err(storage_error)?;
+            let alias = MailAddress::new(address, display_name).map_err(invalid_data)?;
+            if let Some(account) = accounts
+                .iter_mut()
+                .find(|account| account.id.as_str() == account_id)
+            {
+                account.aliases.push(alias);
+            }
+        }
+        Ok(accounts)
     }
 
     fn save_mail_account(&mut self, account: &MailAccount) -> Result<(), ApplicationError> {
-        self.connection()?
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(storage_error)?;
+        transaction
             .execute(
                 "INSERT INTO mail_accounts (
                     id, display_name, email,
@@ -1951,8 +1983,38 @@ impl MailAccountStore for SqliteMailStore {
                     mail_provider_to_str(account.provider),
                 ],
             )
-            .map(|_| ())
-            .map_err(storage_error)
+            .map_err(storage_error)?;
+        transaction
+            .execute(
+                "DELETE FROM mail_account_aliases WHERE account_id = ?1",
+                [account.id.as_str()],
+            )
+            .map_err(storage_error)?;
+        for (position, alias) in account
+            .aliases
+            .iter()
+            .filter(|alias| {
+                !alias
+                    .address()
+                    .eq_ignore_ascii_case(account.email.address())
+            })
+            .enumerate()
+        {
+            transaction
+                .execute(
+                    "INSERT INTO mail_account_aliases (account_id, position, address, display_name)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(account_id, address) DO NOTHING",
+                    params![
+                        account.id.as_str(),
+                        i64::try_from(position).map_err(invalid_data)?,
+                        alias.address(),
+                        alias.display_name(),
+                    ],
+                )
+                .map_err(storage_error)?;
+        }
+        transaction.commit().map_err(storage_error)
     }
 
     fn delete_mail_account(&mut self, account_id: &AccountId) -> Result<(), ApplicationError> {
@@ -2728,6 +2790,10 @@ fn migrate(connection: &mut Connection) -> Result<(), ApplicationError> {
 
     if version < 15 {
         apply_migration_v15(connection)?;
+    }
+
+    if version < 16 {
+        apply_migration_v16(connection)?;
     }
 
     Ok(())
@@ -3628,6 +3694,29 @@ fn apply_migration_v15(connection: &mut Connection) -> Result<(), ApplicationErr
     transaction.commit().map_err(storage_error)
 }
 
+/// Stores send-as aliases per account. Aliases are configuration, not secret
+/// material, and disappear together with their account.
+fn apply_migration_v16(connection: &mut Connection) -> Result<(), ApplicationError> {
+    let transaction = connection.transaction().map_err(storage_error)?;
+    transaction
+        .execute_batch(
+            "
+                CREATE TABLE mail_account_aliases (
+                    account_id TEXT NOT NULL
+                        REFERENCES mail_accounts(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL CHECK (position >= 0),
+                    address TEXT NOT NULL COLLATE NOCASE,
+                    display_name TEXT,
+                    PRIMARY KEY (account_id, address)
+                ) STRICT;
+
+                PRAGMA user_version = 16;
+                ",
+        )
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)
+}
+
 fn search_expression(
     query: &str,
     include_content: bool,
@@ -3701,6 +3790,7 @@ impl RawMailAccount {
             smtp_port: self.smtp_port,
             smtp_security: transport_security_from_str(&self.smtp_security)?,
             smtp_username: self.smtp_username,
+            aliases: Vec::new(),
             last_sync_at_ms: self.last_sync_at_ms,
         })
     }
@@ -4196,8 +4286,52 @@ mod tests {
             smtp_port: 587,
             smtp_security: TransportSecurity::StartTls,
             smtp_username: "user@example.org".into(),
+            aliases: Vec::new(),
             last_sync_at_ms: None,
         }
+    }
+
+    #[test]
+    fn persists_replaces_and_cascades_sender_aliases() {
+        let mut store = SqliteMailStore::open_in_memory().expect("profile");
+        let mut account = mail_account();
+        account.aliases = vec![
+            MailAddress::new("kontakt@example.org", Some("Support".into())).expect("alias"),
+            MailAddress::new("info@example.org", None).expect("alias"),
+            // Duplicates of the primary address and of another alias are
+            // dropped instead of failing the whole save.
+            MailAddress::new("USER@example.org", None).expect("primary duplicate"),
+            MailAddress::new("Info@example.org", None).expect("alias duplicate"),
+        ];
+        store.save_mail_account(&account).expect("save account");
+
+        let stored = store.list_mail_accounts().expect("accounts");
+        assert_eq!(
+            stored[0].aliases,
+            vec![
+                MailAddress::new("kontakt@example.org", Some("Support".into())).expect("alias"),
+                MailAddress::new("info@example.org", None).expect("alias"),
+            ]
+        );
+
+        account.aliases = vec![MailAddress::new("billing@example.org", None).expect("replacement")];
+        store.save_mail_account(&account).expect("update account");
+        assert_eq!(
+            store.list_mail_accounts().expect("accounts")[0].aliases,
+            account.aliases
+        );
+
+        store
+            .delete_mail_account(&account.id)
+            .expect("delete account");
+        let remaining: i64 = store
+            .connection()
+            .expect("connection")
+            .query_row("SELECT COUNT(*) FROM mail_account_aliases", [], |row| {
+                row.get(0)
+            })
+            .expect("alias count");
+        assert_eq!(remaining, 0, "aliases are removed with their account");
     }
 
     #[test]

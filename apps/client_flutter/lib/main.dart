@@ -19,6 +19,7 @@ import 'features/mail/mailbox_labels.dart';
 import 'features/mail/message_window.dart';
 import 'features/mail/oauth_service.dart';
 import 'features/mail/safe_message_html.dart';
+import 'features/mail/sender_aliases_dialog.dart';
 import 'l10n/app_localizations.dart';
 import 'src/rust/frb_generated.dart';
 
@@ -729,9 +730,11 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       showNotice('Entwürfe werden mit „Entwurf bearbeiten“ geöffnet.');
       return;
     }
-    final ownAddresses = mailAccounts
-        .map((account) => account.email.toLowerCase())
-        .toSet();
+    final ownAddresses = {
+      for (final account in mailAccounts)
+        for (final identity in account.senderIdentities)
+          identity.address.toLowerCase(),
+    };
     final copiedRecipients = replyAll
         ? <String>{
                 ...parseRecipientList(message.toRecipients),
@@ -739,8 +742,11 @@ class _WorkspaceShellState extends State<WorkspaceShell>
               }
               .where(
                 (recipient) =>
-                    recipient.toLowerCase() != message.email.toLowerCase() &&
-                    !ownAddresses.contains(recipient.toLowerCase()),
+                    recipientAddress(recipient).toLowerCase() !=
+                        message.email.toLowerCase() &&
+                    !ownAddresses.contains(
+                      recipientAddress(recipient).toLowerCase(),
+                    ),
               )
               .toList()
         : const <String>[];
@@ -751,6 +757,10 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       initialSubject: prefixedSubject(message.subject, 'Re:'),
       initialBody: quotedMessage(message),
       initialAccountId: message.accountId,
+      initialFromAddress: replySenderAddress(
+        accountById(message.accountId),
+        message,
+      ),
       senders: composeSenders(mailAccounts),
     );
     await handleComposeResult(result);
@@ -772,6 +782,10 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       initialSubject: prefixedSubject(message.subject, 'Fwd:'),
       initialBody: quotedMessage(message),
       initialAccountId: message.accountId,
+      initialFromAddress: replySenderAddress(
+        accountById(message.accountId),
+        message,
+      ),
       senders: composeSenders(mailAccounts),
     );
     await handleComposeResult(result);
@@ -819,6 +833,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       initialSubject: message.subject,
       initialBody: message.plainText,
       initialAccountId: message.accountId,
+      initialFromAddress: message.email,
       initialEditorDeltaJson: message.editorDeltaJson,
       initialAttachments: initialAttachments,
       initialHighImportance: message.flagged,
@@ -840,6 +855,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
           break;
         }
       }
+      final outgoingSender = outgoingAccount?.senderFor(result.fromAddress);
       var effectiveDisposition = result.disposition;
       var sentThroughSmtp = false;
       if (result.disposition == ComposeDisposition.sent &&
@@ -856,6 +872,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
           try {
             await widget.mailDataSource.sendAccountMessage(
               accountId: outgoingAccount.id,
+              fromAddress: outgoingSender?.address,
               to: to,
               cc: cc,
               bcc: bcc,
@@ -898,7 +915,10 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         sender: effectiveDisposition == ComposeDisposition.sent
             ? 'Ich'
             : 'Entwurf',
-        email: outgoingAccount?.email ?? 'demo@maicenta.local',
+        email:
+            outgoingSender?.address ??
+            outgoingAccount?.email ??
+            'demo@maicenta.local',
         subject: result.subject,
         preview: preview,
         body: result.htmlText,
@@ -994,6 +1014,13 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     } finally {
       await result.releaseSecurityScopedResources();
     }
+  }
+
+  MailAccountConfig? accountById(String accountId) {
+    for (final account in mailAccounts) {
+      if (account.id == accountId) return account;
+    }
+    return null;
   }
 
   String folderIdForRole(String role, {String? accountId}) {
@@ -1661,6 +1688,10 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       builder: (dialogContext) => AccountManagerDialog(accounts: mailAccounts),
     );
     if (action == null || !mounted) return;
+    if (action.type == AccountManagementActionType.aliases) {
+      await editSenderAliases(action.account!);
+      return;
+    }
     if (action.type == AccountManagementActionType.delete) {
       final account = action.account!;
       final confirmed = await showDialog<bool>(
@@ -1736,6 +1767,41 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     });
     showNotice('Konto gespeichert. Die erste Synchronisierung startet.');
     await synchronize();
+  }
+
+  Future<void> editSenderAliases(MailAccountConfig account) async {
+    final aliases = await showDialog<List<MailSenderAlias>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => SenderAliasesDialog(account: account),
+    );
+    if (aliases == null || !mounted) return;
+    final List<MailSenderAlias> stored;
+    try {
+      stored = await widget.mailDataSource.saveAccountAliases(
+        account.id,
+        aliases,
+      );
+    } on Object catch (error) {
+      if (!mounted) return;
+      showInformation(
+        'Absenderadressen nicht gespeichert',
+        'Das verschlüsselte Profil konnte nicht aktualisiert werden.\n\n$error',
+      );
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      final index = mailAccounts.indexWhere((item) => item.id == account.id);
+      if (index >= 0) {
+        mailAccounts[index] = mailAccounts[index].copyWith(aliases: stored);
+      }
+    });
+    showNotice(
+      stored.isEmpty
+          ? 'Keine Aliase mehr für ${account.displayName}.'
+          : 'Absenderadressen gespeichert. Wähle sie beim Schreiben im Feld „Von“.',
+    );
   }
 
   /// Removes [account] from the profile and shows what is happening meanwhile.
@@ -2416,7 +2482,7 @@ class AccountSetupResult {
   final MailOAuthTokens? oauthTokens;
 }
 
-enum AccountManagementActionType { add, edit, delete }
+enum AccountManagementActionType { add, edit, aliases, delete }
 
 class AccountManagementAction {
   const AccountManagementAction(this.type, [this.account]);
@@ -2463,7 +2529,9 @@ class AccountManagerDialog extends StatelessWidget {
                       ),
                       title: Text(account.displayName),
                       subtitle: Text(
-                        '${account.email}\n${account.imapHost} · $syncLabel',
+                        '${account.email}'
+                        '${account.aliases.isEmpty ? '' : ' · ${account.aliases.length == 1 ? '1 Alias' : '${account.aliases.length} Aliase'}'}'
+                        '\n${account.imapHost} · $syncLabel',
                       ),
                       isThreeLine: true,
                       trailing: Row(
@@ -2480,6 +2548,18 @@ class AccountManagerDialog extends StatelessWidget {
                               ),
                             ),
                             icon: const Icon(Icons.edit_outlined),
+                          ),
+                          IconButton(
+                            key: Key('account-aliases-${account.id}'),
+                            tooltip: 'Absenderadressen',
+                            onPressed: () => Navigator.pop(
+                              context,
+                              AccountManagementAction(
+                                AccountManagementActionType.aliases,
+                                account,
+                              ),
+                            ),
+                            icon: const Icon(Icons.alternate_email),
                           ),
                           IconButton(
                             key: Key('account-delete-${account.id}'),
@@ -2736,6 +2816,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
       smtpUsername: smtpUsername.text.trim(),
       authentication: oauthProvider == null ? 'password' : 'oauth2',
       oauthProvider: oauthProvider?.storageName,
+      aliases: widget.existing?.aliases ?? const [],
       lastSyncAt: widget.existing?.lastSyncAt,
     );
   }
@@ -7084,18 +7165,42 @@ List<ComposeSender> composeSenders(List<MailAccountConfig> accounts) {
     return const [
       ComposeSender(
         accountId: 'personal',
+        address: 'demo@maicenta.local',
         label: 'Persönliches Konto <demo@maicenta.local>',
       ),
     ];
   }
-  return accounts
-      .map(
-        (account) => ComposeSender(
+  return [
+    for (final account in accounts)
+      for (final identity in account.senderIdentities)
+        ComposeSender(
           accountId: account.id,
-          label: '${account.displayName} <${account.email}>',
+          address: identity.address,
+          label: identity.label,
         ),
-      )
-      .toList(growable: false);
+  ];
+}
+
+/// Picks the address a reply should come from: the alias (or primary
+/// address) of [account] that the original message was sent to. Returns an
+/// empty string when none matches so the composer uses the primary address.
+String replySenderAddress(MailAccountConfig? account, DemoMessage message) {
+  if (account == null || account.aliases.isEmpty) return '';
+  final recipients = [
+    ...parseRecipientList(message.toRecipients),
+    ...parseRecipientList(message.ccRecipients),
+  ].map(recipientAddress);
+  for (final recipient in recipients) {
+    final identity = account.senderFor(recipient);
+    if (identity != null) return identity.address;
+  }
+  return '';
+}
+
+/// Extracts the bare address from `Name <address>` or returns the input.
+String recipientAddress(String recipient) {
+  final match = RegExp(r'<([^<>]+)>').firstMatch(recipient);
+  return (match?.group(1) ?? recipient).trim();
 }
 
 List<String> parseRecipientList(String value) {

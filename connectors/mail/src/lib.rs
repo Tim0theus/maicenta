@@ -30,7 +30,7 @@ use lettre::{
         response::Response,
     },
 };
-use maicenta_domain::{MailAccount, MailboxRole, MessageFlag, TransportSecurity};
+use maicenta_domain::{MailAccount, MailAddress, MailboxRole, MessageFlag, TransportSecurity};
 use tokio::{io::AsyncRead, io::AsyncWrite, net::TcpStream};
 
 const KEYRING_SERVICE: &str = "org.maicenta.desktop.mail";
@@ -342,6 +342,10 @@ pub struct OutgoingAttachment {
 /// Complete provider-independent message passed to SMTP submission.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OutgoingMessage {
+    /// Sender address chosen in the composer: the account's primary address
+    /// or one of its configured aliases. `None` sends from the primary
+    /// address. Any other address is rejected before submission.
+    pub from_address: Option<String>,
     pub to: Vec<String>,
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
@@ -993,16 +997,19 @@ fn build_content_message(
             "at least one To recipient is required".into(),
         ));
     }
+    let sender = resolve_sender(account, outgoing.from_address.as_deref())?;
     let from_address: LettreAddress =
-        account
-            .email
+        sender
             .address()
             .parse()
             .map_err(|error: lettre::address::AddressError| {
                 ConnectorError::Message(error.to_string())
             })?;
+    // Without an explicit envelope lettre derives `MAIL FROM` from this
+    // header, so the SMTP envelope follows the chosen alias as providers
+    // such as Strato require.
     let envelope_address = from_address.clone();
-    let from = LettreMailbox::new(Some(account.display_name.clone()), from_address);
+    let from = LettreMailbox::new(sender.display_name().map(str::to_owned), from_address);
     let mut builder = Message::builder().from(from).subject(&outgoing.subject);
     if let Some(message_id) = message_id {
         builder = builder.message_id(Some(message_id.to_owned())).keep_bcc();
@@ -1061,6 +1068,21 @@ fn build_content_message(
     }
 
     Ok(message)
+}
+
+fn resolve_sender(
+    account: &MailAccount,
+    requested: Option<&str>,
+) -> Result<MailAddress, ConnectorError> {
+    let requested = requested
+        .map(str::trim)
+        .filter(|address| !address.is_empty())
+        .unwrap_or_else(|| account.email.address());
+    account.sender_identity(requested).ok_or_else(|| {
+        ConnectorError::InvalidConfiguration(format!(
+            "{requested} is not configured as a sender address for this account"
+        ))
+    })
 }
 
 fn parse_mailboxes(recipients: &[String]) -> Result<Vec<LettreMailbox>, ConnectorError> {
@@ -2837,6 +2859,10 @@ mod tests {
             smtp_port: 587,
             smtp_security: TransportSecurity::StartTls,
             smtp_username: "user@example.org".into(),
+            aliases: vec![
+                MailAddress::new("kontakt@example.org", Some("MAICENTA Support".into()))
+                    .expect("alias"),
+            ],
             last_sync_at_ms: None,
         }
     }
@@ -3097,6 +3123,7 @@ mod tests {
         let message = build_message(
             &mail_account(),
             &OutgoingMessage {
+                from_address: None,
                 to: vec!["Anna <anna@example.org>".into()],
                 cc: vec!["copy@example.org".into()],
                 bcc: vec!["hidden@example.org".into()],
@@ -3132,6 +3159,7 @@ mod tests {
         let message = build_draft_message(
             &mail_account(),
             &OutgoingMessage {
+                from_address: None,
                 to: Vec::new(),
                 cc: Vec::new(),
                 bcc: Vec::new(),
@@ -3154,10 +3182,66 @@ mod tests {
     }
 
     #[test]
+    fn sends_from_a_configured_alias_with_matching_envelope() {
+        let message = build_message(
+            &mail_account(),
+            &OutgoingMessage {
+                from_address: Some("Kontakt@Example.org".into()),
+                to: vec!["anna@example.org".into()],
+                cc: Vec::new(),
+                bcc: Vec::new(),
+                subject: "Alias".into(),
+                plain_text: "Hallo".into(),
+                sanitized_html: "<p>Hallo</p>".into(),
+                attachments: Vec::new(),
+                high_importance: false,
+            },
+        )
+        .expect("alias message");
+        let formatted = String::from_utf8(message.formatted()).expect("UTF-8 MIME message");
+
+        assert!(formatted.contains("From: \"MAICENTA Support\" <kontakt@example.org>"));
+        assert_eq!(
+            message
+                .envelope()
+                .from()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("kontakt@example.org"),
+            "the SMTP envelope sender follows the alias"
+        );
+    }
+
+    #[test]
+    fn rejects_a_sender_address_that_is_not_part_of_the_account() {
+        let error = build_message(
+            &mail_account(),
+            &OutgoingMessage {
+                from_address: Some("ceo@bank.example".into()),
+                to: vec!["anna@example.org".into()],
+                cc: Vec::new(),
+                bcc: Vec::new(),
+                subject: "Spoof".into(),
+                plain_text: "x".into(),
+                sanitized_html: "<p>x</p>".into(),
+                attachments: Vec::new(),
+                high_importance: false,
+            },
+        )
+        .expect_err("foreign sender");
+
+        assert!(matches!(
+            error,
+            super::ConnectorError::InvalidConfiguration(_)
+        ));
+    }
+
+    #[test]
     fn retains_bcc_in_an_imap_draft() {
         let message = build_draft_message(
             &mail_account(),
             &OutgoingMessage {
+                from_address: None,
                 to: Vec::new(),
                 cc: Vec::new(),
                 bcc: vec!["hidden@example.org".into()],

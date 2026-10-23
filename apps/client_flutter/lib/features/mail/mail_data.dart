@@ -211,6 +211,42 @@ class LocalContactItem {
   final String email;
 }
 
+/// One additional sender address of an account ("send as" alias).
+class MailSenderAlias {
+  const MailSenderAlias({required this.address, this.displayName});
+
+  final String address;
+
+  /// Name shown to recipients. `null` uses the account name.
+  final String? displayName;
+
+  @override
+  bool operator ==(Object other) =>
+      other is MailSenderAlias &&
+      other.address == address &&
+      other.displayName == displayName;
+
+  @override
+  int get hashCode => Object.hash(address, displayName);
+}
+
+/// A selectable sender in the composer: the primary address or an alias.
+class MailSenderIdentity {
+  const MailSenderIdentity({
+    required this.address,
+    required this.displayName,
+    this.isPrimary = false,
+  });
+
+  final String address;
+  final String displayName;
+  final bool isPrimary;
+
+  /// `Name <address>` for menus and headers.
+  String get label =>
+      displayName.trim().isEmpty ? address : '$displayName <$address>';
+}
+
 class MailAccountConfig {
   const MailAccountConfig({
     required this.id,
@@ -227,6 +263,7 @@ class MailAccountConfig {
     required this.smtpUsername,
     this.authentication = 'password',
     this.oauthProvider,
+    this.aliases = const [],
     this.lastSyncAt,
   });
 
@@ -247,7 +284,54 @@ class MailAccountConfig {
   final String smtpUsername;
   final String authentication;
   final String? oauthProvider;
+
+  /// Send-as aliases the provider allows for this account, in display order.
+  final List<MailSenderAlias> aliases;
   final DateTime? lastSyncAt;
+
+  /// The primary address followed by every alias.
+  List<MailSenderIdentity> get senderIdentities => [
+    MailSenderIdentity(
+      address: email,
+      displayName: displayName,
+      isPrimary: true,
+    ),
+    for (final alias in aliases)
+      MailSenderIdentity(
+        address: alias.address,
+        displayName: alias.displayName ?? displayName,
+      ),
+  ];
+
+  /// Resolves `address` to one of this account's senders, ignoring case.
+  MailSenderIdentity? senderFor(String address) {
+    final normalized = address.trim().toLowerCase();
+    for (final identity in senderIdentities) {
+      if (identity.address.toLowerCase() == normalized) return identity;
+    }
+    return null;
+  }
+
+  MailAccountConfig copyWith({List<MailSenderAlias>? aliases}) {
+    return MailAccountConfig(
+      id: id,
+      provider: provider,
+      displayName: displayName,
+      email: email,
+      imapHost: imapHost,
+      imapPort: imapPort,
+      imapSecurity: imapSecurity,
+      imapUsername: imapUsername,
+      smtpHost: smtpHost,
+      smtpPort: smtpPort,
+      smtpSecurity: smtpSecurity,
+      smtpUsername: smtpUsername,
+      authentication: authentication,
+      oauthProvider: oauthProvider,
+      aliases: aliases ?? this.aliases,
+      lastSyncAt: lastSyncAt,
+    );
+  }
 }
 
 class WorkspaceDataSnapshot {
@@ -391,10 +475,17 @@ abstract interface class MailDataSource {
     MailOAuthTokens tokens,
   );
   Future<WorkspaceDataSnapshot> deleteAccount(String accountId);
+
+  /// Replaces the send-as aliases of an account and returns them as stored.
+  Future<List<MailSenderAlias>> saveAccountAliases(
+    String accountId,
+    List<MailSenderAlias> aliases,
+  );
   Future<WorkspaceDataSnapshot> synchronizeAccounts();
   Future<DraftSyncOutcome> synchronizeDrafts(String accountId);
   Future<String> sendAccountMessage({
     required String accountId,
+    String? fromAddress,
     required List<String> to,
     required List<String> cc,
     required List<String> bcc,
@@ -598,6 +689,12 @@ class DemoMailDataSource implements MailDataSource {
   ) async {}
 
   @override
+  Future<List<MailSenderAlias>> saveAccountAliases(
+    String accountId,
+    List<MailSenderAlias> aliases,
+  ) async => List.unmodifiable(aliases);
+
+  @override
   Future<WorkspaceDataSnapshot> deleteAccount(String accountId) async {
     return WorkspaceDataSnapshot(
       folders: demoFolders,
@@ -635,6 +732,7 @@ class DemoMailDataSource implements MailDataSource {
   @override
   Future<String> sendAccountMessage({
     required String accountId,
+    String? fromAddress,
     required List<String> to,
     required List<String> cc,
     required List<String> bcc,
@@ -1004,6 +1102,33 @@ class RustMailDataSource implements MailDataSource {
   }
 
   @override
+  Future<List<MailSenderAlias>> saveAccountAliases(
+    String accountId,
+    List<MailSenderAlias> aliases,
+  ) async {
+    final stored = await rust.saveMailAccountAliases(
+      databasePath: databasePath,
+      accountId: accountId,
+      aliases: aliases
+          .map(
+            (alias) => rust.SenderAliasDto(
+              address: alias.address,
+              displayName: alias.displayName,
+            ),
+          )
+          .toList(growable: false),
+    );
+    return stored
+        .map(
+          (alias) => MailSenderAlias(
+            address: alias.address,
+            displayName: alias.displayName,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  @override
   Future<WorkspaceDataSnapshot> deleteAccount(String accountId) async {
     final snapshot = await rust.deleteMailAccount(
       databasePath: databasePath,
@@ -1036,6 +1161,7 @@ class RustMailDataSource implements MailDataSource {
   @override
   Future<String> sendAccountMessage({
     required String accountId,
+    String? fromAddress,
     required List<String> to,
     required List<String> cc,
     required List<String> bcc,
@@ -1050,6 +1176,7 @@ class RustMailDataSource implements MailDataSource {
       databasePath: databasePath,
       input: rust.OutgoingMessageInput(
         accountId: accountId,
+        fromAddress: fromAddress,
         to: to,
         cc: cc,
         bcc: bcc,
@@ -1136,6 +1263,14 @@ WorkspaceDataSnapshot _workspaceData(rust.WorkspaceSnapshot snapshot) {
             smtpUsername: account.smtpUsername,
             authentication: account.authentication,
             oauthProvider: account.oauthProvider,
+            aliases: account.aliases
+                .map(
+                  (alias) => MailSenderAlias(
+                    address: alias.address,
+                    displayName: alias.displayName,
+                  ),
+                )
+                .toList(growable: false),
             lastSyncAt: account.lastSyncAtMs == null
                 ? null
                 : DateTime.fromMillisecondsSinceEpoch(
@@ -1206,6 +1341,14 @@ rust.MailAccountInput _mailAccountInput(MailAccountConfig account) {
     smtpPort: account.smtpPort,
     smtpSecurity: account.smtpSecurity,
     smtpUsername: account.smtpUsername,
+    aliases: account.aliases
+        .map(
+          (alias) => rust.SenderAliasDto(
+            address: alias.address,
+            displayName: alias.displayName,
+          ),
+        )
+        .toList(growable: false),
   );
 }
 
