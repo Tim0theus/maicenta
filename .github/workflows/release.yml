@@ -79,6 +79,14 @@ jobs:
             libgtk-3-dev liblzma-dev libstdc++-12-dev libssl-dev libsecret-1-dev \
             libwebkit2gtk-4.1-dev
 
+      # SQLCipher builds a vendored OpenSSL, whose Configure script needs a
+      # full Perl. The bash shell finds Git's MSYS Perl first, which lacks the
+      # required modules, so point openssl-src at the preinstalled Strawberry
+      # Perl instead.
+      - name: Use Strawberry Perl for OpenSSL
+        if: matrix.target == 'windows'
+        run: echo "OPENSSL_SRC_PERL=C:/Strawberry/perl/bin/perl.exe" >> "${GITHUB_ENV}"
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
