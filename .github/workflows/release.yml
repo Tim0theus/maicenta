@@ -90,21 +90,17 @@ jobs:
         if: matrix.target == 'windows'
         run: echo "OPENSSL_SRC_PERL=C:/Strawberry/perl/bin/perl.exe" >> "${GITHUB_ENV}"
 
+      # Cargokit builds below build\windows\x64\plugins\maicenta_bridge\,
+      # where OpenSSL's source tree exceeds the 260-character path limit and
+      # Configure reports files as missing. A short temp directory avoids it.
+      - name: Shorten the Rust build path
+        if: matrix.target == 'windows'
+        run: echo "CARGOKIT_TEMP_DIR=$(cygpath -m "${RUNNER_TEMP}")/ck" >> "${GITHUB_ENV}"
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: '. -> target'
-
-      # Flutter hides the output of the Rust build scripts on Windows. Building
-      # the bridge with cargo first, into the same target directory Cargokit
-      # uses, shows OpenSSL's Configure errors directly.
-      - name: Build Rust bridge
-        if: matrix.target == 'windows'
-        run: |
-          cargo build --release --locked -p maicenta_bridge \
-            --target x86_64-pc-windows-msvc \
-            --target-dir apps/client_flutter/build/windows/x64/plugins/maicenta_bridge/cargokit_build \
-            -vv 2>&1 | tail -150
 
       - uses: subosito/flutter-action@v2
         with:
@@ -120,8 +116,6 @@ jobs:
 
       - name: Build release
         working-directory: apps/client_flutter
-        env:
-          CARGOKIT_VERBOSE: '1'
         run: flutter build ${{ matrix.target }} --release
 
       # ------------------------------------------------------------------
