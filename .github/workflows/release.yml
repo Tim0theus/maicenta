@@ -95,6 +95,14 @@ jobs:
         with:
           workspaces: '. -> target'
 
+      # Flutter hides the output of the Rust build scripts on Windows. Building
+      # the bridge with cargo first shows OpenSSL's Configure errors directly.
+      - name: Build Rust bridge
+        if: matrix.target == 'windows'
+        run: |
+          "${OPENSSL_SRC_PERL}" -v | head -2
+          cargo build --release --locked -p maicenta_bridge -vv 2>&1 | tail -150
+
       - uses: subosito/flutter-action@v2
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
