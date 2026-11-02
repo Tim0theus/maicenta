@@ -206,7 +206,7 @@ jobs:
           done
           cat ./*.sha256
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: dist/*
@@ -219,7 +219,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -241,7 +241,7 @@ jobs:
             echo "Release notes for ${version} were not found in CHANGELOG.md; using the section header only." >&2
             echo "Siehe CHANGELOG.md." > release-notes.md
           fi
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           name: MAICENTA ${{ github.ref_name }}
           body_path: release-notes.md
