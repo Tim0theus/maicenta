@@ -26,6 +26,12 @@ function(apply_cargokit target manifest_dir lib_name any_symbol_name)
         set(OUTPUT_LIB "${CMAKE_CURRENT_BINARY_DIR}/${CARGOKIT_LIB_FULL_NAME}")
     endif()
     set(CARGOKIT_TEMP_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargokit_build")
+    # MAICENTA: the vendored OpenSSL of SQLCipher exceeds MAX_PATH below the
+    # default directory on Windows, so the release workflow points the build
+    # at a short path. Keep this override when updating Cargokit.
+    if (DEFINED ENV{CARGOKIT_TEMP_DIR})
+        file(TO_CMAKE_PATH "$ENV{CARGOKIT_TEMP_DIR}" CARGOKIT_TEMP_DIR)
+    endif()
 
     if (FLUTTER_TARGET_PLATFORM)
         set(CARGOKIT_TARGET_PLATFORM "${FLUTTER_TARGET_PLATFORM}")

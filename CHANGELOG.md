@@ -7,7 +7,7 @@ section of the tagged version into the GitHub Release notes.
 
 ## [Unreleased]
 
-## [0.1.0-beta.1] - 2026-10-23
+## [0.1.0-beta.1] - 2026-11-02
 
 First public beta of the desktop client for macOS, Windows, and Linux.
 
