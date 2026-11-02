@@ -3,7 +3,7 @@
   "mailModule": "Mail",
   "favorites": "Favorites",
   "localArea": "Local area",
-  "localDemoMode": "Local demo mode",
+  "noMailAccountConnected": "No mail account connected",
   "mailAccountsConnected": "{count, plural, one{1 mail account connected} other{{count} mail accounts connected}}",
   "@mailAccountsConnected": {
     "placeholders": {

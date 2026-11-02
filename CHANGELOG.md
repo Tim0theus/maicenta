@@ -49,6 +49,9 @@ First public beta of the desktop client for macOS, Windows, and Linux.
   bug reports, and open-source licenses of the Flutter and Rust
   dependencies.
 - German and English localization of the folder shell.
+- New profiles start with empty local folders and a single welcome message
+  that walks through adding an account, folders and Favorites, search,
+  modules, profile backup, and reporting bugs.
 
 ### Known limitations
 

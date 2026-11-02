@@ -2307,7 +2307,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
             onProfile: () => showInformation(
               'Lokales Profil',
               mailAccounts.isEmpty
-                  ? 'Lokales Demonstrationsprofil\ndemo@maicenta.local\n\nNoch kein IMAP-/SMTP-Konto eingerichtet.'
+                  ? 'Noch kein Mailkonto eingerichtet.\n\nUnter Datei → Kontoeinstellungen fügst du ein Konto hinzu.'
                   : mailAccounts
                         .map(
                           (account) =>
@@ -4780,7 +4780,7 @@ class FolderPane extends StatelessWidget {
       if (!groupIds.contains(folder.accountId)) groupIds.add(folder.accountId);
     }
     final connectionLabel = accounts.isEmpty
-        ? localizations.localDemoMode
+        ? localizations.noMailAccountConnected
         : localizations.mailAccountsConnected(accounts.length);
     // Group headers share the collapsed-folder preference under a reserved
     // `group.` prefix so the whole pane state survives a restart together.

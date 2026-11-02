@@ -624,9 +624,7 @@ pub fn open_workspace(database_path: String) -> Result<WorkspaceSnapshot, String
         .map_err(|error| error.to_string())?
         .is_empty()
     {
-        seed_prototype(&mut store, &account_id)?;
-    } else {
-        upgrade_prototype_content(&mut store)?;
+        seed_local_area(&mut store, &account_id)?;
     }
 
     load_snapshot(&store)
@@ -3343,24 +3341,6 @@ fn validated_display_name(value: String) -> Result<String, String> {
     }
 }
 
-fn upgrade_prototype_content(store: &mut SqliteMailStore) -> Result<(), String> {
-    let message_id =
-        MessageId::parse("demo.open-source-weekly").map_err(|error| error.to_string())?;
-    let Ok(existing) = store.message_body(&message_id) else {
-        return Ok(());
-    };
-    if existing.sanitized_html.is_some() {
-        return Ok(());
-    }
-
-    let body = prototype_body(
-        "open-source-weekly",
-        message_id,
-        existing.plain_text.as_deref().unwrap_or_default(),
-    )?;
-    store.save_body(&body).map_err(|error| error.to_string())
-}
-
 fn load_snapshot(store: &SqliteMailStore) -> Result<WorkspaceSnapshot, String> {
     let mail_accounts = store
         .list_mail_accounts()
@@ -3688,26 +3668,28 @@ fn mail_account_dto(account: MailAccount, oauth_provider: Option<String>) -> Mai
     }
 }
 
-fn seed_prototype(store: &mut SqliteMailStore, account_id: &AccountId) -> Result<(), String> {
+/// Creates the standard folders of the local area and a single welcome
+/// message that walks a new user through the first steps.
+fn seed_local_area(store: &mut SqliteMailStore, account_id: &AccountId) -> Result<(), String> {
     let inbox_id = MailboxId::parse(DEMO_INBOX_ID).map_err(|error| error.to_string())?;
     let mailboxes = [
-        prototype_mailbox(
+        local_mailbox(
             account_id,
             &inbox_id,
             "Posteingang",
             MailboxRole::Inbox,
-            2,
-            5,
+            1,
+            1,
         ),
-        prototype_mailbox(
+        local_mailbox(
             account_id,
             &MailboxId::parse("personal.drafts").map_err(|error| error.to_string())?,
             "Entwürfe",
             MailboxRole::Drafts,
             0,
-            1,
+            0,
         ),
-        prototype_mailbox(
+        local_mailbox(
             account_id,
             &MailboxId::parse("personal.sent").map_err(|error| error.to_string())?,
             "Gesendet",
@@ -3715,7 +3697,7 @@ fn seed_prototype(store: &mut SqliteMailStore, account_id: &AccountId) -> Result
             0,
             0,
         ),
-        prototype_mailbox(
+        local_mailbox(
             account_id,
             &MailboxId::parse("personal.archive").map_err(|error| error.to_string())?,
             "Archiv",
@@ -3723,7 +3705,7 @@ fn seed_prototype(store: &mut SqliteMailStore, account_id: &AccountId) -> Result
             0,
             0,
         ),
-        prototype_mailbox(
+        local_mailbox(
             account_id,
             &MailboxId::parse("personal.trash").map_err(|error| error.to_string())?,
             "Papierkorb",
@@ -3736,23 +3718,14 @@ fn seed_prototype(store: &mut SqliteMailStore, account_id: &AccountId) -> Result
         .save_mailboxes(&mailboxes)
         .map_err(|error| error.to_string())?;
 
-    let messages = prototype_messages(account_id, &inbox_id)?;
+    let (summary, body) = welcome_message(account_id, &inbox_id, current_timestamp_ms()?)?;
     store
-        .save_summaries(
-            &messages
-                .iter()
-                .map(|item| item.0.clone())
-                .collect::<Vec<_>>(),
-        )
+        .save_summaries(&[summary])
         .map_err(|error| error.to_string())?;
-    for (_, body) in messages {
-        store.save_body(&body).map_err(|error| error.to_string())?;
-    }
-
-    Ok(())
+    store.save_body(&body).map_err(|error| error.to_string())
 }
 
-fn prototype_mailbox(
+fn local_mailbox(
     account_id: &AccountId,
     id: &MailboxId,
     display_name: &str,
@@ -3771,149 +3744,59 @@ fn prototype_mailbox(
     }
 }
 
-fn prototype_messages(
+const WELCOME_TEXT: &str = "Hallo,
+
+schön, dass du die Beta von MAICENTA ausprobierst. Diese Nachricht liegt nur in deinem lokalen Profil; sie wurde nicht verschickt und kann jederzeit gelöscht werden.
+
+So legst du los:
+
+1. Konto hinzufügen
+Datei → Kontoeinstellungen → „Konto hinzufügen“. Gib deine E-Mail-Adresse ein. MAICENTA erkennt Microsoft 365, Google und IMAP/SMTP und schlägt die passende Anmeldung vor. Gmail-Konten richtest du in dieser Beta über IMAP mit einem App-Passwort ein.
+
+2. Ordner und Favoriten
+Links stehen deine Konten mit ihren Ordnern. Ziehe einen Ordner in die Favoriten, um ihn oben schnell zu erreichen, und Nachrichten auf einen Ordner, um sie zu verschieben.
+
+3. Suchen
+Das Suchfeld oben durchsucht Betreff, Absender und Empfänger aller Konten.
+
+4. Kalender, Aufgaben und Kontakte
+Unten links wechselst du zwischen den Modulen. Diese Daten liegen bisher nur lokal.
+
+5. Profil sichern
+Alles bleibt verschlüsselt auf deinem Rechner. Unter Datei → Import/Export erstellst du eine passwortgeschützte Sicherung, die du auf einem anderen Rechner wiederherstellen kannst. Lege vor jedem Beta-Update eine an.
+
+Externe Bilder und Skripte in E-Mails werden standardmäßig blockiert.
+
+Fehler gefunden oder eine Idee? Unter Datei → Optionen → „Über MAICENTA“ kopierst du die Diagnosezeile für einen Fehlerbericht auf https://github.com/Tim0theus/maicenta/issues.
+
+Viel Spaß
+Das MAICENTA Team";
+
+fn welcome_message(
     account_id: &AccountId,
     mailbox_id: &MailboxId,
-) -> Result<Vec<(MessageSummary, MessageBody)>, String> {
-    let values = [
-        (
-            "welcome",
-            "MAICENTA Team",
-            "hello@maicenta.local",
-            "Willkommen bei MAICENTA",
-            "Dein lokaler Workspace ist bereit für den ersten Rundgang.",
-            "Hallo,\n\nwillkommen beim ersten MAICENTA-Prototypen. Diese Oberfläche zeigt die geplante Arbeitsweise für E-Mail, Kalender, Aufgaben und Kontakte.\n\nDie Beispieldaten werden jetzt aus der lokalen SQLite-Datenbank geladen.\n\nViele Grüße\nDas MAICENTA Team",
-            1_785_746_520_000_i64,
-            vec![],
-            false,
-        ),
-        (
-            "planning",
-            "Anna Schneider",
-            "anna@example.org",
-            "Projektplanung für diese Woche",
-            "Ich habe die offenen Punkte für unseren Termin zusammengefasst.",
-            "Hallo,\n\nich habe die offenen Punkte für unseren Termin am Donnerstag zusammengefasst. Im Anhang findest du die aktuelle Übersicht.\n\nViele Grüße\nAnna",
-            1_785_741_480_000,
-            vec![MessageFlag::Flagged],
-            true,
-        ),
-        (
-            "calendar-reminder",
-            "Kalender",
-            "calendar@maicenta.local",
-            "Erinnerung: Team-Stand-up",
-            "Der Termin beginnt morgen um 09:30 Uhr.",
-            "Erinnerung\n\nTeam-Stand-up\nMorgen, 09:30–10:00\nBesprechungsraum Nord",
-            1_785_661_200_000,
-            vec![MessageFlag::Seen],
-            false,
-        ),
-        (
-            "design",
-            "Jonas Weber",
-            "jonas@example.org",
-            "Re: Design-Entwurf",
-            "Die klare Navigation gefällt mir. Zwei Anmerkungen habe ich noch.",
-            "Hallo,\n\ndie klare Navigation gefällt mir. Zwei kleine Anmerkungen habe ich noch direkt im Dokument ergänzt.\n\nBeste Grüße\nJonas",
-            1_785_657_600_000,
-            vec![MessageFlag::Seen],
-            true,
-        ),
-        (
-            "open-source-weekly",
-            "Open Source Weekly",
-            "newsletter@example.org",
-            "Local-first software in practice",
-            "This week: resilient sync, portable data and open protocols.",
-            "Local-first software in practice\n\nThis week we look at resilient synchronization, portable user data, and open protocols.",
-            1_785_398_400_000,
-            vec![MessageFlag::Seen],
-            false,
-        ),
-    ];
-
-    values
-        .into_iter()
-        .map(
-            |(id, sender, email, subject, preview, body, received_at_ms, flags, attachment)| {
-                let message_id =
-                    MessageId::parse(format!("demo.{id}")).map_err(|error| error.to_string())?;
-                Ok((
-                    MessageSummary {
-                        id: message_id.clone(),
-                        account_id: account_id.clone(),
-                        mailbox_id: mailbox_id.clone(),
-                        from: MailAddress::new(email, Some(sender.into()))
-                            .map_err(|error| error.to_string())?,
-                        subject: subject.into(),
-                        preview: preview.into(),
-                        received_at_ms,
-                        flags,
-                        has_attachments: attachment,
-                    },
-                    prototype_body(id, message_id, body)?,
-                ))
-            },
-        )
-        .collect()
-}
-
-fn prototype_body(
-    id: &str,
-    message_id: MessageId,
-    plain_text: &str,
-) -> Result<MessageBody, String> {
-    if id != "open-source-weekly" {
-        return Ok(MessageBody {
+    received_at_ms: i64,
+) -> Result<(MessageSummary, MessageBody), String> {
+    let message_id = MessageId::parse("local.welcome").map_err(|error| error.to_string())?;
+    Ok((
+        MessageSummary {
+            id: message_id.clone(),
+            account_id: account_id.clone(),
+            mailbox_id: mailbox_id.clone(),
+            from: MailAddress::new("hello@maicenta.local", Some("MAICENTA Team".into()))
+                .map_err(|error| error.to_string())?,
+            subject: "Willkommen bei MAICENTA".into(),
+            preview: "Die ersten Schritte: Konto hinzufügen, Ordner, Suche und Sicherung.".into(),
+            received_at_ms,
+            flags: vec![],
+            has_attachments: false,
+        },
+        MessageBody {
             message_id,
-            plain_text: Some(plain_text.into()),
+            plain_text: Some(WELCOME_TEXT.into()),
             sanitized_html: None,
-        });
-    }
-
-    let raw_message = format!(
-        "From: Open Source Weekly <newsletter@example.org>\r\n\
-         To: demo@maicenta.local\r\n\
-         Subject: Local-first software in practice\r\n\
-         MIME-Version: 1.0\r\n\
-         Content-Type: multipart/alternative; boundary=maicenta-demo\r\n\
-         \r\n\
-         --maicenta-demo\r\n\
-         Content-Type: text/plain; charset=utf-8\r\n\
-         \r\n\
-         {plain_text}\r\n\
-         --maicenta-demo\r\n\
-         Content-Type: text/html; charset=utf-8\r\n\
-         \r\n\
-         <div style=\"max-width:640px;font-family:Arial;color:#242424\">\
-           <div style=\"background-color:#0f5fae;color:#ffffff;padding:18px\">\
-             <strong style=\"font-size:20px\">Open Source Weekly</strong>\
-           </div>\
-           <div style=\"padding:20px;border:1px solid #d5d9de\">\
-             <h2 style=\"color:#0f5fae\">Local-first software in practice</h2>\
-             <p>This week we look at <strong>resilient synchronization</strong>, \
-             portable user data, and open protocols.</p>\
-             <table width=\"100%\" cellpadding=\"8\" style=\"border-collapse:collapse\">\
-               <tr><td style=\"background-color:#eef5fb\">Offline-first</td>\
-               <td style=\"background-color:#f7f7f7\">Open standards</td></tr>\
-             </table>\
-             <p><a href=\"https://example.org/article\">Read the article</a></p>\
-             <img src=\"https://tracker.example/pixel.gif\" width=\"1\" height=\"1\">\
-             <script>tracking()</script>\
-           </div>\
-         </div>\r\n\
-         --maicenta-demo--\r\n"
-    );
-    let rendered = MessageRenderer
-        .render(raw_message.as_bytes(), RenderPolicy::default())
-        .map_err(|error| error.to_string())?;
-
-    Ok(MessageBody {
-        message_id,
-        plain_text: rendered.plain_text,
-        sanitized_html: rendered.sanitized_html,
-    })
+        },
+    ))
 }
 
 fn plain_text_as_html(text: &str) -> String {
@@ -3963,11 +3846,14 @@ mod tests {
         search_profile_messages, update_local_message,
     };
     use maicenta_application::{MailAccountStore, MailStore, SecretStore};
-    use maicenta_domain::{AccountId, MailAddress, Mailbox, MailboxRole, MessageBody, MessageId};
+    use maicenta_domain::{AccountId, MailAddress, Mailbox, MailboxId, MailboxRole, MessageId};
     use maicenta_graph_connector::GraphMessage;
     use maicenta_mail_connector::{RemoteAttachmentPart, RemoteMessage};
 
-    use super::{CachedRemoteInput, SenderAliasDto, sender_aliases_from_input};
+    use super::{
+        CachedRemoteInput, DEMO_ACCOUNT_ID, DEMO_INBOX_ID, SenderAliasDto,
+        sender_aliases_from_input, welcome_message,
+    };
 
     static NEXT_DATABASE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -4007,24 +3893,13 @@ mod tests {
     fn seeds_then_reloads_the_same_workspace() {
         let path = temporary_database_path();
         let first = open_workspace(path.to_string_lossy().into_owned()).expect("first open");
-        let newsletter_id = MessageId::parse("demo.open-source-weekly").expect("message id");
-        let mut store = open_profile_store(&path).expect("reopen storage");
-        store
-            .save_body(&MessageBody {
-                message_id: newsletter_id,
-                plain_text: Some("Existing plain-text prototype body".into()),
-                sanitized_html: None,
-            })
-            .expect("replace body with legacy prototype content");
-        drop(store);
-
         let second = open_workspace(path.to_string_lossy().into_owned()).expect("second open");
 
         assert_eq!(first.mailboxes.len(), 5);
-        assert_eq!(first.messages.len(), 5);
-        assert_eq!(first.calendar_events.len(), 2);
-        assert_eq!(first.tasks.len(), 3);
-        assert_eq!(first.contacts.len(), 3);
+        assert_eq!(first.messages.len(), 1);
+        assert!(first.calendar_events.is_empty(), "no sample events");
+        assert!(first.tasks.is_empty(), "no sample tasks");
+        assert!(first.contacts.is_empty(), "no sample contacts");
         assert!(first.mail_accounts.is_empty());
         assert_eq!(
             first.favorite_mailbox_ids,
@@ -4032,16 +3907,12 @@ mod tests {
         );
         assert!(!first.dark_mode_enabled);
         assert_eq!(second.mailboxes.len(), 5);
-        assert_eq!(second.messages.len(), 5);
-        assert!(second.messages.iter().any(|message| message.unread));
-        let newsletter = second
-            .messages
-            .iter()
-            .find(|message| message.id == "demo.open-source-weekly")
-            .expect("newsletter");
-        assert!(newsletter.body.contains("<table"));
-        assert!(!newsletter.body.contains("<script"));
-        assert!(!newsletter.body.contains("tracker.example"));
+        assert_eq!(second.messages.len(), 1);
+        let welcome = &second.messages[0];
+        assert_eq!(welcome.id, "local.welcome");
+        assert_eq!(welcome.mailbox_id, "personal.inbox");
+        assert!(welcome.unread);
+        assert!(welcome.body.contains("Konto hinzufügen"));
 
         save_favorite_mailboxes(
             path.to_string_lossy().into_owned(),
@@ -4105,6 +3976,16 @@ mod tests {
     fn loads_bounded_local_mailbox_pages() {
         let path = temporary_database_path();
         open_workspace(path.to_string_lossy().into_owned()).expect("seed workspace");
+        let account_id = AccountId::parse(DEMO_ACCOUNT_ID).expect("account id");
+        let inbox_id = MailboxId::parse(DEMO_INBOX_ID).expect("inbox id");
+        let (mut summary, mut body) =
+            welcome_message(&account_id, &inbox_id, 1_785_746_520_000).expect("message");
+        summary.id = MessageId::parse("local.second").expect("message id");
+        body.message_id = summary.id.clone();
+        let mut store = open_profile_store(&path).expect("reopen storage");
+        store.save_summaries(&[summary]).expect("second summary");
+        store.save_body(&body).expect("second body");
+        drop(store);
 
         let first = load_mailbox_messages(
             path.to_string_lossy().into_owned(),

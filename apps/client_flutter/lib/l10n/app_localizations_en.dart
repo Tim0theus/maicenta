@@ -18,7 +18,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get localArea => 'Local area';
 
   @override
-  String get localDemoMode => 'Local demo mode';
+  String get noMailAccountConnected => 'No mail account connected';
 
   @override
   String mailAccountsConnected(int count) {
