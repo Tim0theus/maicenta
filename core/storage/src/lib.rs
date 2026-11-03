@@ -89,6 +89,7 @@ impl SqliteMailStore {
         let _operation_guard = lock_operation(&operation_lock)?;
         migrate_plaintext_database(path, key)?;
         let connection = open_keyed_connection(path, key)?;
+        #[cfg(unix)]
         restrict_database_permissions(path)?;
         Self::from_connection_with_lock(connection, operation_lock.clone())
     }
@@ -2261,14 +2262,11 @@ fn remove_if_exists(path: &Path) -> Result<(), ApplicationError> {
     }
 }
 
+#[cfg(unix)]
 fn restrict_database_permissions(path: &Path) -> Result<(), ApplicationError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::fs::PermissionsExt as _;
 
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(storage_error)?;
-    }
-    Ok(())
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(storage_error)
 }
 
 fn validate_local_message(
