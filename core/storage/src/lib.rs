@@ -89,6 +89,7 @@ impl SqliteMailStore {
         let _operation_guard = lock_operation(&operation_lock)?;
         migrate_plaintext_database(path, key)?;
         let connection = open_keyed_connection(path, key)?;
+        #[cfg(unix)]
         restrict_database_permissions(path)?;
         Self::from_connection_with_lock(connection, operation_lock.clone())
     }
@@ -2148,10 +2149,17 @@ fn apply_sqlcipher_key(connection: &Connection, key: &[u8; 32]) -> Result<(), Ap
     connection
         .execute_batch(&format!(
             "PRAGMA key = \"x'{encoded}'\";
-             PRAGMA cipher_memory_security = ON;"
+             PRAGMA cipher_memory_security = {CIPHER_MEMORY_SECURITY};"
         ))
         .map_err(storage_error)
 }
+
+/// `SQLCipher`'s memory security locks every allocation with `VirtualLock` on
+/// Windows. Once the small default working-set quota is used up, each failed
+/// lock logs a warning to stderr, and that logger allocates through the same
+/// locked allocator, recursing until the thread's stack overflows on the
+/// first profile open.
+const CIPHER_MEMORY_SECURITY: &str = if cfg!(windows) { "OFF" } else { "ON" };
 
 fn encode_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -2254,14 +2262,11 @@ fn remove_if_exists(path: &Path) -> Result<(), ApplicationError> {
     }
 }
 
+#[cfg(unix)]
 fn restrict_database_permissions(path: &Path) -> Result<(), ApplicationError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::fs::PermissionsExt as _;
 
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(storage_error)?;
-    }
-    Ok(())
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(storage_error)
 }
 
 fn validate_local_message(
