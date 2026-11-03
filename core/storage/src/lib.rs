@@ -2153,7 +2153,7 @@ fn apply_sqlcipher_key(connection: &Connection, key: &[u8; 32]) -> Result<(), Ap
         .map_err(storage_error)
 }
 
-/// SQLCipher's memory security locks every allocation with `VirtualLock` on
+/// `SQLCipher`'s memory security locks every allocation with `VirtualLock` on
 /// Windows. Once the small default working-set quota is used up, each failed
 /// lock logs a warning to stderr, and that logger allocates through the same
 /// locked allocator, recursing until the thread's stack overflows on the
