@@ -18,7 +18,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get localArea => 'Lokaler Bereich';
 
   @override
-  String get localDemoMode => 'Lokaler Demo-Modus';
+  String get noMailAccountConnected => 'Kein Mailkonto verbunden';
 
   @override
   String mailAccountsConnected(int count) {

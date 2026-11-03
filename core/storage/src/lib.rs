@@ -2910,28 +2910,6 @@ fn apply_migration_v2(connection: &mut Connection) -> Result<(), ApplicationErro
                 CREATE INDEX contacts_display_name
                     ON contacts (display_name COLLATE NOCASE);
 
-                INSERT INTO calendar_events
-                    (id, title, starts_at_ms, ends_at_ms, location)
-                VALUES
-                    ('demo.calendar.standup', 'Team-Stand-up',
-                     1785223800000, 1785225600000, 'Besprechungsraum Nord'),
-                    ('demo.calendar.planning', 'Projektplanung',
-                     1785412800000, 1785416400000, NULL);
-
-                INSERT INTO tasks (id, title, due_at_ms, completed)
-                VALUES
-                    ('demo.task.imap', 'IMAP-Testkonto vorbereiten',
-                     1785708000000, 0),
-                    ('demo.task.architecture', 'Architekturfeedback einarbeiten',
-                     1785794400000, 0),
-                    ('demo.task.prototype', 'Desktop-Prototyp prüfen', NULL, 1);
-
-                INSERT INTO contacts (id, display_name, email)
-                VALUES
-                    ('demo.contact.anna', 'Anna Schneider', 'anna@example.org'),
-                    ('demo.contact.jonas', 'Jonas Weber', 'jonas@example.org'),
-                    ('demo.contact.team', 'MAICENTA Team', 'hello@maicenta.local');
-
                 PRAGMA user_version = 2;
                 ",
         )
@@ -5089,6 +5067,13 @@ mod tests {
             let mut connection = Connection::open(&database.path).expect("open v2 database");
             apply_migration_v1(&mut connection).expect("migration v1");
             apply_migration_v2(&mut connection).expect("migration v2");
+            connection
+                .execute(
+                    "INSERT INTO tasks (id, title, due_at_ms, completed) \
+                     VALUES ('v2.task', 'Aufgabe aus Version 2', NULL, 0)",
+                    [],
+                )
+                .expect("v2 task");
         }
 
         let store = SqliteMailStore::open(&database.path).expect("upgrade database");
@@ -5096,7 +5081,7 @@ mod tests {
             store.schema_version().expect("schema version"),
             CURRENT_SCHEMA_VERSION
         );
-        assert_eq!(store.list_tasks().expect("seeded tasks").len(), 3);
+        assert_eq!(store.list_tasks().expect("v2 tasks").len(), 1);
         assert_eq!(store.pending_mail_mutation_count(), Ok(0));
     }
 
