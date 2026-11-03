@@ -116,11 +116,11 @@ abstract class AppLocalizations {
   /// **'Lokaler Bereich'**
   String get localArea;
 
-  /// No description provided for @localDemoMode.
+  /// No description provided for @noMailAccountConnected.
   ///
   /// In de, this message translates to:
-  /// **'Lokaler Demo-Modus'**
-  String get localDemoMode;
+  /// **'Kein Mailkonto verbunden'**
+  String get noMailAccountConnected;
 
   /// No description provided for @mailAccountsConnected.
   ///
