@@ -7,14 +7,7 @@ section of the tagged version into the GitHub Release notes.
 
 ## [Unreleased]
 
-### Fixed
-
-- Windows: MAICENTA no longer exits without a window on the first start.
-  SQLCipher's memory security recursed through its own logger once
-  `VirtualLock` hit the working-set quota and overflowed the stack while the
-  profile was opened; it is now disabled on Windows.
-
-## [0.1.0-beta.1] - 2026-11-02
+## [0.1.0-beta.1] - 2026-11-03
 
 First public beta of the desktop client for macOS, Windows, and Linux.
 
