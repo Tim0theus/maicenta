@@ -7,6 +7,23 @@ section of the tagged version into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Added
+
+- In-app updates. MAICENTA looks for a new release at startup and then once
+  a day, shows its release notes, and on Windows and Linux downloads,
+  verifies, and installs it with one click and a restart (Velopack). On
+  macOS the dialog downloads the new DMG; the sandboxed app cannot replace
+  itself yet. Options → "Automatisch nach Updates suchen" turns the check
+  off; it also pauses while offline mode is switched on by hand.
+
+### Changed
+
+- Windows releases ship as an installer (`…-windows-x64-Setup.exe`) and a
+  portable ZIP, Linux releases as an AppImage. Both update themselves.
+  Copies unpacked from the 0.1.0-beta.1 ZIP or tarball must be replaced once
+  by hand; profiles are kept.
+- The options dialog scrolls when the window is too low for all entries.
+
 ## [0.1.0-beta.1] - 2026-11-03
 
 First public beta of the desktop client for macOS, Windows, and Linux.

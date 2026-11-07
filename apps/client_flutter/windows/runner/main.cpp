@@ -22,6 +22,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
 
+  // The Velopack installer and updater launch the app with --veloapp-*
+  // during install, update and uninstall so it can react. MAICENTA has
+  // nothing to do there, so quit before a window appears.
+  for (const std::string &argument : command_line_arguments) {
+    if (argument.rfind("--veloapp-", 0) == 0) {
+      ::CoUninitialize();
+      return EXIT_SUCCESS;
+    }
+  }
+
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
   FlutterWindow window(project);

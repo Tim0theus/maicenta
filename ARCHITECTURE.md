@@ -583,6 +583,11 @@ auditable.
 - Preserve an independent recovery mechanism.
 - Avoid telemetry unless users explicitly opt in.
 - Keep personal data exportable at all times.
+- Install updates only from the project's GitHub releases over HTTPS, with
+  the package SHA-256 checked against the release feed (Velopack on Windows
+  and Linux). The update check sends no profile data and can be turned off.
+  Code signing of installers and packages is still open; until then the
+  integrity of an update rests on GitHub and TLS.
 
 ## Suggested repository layout
 

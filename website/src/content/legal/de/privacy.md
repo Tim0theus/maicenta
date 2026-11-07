@@ -14,7 +14,7 @@ E-Mail: [kontakt@maicenta.com](mailto:kontakt@maicenta.com)
 ## Die Kurzfassung
 
 - Diese Website setzt keine Cookies und nutzt keine Analyse-Tools, keine Tracking-Pixel und keine eingebetteten Schriften oder Skripte von Dritten.
-- Die MAICENTA-Desktop-App sendet keine Telemetrie. Sie verbindet sich nur mit den Mail- und Kalenderanbietern, die du selbst einrichtest.
+- Die MAICENTA-Desktop-App sendet keine Telemetrie. Sie verbindet sich nur mit den Mail- und Kalenderanbietern, die du selbst einrichtest, und – abschaltbar – einmal täglich mit GitHub, um nach Updates zu suchen.
 - Wir verarbeiten nur Daten, die technisch zur Auslieferung dieser Website nötig sind, sowie das, was du uns bei einer Kontaktaufnahme schickst.
 
 ## 1. Hosting und Server-Logs
@@ -40,6 +40,7 @@ Die App verarbeitet deine Daten ausschließlich auf deinem Gerät.
 - **Konten:** Die App verbindet sich direkt mit den Anbietern, die du einrichtest (zum Beispiel Microsoft, Google oder dein IMAP/SMTP-Server). Die Anmeldung bei Microsoft und Google nutzt OAuth 2.0; dein Anbieter-Passwort wird nicht an uns übertragen. Zugriffstokens liegen in deinem verschlüsselten lokalen Profil.
 - **Speicherung:** Mail-Cache, Kalender, Aufgaben, Kontakte und Notizen werden in einem verschlüsselten Profil auf deinem Gerät gespeichert.
 - **Telemetrie:** keine. Die App sendet weder Nutzungsstatistiken noch Absturzberichte oder Kennungen an uns.
+- **Update-Suche:** Höchstens einmal täglich ruft die App die Liste der Releases von GitHub ab (siehe Abschnitt 3). Dabei erhält GitHub deine IP-Adresse und eine allgemeine Programmkennung als User-Agent, aber keine Profil- oder Kontodaten. Installierst du ein Update, lädt die App das Paket ebenfalls von GitHub. Die Suche lässt sich unter Datei → Optionen abschalten und ruht im selbst gewählten Offline-Modus.
 - **Optionale KI-Anbieter:** Wenn du einen externen KI-Anbieter aktivierst, werden Inhalte, die du ausdrücklich an ihn sendest, von diesem Anbieter nach seinen eigenen Bedingungen verarbeitet. Ohne deine Aktion wird nichts gesendet.
 
 ## 5. MAICENTA Sync (geplanter Bezahldienst)
@@ -58,4 +59,4 @@ Du hast das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung der Vera
 
 Wir aktualisieren diese Erklärung, wenn sich Website oder App ändern. Die aktuelle Fassung ist immer hier veröffentlicht.
 
-Stand: 4. September 2026
+Stand: 5. November 2026

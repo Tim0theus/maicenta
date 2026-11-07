@@ -161,10 +161,34 @@ app password.
 
 Pushing a tag `vX.Y.Z[-pre]` runs `.github/workflows/release.yml`: it builds
 `flutter build {macos,windows,linux} --release` on the matching runners,
-packages a DMG, a ZIP, and a tar.gz, writes `SHA256SUMS.txt`, and publishes a
-GitHub Release whose notes come from the matching `CHANGELOG.md` section. The
-tag must equal the version in `pubspec.yaml`. Run the workflow manually from
-the Actions tab to verify packaging on all platforms without publishing.
+packages a DMG on macOS and Velopack releases on Windows (Setup.exe and
+portable ZIP) and Linux (AppImage), writes `SHA256SUMS.txt`, and publishes a
+GitHub Release whose notes come from the matching `CHANGELOG.md` section plus
+`.github/release-install-notes.md`. The tag must equal the version in
+`pubspec.yaml`. Run the workflow manually from the Actions tab to verify
+packaging on all platforms without publishing.
+
+### In-app updates
+
+Windows and Linux installations update themselves through
+[Velopack](https://velopack.io) (MIT). The release workflow attaches
+`releases.{win,linux}.json` and the `.nupkg` packages to every GitHub
+release; `core/bridge/src/api/updates.rs` reads them with Velopack's
+`GithubSource`, offers pre-releases only to pre-release installations, and
+lets Velopack verify each package's SHA-256 before it swaps the app and
+restarts. Keep `VPK_VERSION` in `release.yml` equal to the `velopack` crate
+version; the workflow fails otherwise. Never delete the feed files from a
+published release, or installed copies stop finding updates.
+
+The macOS app runs in the App Sandbox, which Velopack cannot update. It asks
+the GitHub releases API for a newer version instead and offers the new DMG.
+Full in-app updates on macOS need a Developer ID signature, dropping the
+sandbox, and a one-time move of the profile out of the sandbox container.
+
+Debug builds and copies not made by the installer report updates as
+unsupported and never contact GitHub. Update settings live in
+`update_preferences.json` next to the profile database, outside the
+encrypted profile, so exports do not carry them to another machine.
 
 The Rust third-party notice shown under "Über MAICENTA" is generated with
 `cargo about generate about.hbs -o assets/licenses/rust-third-party.txt` from

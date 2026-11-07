@@ -73,6 +73,8 @@ static PROFILE_VAULTS: OnceLock<Mutex<HashMap<PathBuf, Arc<ProfileVault>>>> = On
 
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
+    // First, so that installer hooks exit before any profile is opened.
+    super::updates::run_startup_hooks();
     flutter_rust_bridge::setup_default_user_utils();
 }
 

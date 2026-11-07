@@ -6,6 +6,7 @@
 // Static analysis wrongly picks the IO variant, thus ignore this
 // ignore_for_file: argument_type_not_assignable
 
+import 'api/updates.dart';
 import 'api/workspace.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -21,10 +22,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   });
 
   @protected
+  AnyhowException dco_decode_AnyhowException(dynamic raw);
+
+  @protected
+  RustStreamSink<int> dco_decode_StreamSink_i_32_Sse(dynamic raw);
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
+  AvailableAppUpdateDto dco_decode_available_app_update_dto(dynamic raw);
+
+  @protected
   bool dco_decode_bool(dynamic raw);
+
+  @protected
+  AvailableAppUpdateDto dco_decode_box_autoadd_available_app_update_dto(
+    dynamic raw,
+  );
 
   @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
@@ -58,6 +73,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ReleaseNoticeDto dco_decode_box_autoadd_release_notice_dto(dynamic raw);
+
+  @protected
   CalendarEventDto dco_decode_calendar_event_dto(dynamic raw);
 
   @protected
@@ -65,6 +83,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DraftSyncDto dco_decode_draft_sync_dto(dynamic raw);
+
+  @protected
+  int dco_decode_i_32(dynamic raw);
 
   @protected
   PlatformInt64 dco_decode_i_64(dynamic raw);
@@ -138,13 +159,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
+  AvailableAppUpdateDto? dco_decode_opt_box_autoadd_available_app_update_dto(
+    dynamic raw,
+  );
+
+  @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
   MessageDto? dco_decode_opt_box_autoadd_message_dto(dynamic raw);
 
   @protected
+  ReleaseNoticeDto? dco_decode_opt_box_autoadd_release_notice_dto(dynamic raw);
+
+  @protected
   OutgoingMessageInput dco_decode_outgoing_message_input(dynamic raw);
+
+  @protected
+  ReleaseNoticeDto dco_decode_release_notice_dto(dynamic raw);
 
   @protected
   SenderAliasDto dco_decode_sender_alias_dto(dynamic raw);
@@ -159,6 +191,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int dco_decode_u_32(dynamic raw);
 
   @protected
+  BigInt dco_decode_u_64(dynamic raw);
+
+  @protected
   int dco_decode_u_8(dynamic raw);
 
   @protected
@@ -168,10 +203,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   WorkspaceSnapshot dco_decode_workspace_snapshot(dynamic raw);
 
   @protected
+  AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
+
+  @protected
+  RustStreamSink<int> sse_decode_StreamSink_i_32_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  AvailableAppUpdateDto sse_decode_available_app_update_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer);
+
+  @protected
+  AvailableAppUpdateDto sse_decode_box_autoadd_available_app_update_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
@@ -215,6 +268,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ReleaseNoticeDto sse_decode_box_autoadd_release_notice_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   CalendarEventDto sse_decode_calendar_event_dto(SseDeserializer deserializer);
 
   @protected
@@ -222,6 +280,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DraftSyncDto sse_decode_draft_sync_dto(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
@@ -309,6 +370,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
+  AvailableAppUpdateDto? sse_decode_opt_box_autoadd_available_app_update_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
@@ -317,9 +383,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ReleaseNoticeDto? sse_decode_opt_box_autoadd_release_notice_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   OutgoingMessageInput sse_decode_outgoing_message_input(
     SseDeserializer deserializer,
   );
+
+  @protected
+  ReleaseNoticeDto sse_decode_release_notice_dto(SseDeserializer deserializer);
 
   @protected
   SenderAliasDto sse_decode_sender_alias_dto(SseDeserializer deserializer);
@@ -334,6 +408,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int sse_decode_u_32(SseDeserializer deserializer);
 
   @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_u_8(SseDeserializer deserializer);
 
   @protected
@@ -343,13 +420,34 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   WorkspaceSnapshot sse_decode_workspace_snapshot(SseDeserializer deserializer);
 
   @protected
-  int sse_decode_i_32(SseDeserializer deserializer);
+  void sse_encode_AnyhowException(
+    AnyhowException self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_i_32_Sse(
+    RustStreamSink<int> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
+  void sse_encode_available_app_update_dto(
+    AvailableAppUpdateDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_available_app_update_dto(
+    AvailableAppUpdateDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_box_autoadd_i_64(
@@ -406,6 +504,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_release_notice_dto(
+    ReleaseNoticeDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_calendar_event_dto(
     CalendarEventDto self,
     SseSerializer serializer,
@@ -416,6 +520,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_draft_sync_dto(DraftSyncDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
@@ -538,6 +645,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_available_app_update_dto(
+    AvailableAppUpdateDto? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_i_64(
     PlatformInt64? self,
     SseSerializer serializer,
@@ -550,8 +663,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_release_notice_dto(
+    ReleaseNoticeDto? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_outgoing_message_input(
     OutgoingMessageInput self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_release_notice_dto(
+    ReleaseNoticeDto self,
     SseSerializer serializer,
   );
 
@@ -571,6 +696,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_u_32(int self, SseSerializer serializer);
 
   @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer);
+
+  @protected
   void sse_encode_u_8(int self, SseSerializer serializer);
 
   @protected
@@ -581,9 +709,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     WorkspaceSnapshot self,
     SseSerializer serializer,
   );
-
-  @protected
-  void sse_encode_i_32(int self, SseSerializer serializer);
 }
 
 // Section: wire_class
