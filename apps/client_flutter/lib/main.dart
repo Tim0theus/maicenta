@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show File, Platform;
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
@@ -9,6 +10,7 @@ import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart
 import 'package:path_provider/path_provider.dart';
 
 import 'app_theme.dart';
+import 'build_version.dart';
 import 'features/about/about_dialog.dart';
 import 'features/compose/compose_window.dart';
 import 'features/mail/account_autodiscovery.dart';
@@ -20,6 +22,8 @@ import 'features/mail/message_window.dart';
 import 'features/mail/oauth_service.dart';
 import 'features/mail/safe_message_html.dart';
 import 'features/mail/sender_aliases_dialog.dart';
+import 'features/updates/app_updates.dart';
+import 'features/updates/update_dialog.dart';
 import 'l10n/app_localizations.dart';
 import 'src/rust/frb_generated.dart';
 
@@ -34,7 +38,27 @@ Future<void> main() async {
     final dataSource = await RustMailDataSource.open(
       '${supportDirectory.path}/maicenta.sqlite',
     );
-    runApp(MaicentaApp(mailDataSource: dataSource, locale: null));
+    final appUpdates = await AppUpdateService.open(
+      // The sandboxed macOS app cannot replace itself; it only points to the
+      // new DMG. Debug builds never check.
+      updater: Platform.isMacOS
+          ? ReleaseNoticeUpdater(
+              currentVersion: maicentaVersion,
+              assetSuffix: '-macos.dmg',
+              supported: kReleaseMode,
+            )
+          : RustAppUpdater(),
+      store: FileUpdatePreferencesStore(
+        File('${supportDirectory.path}/update_preferences.json'),
+      ),
+    );
+    runApp(
+      MaicentaApp(
+        mailDataSource: dataSource,
+        locale: null,
+        appUpdates: appUpdates,
+      ),
+    );
   } on Object catch (error) {
     runApp(StartupFailureApp(message: error.toString()));
   }
@@ -101,10 +125,14 @@ class MaicentaApp extends StatefulWidget {
     this.mailDataSource = const DemoMailDataSource(),
     this.locale = const Locale('de'),
     this.loadBuildInfo,
+    this.appUpdates,
   });
 
   final MailDataSource mailDataSource;
   final Locale? locale;
+
+  /// In-app updates; null disables update checks entirely.
+  final AppUpdateService? appUpdates;
 
   /// Overrides how the about dialog reads version and platform, for tests.
   final Future<MaicentaBuildInfo> Function()? loadBuildInfo;
@@ -166,6 +194,7 @@ class _MaicentaAppState extends State<MaicentaApp> {
         darkModeEnabled: darkModeEnabled,
         onDarkModeChanged: setDarkMode,
         loadBuildInfo: widget.loadBuildInfo,
+        appUpdates: widget.appUpdates,
       ),
     );
   }
@@ -248,12 +277,14 @@ class WorkspaceShell extends StatefulWidget {
     this.darkModeEnabled = false,
     this.onDarkModeChanged,
     this.loadBuildInfo,
+    this.appUpdates,
   });
 
   final MailDataSource mailDataSource;
   final bool darkModeEnabled;
   final Future<void> Function(bool enabled)? onDarkModeChanged;
   final Future<MaicentaBuildInfo> Function()? loadBuildInfo;
+  final AppUpdateService? appUpdates;
 
   @override
   State<WorkspaceShell> createState() => _WorkspaceShellState();
@@ -289,11 +320,17 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   int qresyncMailboxesSynchronized = 0;
   Timer? searchDebounce;
   Timer? automaticSyncTimer;
+  Timer? updateCheckTimer;
+  bool updateCheckRunning = false;
   int idleWatcherGeneration = 0;
   int searchGeneration = 0;
   MailListFilter mailFilter = MailListFilter.all;
   MailSort mailSort = MailSort.received;
   bool offlineMode = true;
+
+  /// Whether the user switched offline mode on. Without accounts it is on by
+  /// default, which must not silence update checks.
+  bool offlineModeChosen = false;
   bool showFolderPane = true;
   bool showReadingPane = true;
   bool calendarEnabled = true;
@@ -320,6 +357,16 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     mailAccounts = widget.mailDataSource.mailAccounts.toList();
     offlineMode = mailAccounts.isEmpty;
     pendingMailOperations = widget.mailDataSource.pendingMailOperations;
+    if (widget.appUpdates?.supported ?? false) {
+      // Hourly ticks; the service decides whether a daily check is due.
+      updateCheckTimer = Timer.periodic(
+        const Duration(hours: 1),
+        (_) => unawaited(checkForUpdates(automatic: true)),
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(checkForUpdates(automatic: true));
+      });
+    }
     if (widget.mailDataSource.automaticSynchronizationEnabled) {
       automaticSyncTimer = Timer.periodic(
         const Duration(minutes: 5),
@@ -339,6 +386,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     idleWatcherGeneration += 1;
     searchDebounce?.cancel();
     automaticSyncTimer?.cancel();
+    updateCheckTimer?.cancel();
     super.dispose();
   }
 
@@ -1458,7 +1506,10 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   }
 
   void toggleOffline() {
-    setState(() => offlineMode = !offlineMode);
+    setState(() {
+      offlineMode = !offlineMode;
+      offlineModeChosen = offlineMode;
+    });
     restartIdleWatcher();
     showNotice(
       offlineMode ? 'Offline-Modus aktiviert.' : 'Online-Modus vorbereitet.',
@@ -1764,6 +1815,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         mailAccounts[index] = result.account;
       }
       offlineMode = false;
+      offlineModeChosen = false;
     });
     showNotice('Konto gespeichert. Die erste Synchronisierung startet.');
     await synchronize();
@@ -1935,6 +1987,39 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     }
   }
 
+  /// Looks for a newer release and offers it. Automatic checks run at most
+  /// daily, never in offline mode, and fail silently; a check the user
+  /// started reports every outcome.
+  Future<void> checkForUpdates({required bool automatic}) async {
+    final service = widget.appUpdates;
+    if (service == null || !service.supported || updateCheckRunning) return;
+    final userOffline = offlineMode && offlineModeChosen;
+    if (automatic && (userOffline || !service.automaticCheckDue)) return;
+    if (!automatic && userOffline) {
+      showNotice('Im Offline-Modus wird nicht nach Updates gesucht.');
+      return;
+    }
+    updateCheckRunning = true;
+    try {
+      final update = await service.check(automatic: automatic);
+      if (!mounted) return;
+      if (update == null) {
+        if (!automatic) showNotice('MAICENTA ist auf dem neuesten Stand.');
+        return;
+      }
+      await showAppUpdateDialog(context, service: service, update: update);
+    } on Object catch (error) {
+      if (!automatic && mounted) {
+        showInformation(
+          'Update-Suche fehlgeschlagen',
+          'Die Release-Liste konnte nicht abgerufen werden.\n\n$error',
+        );
+      }
+    } finally {
+      updateCheckRunning = false;
+    }
+  }
+
   void showNotice(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(
@@ -2096,7 +2181,10 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       );
       if (!mounted) return;
       replaceWorkspace(snapshot);
-      setState(() => offlineMode = mailAccounts.isEmpty);
+      setState(() {
+        offlineMode = mailAccounts.isEmpty;
+        offlineModeChosen = false;
+      });
       showInformation(
         'Profil wiederhergestellt',
         'Konten, lokale Daten und enthaltene Zugangsdaten wurden aus der '
@@ -2195,78 +2283,115 @@ class _WorkspaceShellState extends State<WorkspaceShell>
           title: const Text('Optionen'),
           content: SizedBox(
             width: 420,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SwitchListTile(
-                  key: const Key('dark-mode-toggle'),
-                  secondary: Icon(
-                    widget.darkModeEnabled
-                        ? Icons.dark_mode_outlined
-                        : Icons.light_mode_outlined,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SwitchListTile(
+                    key: const Key('dark-mode-toggle'),
+                    secondary: Icon(
+                      widget.darkModeEnabled
+                          ? Icons.dark_mode_outlined
+                          : Icons.light_mode_outlined,
+                    ),
+                    title: const Text('Dunkler Modus'),
+                    subtitle: const Text(
+                      'Darstellung für dieses Profil verwenden',
+                    ),
+                    value: widget.darkModeEnabled,
+                    onChanged: (value) async {
+                      final changeMode = widget.onDarkModeChanged;
+                      if (changeMode == null) return;
+                      try {
+                        await changeMode(value);
+                        if (dialogContext.mounted) updateDialog(() {});
+                      } on Object catch (error) {
+                        if (!mounted) return;
+                        showPersistenceError(error);
+                      }
+                    },
                   ),
-                  title: const Text('Dunkler Modus'),
-                  subtitle: const Text(
-                    'Darstellung für dieses Profil verwenden',
+                  SwitchListTile(
+                    title: const Text('Offline-Modus'),
+                    subtitle: const Text('Keine Netzwerkverbindungen aufbauen'),
+                    value: offlineMode,
+                    onChanged: (value) {
+                      setState(() {
+                        offlineMode = value;
+                        offlineModeChosen = value;
+                      });
+                      updateDialog(() {});
+                      restartIdleWatcher();
+                    },
                   ),
-                  value: widget.darkModeEnabled,
-                  onChanged: (value) async {
-                    final changeMode = widget.onDarkModeChanged;
-                    if (changeMode == null) return;
-                    try {
-                      await changeMode(value);
-                      if (dialogContext.mounted) updateDialog(() {});
-                    } on Object catch (error) {
-                      if (!mounted) return;
-                      showPersistenceError(error);
-                    }
-                  },
-                ),
-                SwitchListTile(
-                  title: const Text('Offline-Modus'),
-                  subtitle: const Text('Keine Netzwerkverbindungen aufbauen'),
-                  value: offlineMode,
-                  onChanged: (value) {
-                    setState(() => offlineMode = value);
-                    updateDialog(() {});
-                    restartIdleWatcher();
-                  },
-                ),
-                SwitchListTile(
-                  title: const Text('Ordnerbereich anzeigen'),
-                  value: showFolderPane,
-                  onChanged: (value) {
-                    setState(() => showFolderPane = value);
-                    updateDialog(() {});
-                  },
-                ),
-                SwitchListTile(
-                  title: const Text('Lesebereich anzeigen'),
-                  value: showReadingPane,
-                  onChanged: (value) {
-                    setState(() => showReadingPane = value);
-                    updateDialog(() {});
-                  },
-                ),
-                const ListTile(
-                  leading: Icon(Icons.shield_outlined),
-                  title: Text('HTML-Sicherheitsfilter'),
-                  subtitle: Text('Immer aktiv'),
-                ),
-                ListTile(
-                  key: const Key('options-about'),
-                  leading: const Icon(Icons.info_outline),
-                  title: const Text('Über MAICENTA'),
-                  subtitle: const Text(
-                    'Version, Plattform, Lizenzen und Fehlermeldung',
+                  SwitchListTile(
+                    title: const Text('Ordnerbereich anzeigen'),
+                    value: showFolderPane,
+                    onChanged: (value) {
+                      setState(() => showFolderPane = value);
+                      updateDialog(() {});
+                    },
                   ),
-                  trailing: const Icon(Icons.chevron_right, size: 18),
-                  onTap: () => showMaicentaAboutDialog(
-                    dialogContext,
-                    loadBuildInfo: widget.loadBuildInfo,
+                  SwitchListTile(
+                    title: const Text('Lesebereich anzeigen'),
+                    value: showReadingPane,
+                    onChanged: (value) {
+                      setState(() => showReadingPane = value);
+                      updateDialog(() {});
+                    },
                   ),
-                ),
-              ],
+                  const ListTile(
+                    leading: Icon(Icons.shield_outlined),
+                    title: Text('HTML-Sicherheitsfilter'),
+                    subtitle: Text('Immer aktiv'),
+                  ),
+                  if (widget.appUpdates case final updates?) ...[
+                    SwitchListTile(
+                      key: const Key('automatic-update-check-toggle'),
+                      secondary: const Icon(Icons.update),
+                      title: const Text('Automatisch nach Updates suchen'),
+                      subtitle: Text(
+                        updates.supported
+                            ? 'Einmal täglich die Releases auf GitHub prüfen'
+                            : 'Nur in mit dem Installer eingerichteten '
+                                  'Versionen verfügbar',
+                      ),
+                      value:
+                          updates.supported &&
+                          updates.preferences.automaticChecks,
+                      onChanged: updates.supported
+                          ? (value) async {
+                              await updates.setAutomaticChecks(value);
+                              if (dialogContext.mounted) updateDialog(() {});
+                            }
+                          : null,
+                    ),
+                    ListTile(
+                      key: const Key('options-check-updates'),
+                      leading: const Icon(Icons.system_update_alt_outlined),
+                      title: const Text('Nach Updates suchen'),
+                      enabled: updates.supported,
+                      onTap: () {
+                        Navigator.pop(dialogContext);
+                        unawaited(checkForUpdates(automatic: false));
+                      },
+                    ),
+                  ],
+                  ListTile(
+                    key: const Key('options-about'),
+                    leading: const Icon(Icons.info_outline),
+                    title: const Text('Über MAICENTA'),
+                    subtitle: const Text(
+                      'Version, Plattform, Lizenzen und Fehlermeldung',
+                    ),
+                    trailing: const Icon(Icons.chevron_right, size: 18),
+                    onTap: () => showMaicentaAboutDialog(
+                      dialogContext,
+                      loadBuildInfo: widget.loadBuildInfo,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           actions: [

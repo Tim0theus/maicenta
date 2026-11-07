@@ -14,7 +14,7 @@ Email: [kontakt@maicenta.com](mailto:kontakt@maicenta.com)
 ## The short version
 
 - This website sets no cookies and uses no analytics, no tracking pixels and no embedded third-party fonts or scripts.
-- The MAICENTA desktop app sends no telemetry. It only connects to the mail and calendar providers you configure yourself.
+- The MAICENTA desktop app sends no telemetry. It only connects to the mail and calendar providers you configure yourself and, unless you turn it off, to GitHub once a day to look for updates.
 - We only process data that is technically necessary to deliver this website, plus what you send us when you contact us.
 
 ## 1. Hosting and server logs
@@ -39,7 +39,7 @@ The app processes your data exclusively on your device.
 
 - **Accounts:** the app connects directly to the providers you configure (for example Microsoft, Google or your IMAP/SMTP server). Sign-in with Microsoft and Google uses OAuth 2.0; your provider password is not transmitted to us. Access tokens are stored in your encrypted local profile.
 - **Storage:** mail cache, calendars, tasks, contacts and notes are stored in an encrypted profile on your device.
-- **Telemetry:** none. The app does not send usage statistics, crash reports or identifiers to us.
+- **Update check:** at most once a day the app fetches the list of releases from GitHub (see section 3). GitHub receives your IP address and a generic program user agent, but no profile or account data. When you install an update, the app downloads the package from GitHub as well. The check can be turned off under File → Options and pauses while you have switched to offline mode.
 - **Optional AI providers:** if you enable an external AI provider, content you explicitly send to it is processed by that provider under its own terms. Nothing is sent without your action.
 
 ## 5. MAICENTA Sync (planned paid service)
@@ -58,4 +58,4 @@ You have the right to access, rectification, erasure, restriction of processing,
 
 We update this policy when the website or the app changes. The current version is always published here.
 
-Last updated: 4 September 2026
+Last updated: 5 November 2026

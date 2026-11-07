@@ -5,6 +5,12 @@ name: Release
 # checksums, and publishes a GitHub Release. Tags containing a hyphen become
 # pre-releases. `workflow_dispatch` runs the same matrix without publishing so
 # the packaging can be verified on every platform before a tag exists.
+#
+# Windows and Linux are packed with Velopack (vpk): a Setup.exe, a portable
+# ZIP, and an AppImage, plus the `releases.{win,linux}.json` feeds and
+# `.nupkg` packages the installed app reads to update itself. The feeds must
+# stay attached to the GitHub release. macOS keeps the DMG because the
+# sandboxed app cannot be replaced by Velopack; it only shows a hint.
 
 on:
   push:
@@ -21,6 +27,9 @@ concurrency:
 env:
   APP_NAME: MAICENTA
   FLUTTER_CHANNEL: stable
+  # Must equal the `velopack` crate version in core/bridge/Cargo.toml; the
+  # packages and the in-app updater are released together.
+  VPK_VERSION: 1.2.161
 
 jobs:
   build:
@@ -149,49 +158,82 @@ jobs:
           hdiutil create -volname "${APP_NAME} ${version}" -srcfolder "${staging}" \
             -ov -format UDZO "dist/${APP_NAME}-${version}-macos.dmg"
 
-      - name: Package Windows ZIP
+      - name: Extract release notes
+        run: .github/scripts/release-notes.sh "${{ steps.version.outputs.version }}" > release-notes.md
+
+      - name: Install Velopack CLI
+        if: matrix.target != 'macos'
+        run: |
+          set -euo pipefail
+          crate="$(grep -oE '^velopack = "=[^"]+"' core/bridge/Cargo.toml | sed -E 's/.*"=([^"]+)"/\1/')"
+          if [[ "${crate}" != "${VPK_VERSION}" ]]; then
+            echo "velopack crate ${crate} does not match VPK_VERSION ${VPK_VERSION}" >&2
+            exit 1
+          fi
+          dotnet tool install vpk --version "${VPK_VERSION}" --tool-path "${RUNNER_TEMP}/vpk"
+          echo "VPK=${RUNNER_TEMP}/vpk/vpk" >> "${GITHUB_ENV}"
+
+      # Earlier releases on the same channel let vpk build a small delta
+      # package. The first Velopack release has none; vpk then packs a full
+      # release only.
+      - name: Download the previous Velopack release
+        if: matrix.target != 'macos'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          channel="${{ matrix.target == 'windows' && 'win' || 'linux' }}"
+          pre=()
+          if [[ "${{ steps.version.outputs.version }}" == *-* ]]; then pre=(--pre); fi
+          mkdir -p releases
+          "${VPK}" download github --repoUrl "https://github.com/${GITHUB_REPOSITORY}" \
+            --token "${GITHUB_TOKEN}" --channel "${channel}" "${pre[@]}" --outputDir releases \
+            || echo "::notice::No earlier Velopack release on ${channel}; packing without a delta."
+          touch "${RUNNER_TEMP}/before-pack"
+
+      - name: Package Windows installer
         if: matrix.target == 'windows'
         run: |
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
-          out="apps/client_flutter/build/windows/x64/runner/Release"
-          mkdir -p dist
-          cat > "${out}/Erste Schritte.txt" <<'TXT'
-          MAICENTA Beta für Windows
+          "${VPK}" pack --packId "${APP_NAME}" --packVersion "${version}" \
+            --packTitle "${APP_NAME}" --packAuthors "MAICENTA contributors" \
+            --packDir apps/client_flutter/build/windows/x64/runner/Release \
+            --mainExe maicenta.exe \
+            --icon apps/client_flutter/windows/runner/resources/app_icon.ico \
+            --releaseNotes release-notes.md --channel win --outputDir releases
 
-          Diese Vorabversion ist noch nicht mit einem Zertifikat signiert.
-          Windows SmartScreen zeigt beim ersten Start deshalb eine Warnung.
-
-          So startest du sie trotzdem:
-            1. Den Ordner entpacken, zum Beispiel nach C:\Programme\MAICENTA.
-            2. maicenta.exe starten. Bei „Der Computer wurde durch Windows
-               geschützt“ auf „Weitere Informationen“ und dann „Trotzdem
-               ausführen“ klicken.
-
-          Prüfsumme und Hinweise: https://github.com/Tim0theus/maicenta/releases
-          TXT
-          (cd "${out}" && 7z a -tzip "${GITHUB_WORKSPACE}/dist/${APP_NAME}-${version}-windows-x64.zip" . >/dev/null)
-
-      - name: Package Linux tarball
+      - name: Package Linux AppImage
         if: matrix.target == 'linux'
         run: |
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
-          out="apps/client_flutter/build/linux/x64/release/bundle"
-          staging="$(mktemp -d)/maicenta-${version}"
-          mkdir -p "${staging}" dist
-          cp -R "${out}/." "${staging}/"
-          cat > "${staging}/README.txt" <<'TXT'
-          MAICENTA Beta für Linux (x86_64)
+          "${VPK}" pack --packId "${APP_NAME}" --packVersion "${version}" \
+            --packTitle "${APP_NAME}" --packAuthors "MAICENTA contributors" \
+            --packDir apps/client_flutter/build/linux/x64/release/bundle \
+            --mainExe maicenta \
+            --icon assets/branding/maicenta-symbol.png \
+            --releaseNotes release-notes.md --channel linux --outputDir releases
 
-          Entpacken und ./maicenta starten. Benötigt GTK 3, WebKitGTK 4.1 (Paket
-          libwebkit2gtk-4.1-0), libsecret (für den Profilschlüssel im
-          Schlüsselbund) und einen laufenden Secret Service wie GNOME Keyring
-          oder KWallet.
-
-          Prüfsumme und Hinweise: https://github.com/Tim0theus/maicenta/releases
-          TXT
-          tar -C "$(dirname "${staging}")" -czf "dist/${APP_NAME}-${version}-linux-x64.tar.gz" "$(basename "${staging}")"
+      # Only the files this run produced are published; packages downloaded
+      # for the delta already belong to an earlier release. Installers get
+      # versioned names, while feed and package names stay as vpk wrote them
+      # because the feeds reference them.
+      - name: Collect Velopack output
+        if: matrix.target != 'macos'
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          find releases -maxdepth 1 -type f -newer "${RUNNER_TEMP}/before-pack" -exec cp {} dist/ \;
+          cd dist
+          rename() { if [[ -f "$1" ]]; then mv "$1" "$2"; fi; }
+          rename "${APP_NAME}-win-Setup.exe" "${APP_NAME}-${version}-windows-x64-Setup.exe"
+          rename "${APP_NAME}-win-Portable.zip" "${APP_NAME}-${version}-windows-x64-portable.zip"
+          rename "${APP_NAME}.AppImage" "${APP_NAME}-${version}-linux-x64.AppImage"
+          ls -la
+          compgen -G "releases.*.json" >/dev/null || { echo "vpk wrote no release feed" >&2; exit 1; }
+          compgen -G "*-full.nupkg" >/dev/null || { echo "vpk wrote no full package" >&2; exit 1; }
 
       - name: Write checksums
         run: |
@@ -221,26 +263,30 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v8
         with:
-          path: dist
-          merge-multiple: true
+          path: artifacts
+      # Each platform's files must have unique names, or one would silently
+      # replace another in the release.
+      - name: Merge platform artifacts
+        run: |
+          set -euo pipefail
+          duplicates="$(find artifacts -type f -printf '%f\n' | sort | uniq -d)"
+          if [[ -n "${duplicates}" ]]; then
+            echo "Several platforms produced: ${duplicates}" >&2
+            exit 1
+          fi
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
       - name: Combine checksums
         run: |
           cd dist
           cat ./*.sha256 > SHA256SUMS.txt
           rm ./*.sha256
           ls -la
-      - name: Extract release notes from CHANGELOG
-        id: notes
+      - name: Write release notes
         run: |
-          version="${GITHUB_REF#refs/tags/v}"
-          awk -v ver="${version}" '
-            /^## / { printing = index($0, "[" ver "]") > 0; next }
-            printing { print }
-          ' CHANGELOG.md > release-notes.md
-          if [[ ! -s release-notes.md ]]; then
-            echo "Release notes for ${version} were not found in CHANGELOG.md; using the section header only." >&2
-            echo "Siehe CHANGELOG.md." > release-notes.md
-          fi
+          set -euo pipefail
+          .github/scripts/release-notes.sh "${GITHUB_REF#refs/tags/v}" > release-notes.md
+          cat .github/release-install-notes.md >> release-notes.md
       - uses: softprops/action-gh-release@v3
         with:
           name: MAICENTA ${{ github.ref_name }}
