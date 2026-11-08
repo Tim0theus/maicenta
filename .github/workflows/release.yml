@@ -199,7 +199,7 @@ jobs:
           "${VPK}" pack --packId "${APP_NAME}" --packVersion "${version}" \
             --packTitle "${APP_NAME}" --packAuthors "MAICENTA contributors" \
             --packDir apps/client_flutter/build/windows/x64/runner/Release \
-            --mainExe maicenta.exe \
+            --mainExe maicenta.exe --runtime win-x64 \
             --icon apps/client_flutter/windows/runner/resources/app_icon.ico \
             --releaseNotes release-notes.md --channel win --outputDir releases
 
@@ -218,14 +218,16 @@ jobs:
       # Only the files this run produced are published; packages downloaded
       # for the delta already belong to an earlier release. Installers get
       # versioned names, while feed and package names stay as vpk wrote them
-      # because the feeds reference them.
+      # because the feeds reference them. assets.*.json only serves
+      # `vpk upload` and would list the installers under their old names.
       - name: Collect Velopack output
         if: matrix.target != 'macos'
         run: |
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
           mkdir -p dist
-          find releases -maxdepth 1 -type f -newer "${RUNNER_TEMP}/before-pack" -exec cp {} dist/ \;
+          find releases -maxdepth 1 -type f -newer "${RUNNER_TEMP}/before-pack" \
+            ! -name 'assets.*.json' -exec cp {} dist/ \;
           cd dist
           rename() { if [[ -f "$1" ]]; then mv "$1" "$2"; fi; }
           rename "${APP_NAME}-win-Setup.exe" "${APP_NAME}-${version}-windows-x64-Setup.exe"
