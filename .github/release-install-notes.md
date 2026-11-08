@@ -21,4 +21,4 @@ Profile werden beim ersten Start einer neuen Version übernommen. Vor einem
 Beta-Update empfiehlt sich ein passwortgeschützter Export.
 
 Prüfsummen stehen in `SHA256SUMS.txt`. Die Dateien `releases.*.json`,
-`assets.*.json`, `RELEASES` und `*.nupkg` sind für das In-App-Update bestimmt.
+`RELEASES*` und `*.nupkg` sind für das In-App-Update bestimmt.
