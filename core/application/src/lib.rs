@@ -5,7 +5,7 @@ use std::{error::Error, fmt, future::Future};
 use maicenta_domain::{
     AccountId, AttachmentId, CalendarEvent, Contact, MailAccount, Mailbox, MailboxId,
     MessageAttachment, MessageBody, MessageFlag, MessageId, MessageRecipients, MessageSummary,
-    TaskItem,
+    TaskItem, WorkspaceItemId,
 };
 
 /// Provider-side identity of one message inside its remote mailbox.
@@ -639,6 +639,15 @@ pub trait WorkspaceStore: Send + Sync {
     /// Returns a storage error when the change cannot be committed.
     fn save_calendar_event(&mut self, event: &CalendarEvent) -> Result<(), ApplicationError>;
 
+    /// Removes a local calendar event.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationError::NotFound`] for an unknown event, or a
+    /// storage error when the change cannot be committed.
+    fn delete_calendar_event(&mut self, event_id: &WorkspaceItemId)
+    -> Result<(), ApplicationError>;
+
     /// Loads tasks, with unfinished tasks first.
     ///
     /// # Errors
@@ -653,19 +662,36 @@ pub trait WorkspaceStore: Send + Sync {
     /// Returns a storage error when the change cannot be committed.
     fn save_task(&mut self, task: &TaskItem) -> Result<(), ApplicationError>;
 
-    /// Loads contacts ordered by display name.
+    /// Removes a local task.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationError::NotFound`] for an unknown task, or a
+    /// storage error when the change cannot be committed.
+    fn delete_task(&mut self, task_id: &WorkspaceItemId) -> Result<(), ApplicationError>;
+
+    /// Loads contacts with all their details, ordered by display name.
     ///
     /// # Errors
     ///
     /// Returns a storage error when the data cannot be read.
     fn list_contacts(&self) -> Result<Vec<Contact>, ApplicationError>;
 
-    /// Creates or updates a local contact.
+    /// Creates or updates a local contact together with its email
+    /// addresses, phone numbers, and postal addresses.
     ///
     /// # Errors
     ///
     /// Returns a storage error when the change cannot be committed.
     fn save_contact(&mut self, contact: &Contact) -> Result<(), ApplicationError>;
+
+    /// Removes a local contact and all its details.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationError::NotFound`] for an unknown contact, or a
+    /// storage error when the change cannot be committed.
+    fn delete_contact(&mut self, contact_id: &WorkspaceItemId) -> Result<(), ApplicationError>;
 }
 
 /// Local persistence contract for mail account configuration.

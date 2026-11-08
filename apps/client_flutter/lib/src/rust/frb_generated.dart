@@ -67,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -714880088;
+  int get rustContentHash => 59163550;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -96,10 +96,25 @@ abstract class RustLibApi extends BaseApi {
     required String displayName,
   });
 
+  Future<void> crateApiWorkspaceDeleteLocalCalendarEvent({
+    required String databasePath,
+    required String eventId,
+  });
+
+  Future<void> crateApiWorkspaceDeleteLocalContact({
+    required String databasePath,
+    required String contactId,
+  });
+
   Future<void> crateApiWorkspaceDeleteLocalMailbox({
     required String databasePath,
     required String mailboxId,
     required String fallbackMailboxId,
+  });
+
+  Future<void> crateApiWorkspaceDeleteLocalTask({
+    required String databasePath,
+    required String taskId,
   });
 
   Future<WorkspaceSnapshot> crateApiWorkspaceDeleteMailAccount({
@@ -416,6 +431,76 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiWorkspaceDeleteLocalCalendarEvent({
+    required String databasePath,
+    required String eventId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(databasePath, serializer);
+          sse_encode_String(eventId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWorkspaceDeleteLocalCalendarEventConstMeta,
+        argValues: [databasePath, eventId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWorkspaceDeleteLocalCalendarEventConstMeta =>
+      const TaskConstMeta(
+        debugName: "delete_local_calendar_event",
+        argNames: ["databasePath", "eventId"],
+      );
+
+  @override
+  Future<void> crateApiWorkspaceDeleteLocalContact({
+    required String databasePath,
+    required String contactId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(databasePath, serializer);
+          sse_encode_String(contactId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 7,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWorkspaceDeleteLocalContactConstMeta,
+        argValues: [databasePath, contactId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWorkspaceDeleteLocalContactConstMeta =>
+      const TaskConstMeta(
+        debugName: "delete_local_contact",
+        argNames: ["databasePath", "contactId"],
+      );
+
+  @override
   Future<void> crateApiWorkspaceDeleteLocalMailbox({
     required String databasePath,
     required String mailboxId,
@@ -431,7 +516,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 8,
             port: port_,
           );
         },
@@ -453,6 +538,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiWorkspaceDeleteLocalTask({
+    required String databasePath,
+    required String taskId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(databasePath, serializer);
+          sse_encode_String(taskId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWorkspaceDeleteLocalTaskConstMeta,
+        argValues: [databasePath, taskId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWorkspaceDeleteLocalTaskConstMeta =>
+      const TaskConstMeta(
+        debugName: "delete_local_task",
+        argNames: ["databasePath", "taskId"],
+      );
+
+  @override
   Future<WorkspaceSnapshot> crateApiWorkspaceDeleteMailAccount({
     required String databasePath,
     required String accountId,
@@ -466,7 +586,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 10,
             port: port_,
           );
         },
@@ -499,7 +619,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 8,
+              funcId: 11,
               port: port_,
             );
           },
@@ -538,7 +658,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 12,
             port: port_,
           );
         },
@@ -575,7 +695,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 13,
             port: port_,
           );
         },
@@ -612,7 +732,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 14,
             port: port_,
           );
         },
@@ -642,7 +762,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 15,
             port: port_,
           );
         },
@@ -678,7 +798,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 16,
             port: port_,
           );
         },
@@ -713,7 +833,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 17,
             port: port_,
           );
         },
@@ -746,7 +866,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 18,
             port: port_,
           );
         },
@@ -783,7 +903,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 19,
             port: port_,
           );
         },
@@ -818,7 +938,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 20,
             port: port_,
           );
         },
@@ -853,7 +973,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 21,
             port: port_,
           );
         },
@@ -888,7 +1008,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 22,
             port: port_,
           );
         },
@@ -923,7 +1043,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 23,
             port: port_,
           );
         },
@@ -958,7 +1078,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 24,
             port: port_,
           );
         },
@@ -993,7 +1113,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1028,7 +1148,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1065,7 +1185,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 27,
             port: port_,
           );
         },
@@ -1102,7 +1222,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1137,7 +1257,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 29,
             port: port_,
           );
         },
@@ -1174,7 +1294,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1213,7 +1333,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1248,7 +1368,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 32,
             port: port_,
           );
         },
@@ -1283,7 +1403,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 33,
             port: port_,
           );
         },
@@ -1316,7 +1436,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 34,
             port: port_,
           );
         },
@@ -1351,7 +1471,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 32,
+            funcId: 35,
             port: port_,
           );
         },
@@ -1386,7 +1506,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 36,
             port: port_,
           );
         },
@@ -1427,7 +1547,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 34,
+            funcId: 37,
             port: port_,
           );
         },
@@ -1470,7 +1590,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 35,
+            funcId: 38,
             port: port_,
           );
         },
@@ -1602,17 +1722,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int dco_decode_box_autoadd_u_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
+  }
+
+  @protected
   CalendarEventDto dco_decode_calendar_event_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 9)
+      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
     return CalendarEventDto(
       id: dco_decode_String(arr[0]),
       title: dco_decode_String(arr[1]),
       startsAtMs: dco_decode_i_64(arr[2]),
       endsAtMs: dco_decode_i_64(arr[3]),
-      location: dco_decode_opt_String(arr[4]),
+      allDay: dco_decode_bool(arr[4]),
+      location: dco_decode_opt_String(arr[5]),
+      description: dco_decode_opt_String(arr[6]),
+      reminderMinutesBefore: dco_decode_opt_box_autoadd_u_32(arr[7]),
+      reminderDismissed: dco_decode_bool(arr[8]),
+    );
+  }
+
+  @protected
+  ContactAddressDto dco_decode_contact_address_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return ContactAddressDto(
+      label: dco_decode_String(arr[0]),
+      street: dco_decode_String(arr[1]),
+      postalCode: dco_decode_String(arr[2]),
+      city: dco_decode_String(arr[3]),
+      country: dco_decode_String(arr[4]),
     );
   }
 
@@ -1620,12 +1765,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ContactDto dco_decode_contact_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 10)
+      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
     return ContactDto(
       id: dco_decode_String(arr[0]),
       name: dco_decode_String(arr[1]),
-      email: dco_decode_String(arr[2]),
+      company: dco_decode_opt_String(arr[2]),
+      jobTitle: dco_decode_opt_String(arr[3]),
+      emails: dco_decode_list_contact_email_dto(arr[4]),
+      phones: dco_decode_list_contact_phone_dto(arr[5]),
+      addresses: dco_decode_list_contact_address_dto(arr[6]),
+      birthday: dco_decode_opt_String(arr[7]),
+      website: dco_decode_opt_String(arr[8]),
+      notes: dco_decode_opt_String(arr[9]),
+    );
+  }
+
+  @protected
+  ContactEmailDto dco_decode_contact_email_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return ContactEmailDto(
+      label: dco_decode_String(arr[0]),
+      address: dco_decode_String(arr[1]),
+    );
+  }
+
+  @protected
+  ContactPhoneDto dco_decode_contact_phone_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return ContactPhoneDto(
+      label: dco_decode_String(arr[0]),
+      number: dco_decode_String(arr[1]),
     );
   }
 
@@ -1667,9 +1843,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<ContactAddressDto> dco_decode_list_contact_address_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_contact_address_dto).toList();
+  }
+
+  @protected
   List<ContactDto> dco_decode_list_contact_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_contact_dto).toList();
+  }
+
+  @protected
+  List<ContactEmailDto> dco_decode_list_contact_email_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_contact_email_dto).toList();
+  }
+
+  @protected
+  List<ContactPhoneDto> dco_decode_list_contact_phone_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_contact_phone_dto).toList();
   }
 
   @protected
@@ -1722,14 +1916,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalCalendarEventInput dco_decode_local_calendar_event_input(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 9)
+      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
     return LocalCalendarEventInput(
       id: dco_decode_String(arr[0]),
       title: dco_decode_String(arr[1]),
       startsAtMs: dco_decode_i_64(arr[2]),
       endsAtMs: dco_decode_i_64(arr[3]),
-      location: dco_decode_opt_String(arr[4]),
+      allDay: dco_decode_bool(arr[4]),
+      location: dco_decode_opt_String(arr[5]),
+      description: dco_decode_opt_String(arr[6]),
+      reminderMinutesBefore: dco_decode_opt_box_autoadd_u_32(arr[7]),
+      reminderDismissed: dco_decode_bool(arr[8]),
     );
   }
 
@@ -1737,12 +1935,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalContactInput dco_decode_local_contact_input(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 10)
+      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
     return LocalContactInput(
       id: dco_decode_String(arr[0]),
       name: dco_decode_String(arr[1]),
-      email: dco_decode_String(arr[2]),
+      company: dco_decode_opt_String(arr[2]),
+      jobTitle: dco_decode_opt_String(arr[3]),
+      emails: dco_decode_list_contact_email_dto(arr[4]),
+      phones: dco_decode_list_contact_phone_dto(arr[5]),
+      addresses: dco_decode_list_contact_address_dto(arr[6]),
+      birthday: dco_decode_opt_String(arr[7]),
+      website: dco_decode_opt_String(arr[8]),
+      notes: dco_decode_opt_String(arr[9]),
     );
   }
 
@@ -1780,13 +1985,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalTaskInput dco_decode_local_task_input(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 10)
+      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
     return LocalTaskInput(
       id: dco_decode_String(arr[0]),
       title: dco_decode_String(arr[1]),
-      dueAtMs: dco_decode_opt_box_autoadd_i_64(arr[2]),
-      completed: dco_decode_bool(arr[3]),
+      description: dco_decode_opt_String(arr[2]),
+      startsAtMs: dco_decode_opt_box_autoadd_i_64(arr[3]),
+      dueAtMs: dco_decode_opt_box_autoadd_i_64(arr[4]),
+      status: dco_decode_String(arr[5]),
+      priority: dco_decode_String(arr[6]),
+      reminderAtMs: dco_decode_opt_box_autoadd_i_64(arr[7]),
+      reminderDismissed: dco_decode_bool(arr[8]),
+      completedAtMs: dco_decode_opt_box_autoadd_i_64(arr[9]),
     );
   }
 
@@ -1968,6 +2179,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int? dco_decode_opt_box_autoadd_u_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_u_32(raw);
+  }
+
+  @protected
   OutgoingMessageInput dco_decode_outgoing_message_input(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -2020,13 +2237,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskDto dco_decode_task_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 10)
+      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
     return TaskDto(
       id: dco_decode_String(arr[0]),
       title: dco_decode_String(arr[1]),
-      dueAtMs: dco_decode_opt_box_autoadd_i_64(arr[2]),
-      completed: dco_decode_bool(arr[3]),
+      description: dco_decode_opt_String(arr[2]),
+      startsAtMs: dco_decode_opt_box_autoadd_i_64(arr[3]),
+      dueAtMs: dco_decode_opt_box_autoadd_i_64(arr[4]),
+      status: dco_decode_String(arr[5]),
+      priority: dco_decode_String(arr[6]),
+      reminderAtMs: dco_decode_opt_box_autoadd_i_64(arr[7]),
+      reminderDismissed: dco_decode_bool(arr[8]),
+      completedAtMs: dco_decode_opt_box_autoadd_i_64(arr[9]),
     );
   }
 
@@ -2216,19 +2439,54 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int sse_decode_box_autoadd_u_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_u_32(deserializer));
+  }
+
+  @protected
   CalendarEventDto sse_decode_calendar_event_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_String(deserializer);
     var var_title = sse_decode_String(deserializer);
     var var_startsAtMs = sse_decode_i_64(deserializer);
     var var_endsAtMs = sse_decode_i_64(deserializer);
+    var var_allDay = sse_decode_bool(deserializer);
     var var_location = sse_decode_opt_String(deserializer);
+    var var_description = sse_decode_opt_String(deserializer);
+    var var_reminderMinutesBefore = sse_decode_opt_box_autoadd_u_32(
+      deserializer,
+    );
+    var var_reminderDismissed = sse_decode_bool(deserializer);
     return CalendarEventDto(
       id: var_id,
       title: var_title,
       startsAtMs: var_startsAtMs,
       endsAtMs: var_endsAtMs,
+      allDay: var_allDay,
       location: var_location,
+      description: var_description,
+      reminderMinutesBefore: var_reminderMinutesBefore,
+      reminderDismissed: var_reminderDismissed,
+    );
+  }
+
+  @protected
+  ContactAddressDto sse_decode_contact_address_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_label = sse_decode_String(deserializer);
+    var var_street = sse_decode_String(deserializer);
+    var var_postalCode = sse_decode_String(deserializer);
+    var var_city = sse_decode_String(deserializer);
+    var var_country = sse_decode_String(deserializer);
+    return ContactAddressDto(
+      label: var_label,
+      street: var_street,
+      postalCode: var_postalCode,
+      city: var_city,
+      country: var_country,
     );
   }
 
@@ -2237,8 +2495,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_String(deserializer);
     var var_name = sse_decode_String(deserializer);
-    var var_email = sse_decode_String(deserializer);
-    return ContactDto(id: var_id, name: var_name, email: var_email);
+    var var_company = sse_decode_opt_String(deserializer);
+    var var_jobTitle = sse_decode_opt_String(deserializer);
+    var var_emails = sse_decode_list_contact_email_dto(deserializer);
+    var var_phones = sse_decode_list_contact_phone_dto(deserializer);
+    var var_addresses = sse_decode_list_contact_address_dto(deserializer);
+    var var_birthday = sse_decode_opt_String(deserializer);
+    var var_website = sse_decode_opt_String(deserializer);
+    var var_notes = sse_decode_opt_String(deserializer);
+    return ContactDto(
+      id: var_id,
+      name: var_name,
+      company: var_company,
+      jobTitle: var_jobTitle,
+      emails: var_emails,
+      phones: var_phones,
+      addresses: var_addresses,
+      birthday: var_birthday,
+      website: var_website,
+      notes: var_notes,
+    );
+  }
+
+  @protected
+  ContactEmailDto sse_decode_contact_email_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_label = sse_decode_String(deserializer);
+    var var_address = sse_decode_String(deserializer);
+    return ContactEmailDto(label: var_label, address: var_address);
+  }
+
+  @protected
+  ContactPhoneDto sse_decode_contact_phone_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_label = sse_decode_String(deserializer);
+    var var_number = sse_decode_String(deserializer);
+    return ContactPhoneDto(label: var_label, number: var_number);
   }
 
   @protected
@@ -2293,6 +2585,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<ContactAddressDto> sse_decode_list_contact_address_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ContactAddressDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_contact_address_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<ContactDto> sse_decode_list_contact_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -2300,6 +2606,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <ContactDto>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_contact_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<ContactEmailDto> sse_decode_list_contact_email_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ContactEmailDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_contact_email_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<ContactPhoneDto> sse_decode_list_contact_phone_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ContactPhoneDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_contact_phone_dto(deserializer));
     }
     return ans_;
   }
@@ -2398,13 +2732,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_title = sse_decode_String(deserializer);
     var var_startsAtMs = sse_decode_i_64(deserializer);
     var var_endsAtMs = sse_decode_i_64(deserializer);
+    var var_allDay = sse_decode_bool(deserializer);
     var var_location = sse_decode_opt_String(deserializer);
+    var var_description = sse_decode_opt_String(deserializer);
+    var var_reminderMinutesBefore = sse_decode_opt_box_autoadd_u_32(
+      deserializer,
+    );
+    var var_reminderDismissed = sse_decode_bool(deserializer);
     return LocalCalendarEventInput(
       id: var_id,
       title: var_title,
       startsAtMs: var_startsAtMs,
       endsAtMs: var_endsAtMs,
+      allDay: var_allDay,
       location: var_location,
+      description: var_description,
+      reminderMinutesBefore: var_reminderMinutesBefore,
+      reminderDismissed: var_reminderDismissed,
     );
   }
 
@@ -2415,8 +2759,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_String(deserializer);
     var var_name = sse_decode_String(deserializer);
-    var var_email = sse_decode_String(deserializer);
-    return LocalContactInput(id: var_id, name: var_name, email: var_email);
+    var var_company = sse_decode_opt_String(deserializer);
+    var var_jobTitle = sse_decode_opt_String(deserializer);
+    var var_emails = sse_decode_list_contact_email_dto(deserializer);
+    var var_phones = sse_decode_list_contact_phone_dto(deserializer);
+    var var_addresses = sse_decode_list_contact_address_dto(deserializer);
+    var var_birthday = sse_decode_opt_String(deserializer);
+    var var_website = sse_decode_opt_String(deserializer);
+    var var_notes = sse_decode_opt_String(deserializer);
+    return LocalContactInput(
+      id: var_id,
+      name: var_name,
+      company: var_company,
+      jobTitle: var_jobTitle,
+      emails: var_emails,
+      phones: var_phones,
+      addresses: var_addresses,
+      birthday: var_birthday,
+      website: var_website,
+      notes: var_notes,
+    );
   }
 
   @protected
@@ -2473,13 +2835,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_String(deserializer);
     var var_title = sse_decode_String(deserializer);
+    var var_description = sse_decode_opt_String(deserializer);
+    var var_startsAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     var var_dueAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
-    var var_completed = sse_decode_bool(deserializer);
+    var var_status = sse_decode_String(deserializer);
+    var var_priority = sse_decode_String(deserializer);
+    var var_reminderAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_reminderDismissed = sse_decode_bool(deserializer);
+    var var_completedAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     return LocalTaskInput(
       id: var_id,
       title: var_title,
+      description: var_description,
+      startsAtMs: var_startsAtMs,
       dueAtMs: var_dueAtMs,
-      completed: var_completed,
+      status: var_status,
+      priority: var_priority,
+      reminderAtMs: var_reminderAtMs,
+      reminderDismissed: var_reminderDismissed,
+      completedAtMs: var_completedAtMs,
     );
   }
 
@@ -2742,6 +3116,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_u_32(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   OutgoingMessageInput sse_decode_outgoing_message_input(
     SseDeserializer deserializer,
   ) {
@@ -2804,13 +3189,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_String(deserializer);
     var var_title = sse_decode_String(deserializer);
+    var var_description = sse_decode_opt_String(deserializer);
+    var var_startsAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     var var_dueAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
-    var var_completed = sse_decode_bool(deserializer);
+    var var_status = sse_decode_String(deserializer);
+    var var_priority = sse_decode_String(deserializer);
+    var var_reminderAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_reminderDismissed = sse_decode_bool(deserializer);
+    var var_completedAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     return TaskDto(
       id: var_id,
       title: var_title,
+      description: var_description,
+      startsAtMs: var_startsAtMs,
       dueAtMs: var_dueAtMs,
-      completed: var_completed,
+      status: var_status,
+      priority: var_priority,
+      reminderAtMs: var_reminderAtMs,
+      reminderDismissed: var_reminderDismissed,
+      completedAtMs: var_completedAtMs,
     );
   }
 
@@ -3034,6 +3431,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_32(self, serializer);
+  }
+
+  @protected
   void sse_encode_calendar_event_dto(
     CalendarEventDto self,
     SseSerializer serializer,
@@ -3043,7 +3446,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.title, serializer);
     sse_encode_i_64(self.startsAtMs, serializer);
     sse_encode_i_64(self.endsAtMs, serializer);
+    sse_encode_bool(self.allDay, serializer);
     sse_encode_opt_String(self.location, serializer);
+    sse_encode_opt_String(self.description, serializer);
+    sse_encode_opt_box_autoadd_u_32(self.reminderMinutesBefore, serializer);
+    sse_encode_bool(self.reminderDismissed, serializer);
+  }
+
+  @protected
+  void sse_encode_contact_address_dto(
+    ContactAddressDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.label, serializer);
+    sse_encode_String(self.street, serializer);
+    sse_encode_String(self.postalCode, serializer);
+    sse_encode_String(self.city, serializer);
+    sse_encode_String(self.country, serializer);
   }
 
   @protected
@@ -3051,7 +3471,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.id, serializer);
     sse_encode_String(self.name, serializer);
-    sse_encode_String(self.email, serializer);
+    sse_encode_opt_String(self.company, serializer);
+    sse_encode_opt_String(self.jobTitle, serializer);
+    sse_encode_list_contact_email_dto(self.emails, serializer);
+    sse_encode_list_contact_phone_dto(self.phones, serializer);
+    sse_encode_list_contact_address_dto(self.addresses, serializer);
+    sse_encode_opt_String(self.birthday, serializer);
+    sse_encode_opt_String(self.website, serializer);
+    sse_encode_opt_String(self.notes, serializer);
+  }
+
+  @protected
+  void sse_encode_contact_email_dto(
+    ContactEmailDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.label, serializer);
+    sse_encode_String(self.address, serializer);
+  }
+
+  @protected
+  void sse_encode_contact_phone_dto(
+    ContactPhoneDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.label, serializer);
+    sse_encode_String(self.number, serializer);
   }
 
   @protected
@@ -3096,6 +3543,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_contact_address_dto(
+    List<ContactAddressDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_contact_address_dto(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_contact_dto(
     List<ContactDto> self,
     SseSerializer serializer,
@@ -3104,6 +3563,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_contact_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_contact_email_dto(
+    List<ContactEmailDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_contact_email_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_contact_phone_dto(
+    List<ContactPhoneDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_contact_phone_dto(item, serializer);
     }
   }
 
@@ -3196,7 +3679,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.title, serializer);
     sse_encode_i_64(self.startsAtMs, serializer);
     sse_encode_i_64(self.endsAtMs, serializer);
+    sse_encode_bool(self.allDay, serializer);
     sse_encode_opt_String(self.location, serializer);
+    sse_encode_opt_String(self.description, serializer);
+    sse_encode_opt_box_autoadd_u_32(self.reminderMinutesBefore, serializer);
+    sse_encode_bool(self.reminderDismissed, serializer);
   }
 
   @protected
@@ -3207,7 +3694,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.id, serializer);
     sse_encode_String(self.name, serializer);
-    sse_encode_String(self.email, serializer);
+    sse_encode_opt_String(self.company, serializer);
+    sse_encode_opt_String(self.jobTitle, serializer);
+    sse_encode_list_contact_email_dto(self.emails, serializer);
+    sse_encode_list_contact_phone_dto(self.phones, serializer);
+    sse_encode_list_contact_address_dto(self.addresses, serializer);
+    sse_encode_opt_String(self.birthday, serializer);
+    sse_encode_opt_String(self.website, serializer);
+    sse_encode_opt_String(self.notes, serializer);
   }
 
   @protected
@@ -3246,8 +3740,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.id, serializer);
     sse_encode_String(self.title, serializer);
+    sse_encode_opt_String(self.description, serializer);
+    sse_encode_opt_box_autoadd_i_64(self.startsAtMs, serializer);
     sse_encode_opt_box_autoadd_i_64(self.dueAtMs, serializer);
-    sse_encode_bool(self.completed, serializer);
+    sse_encode_String(self.status, serializer);
+    sse_encode_String(self.priority, serializer);
+    sse_encode_opt_box_autoadd_i_64(self.reminderAtMs, serializer);
+    sse_encode_bool(self.reminderDismissed, serializer);
+    sse_encode_opt_box_autoadd_i_64(self.completedAtMs, serializer);
   }
 
   @protected
@@ -3436,6 +3936,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_u_32(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_outgoing_message_input(
     OutgoingMessageInput self,
     SseSerializer serializer,
@@ -3483,8 +3993,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.id, serializer);
     sse_encode_String(self.title, serializer);
+    sse_encode_opt_String(self.description, serializer);
+    sse_encode_opt_box_autoadd_i_64(self.startsAtMs, serializer);
     sse_encode_opt_box_autoadd_i_64(self.dueAtMs, serializer);
-    sse_encode_bool(self.completed, serializer);
+    sse_encode_String(self.status, serializer);
+    sse_encode_String(self.priority, serializer);
+    sse_encode_opt_box_autoadd_i_64(self.reminderAtMs, serializer);
+    sse_encode_bool(self.reminderDismissed, serializer);
+    sse_encode_opt_box_autoadd_i_64(self.completedAtMs, serializer);
   }
 
   @protected

@@ -13,9 +13,10 @@ use maicenta_application::{
     SecretStore, WorkspaceStore,
 };
 use maicenta_domain::{
-    AccountId, AttachmentId, CalendarEvent, Contact, MailAccount, MailAddress, MailProvider,
-    Mailbox, MailboxId, MailboxRole, MessageAttachment, MessageBody, MessageFlag, MessageId,
-    MessageRecipients, MessageSummary, TaskItem, TransportSecurity, WorkspaceItemId,
+    AccountId, AttachmentId, CalendarEvent, Contact, ContactEmail, ContactLabel, ContactPhone,
+    MailAccount, MailAddress, MailProvider, Mailbox, MailboxId, MailboxRole, MessageAttachment,
+    MessageBody, MessageFlag, MessageId, MessageRecipients, MessageSummary, PostalAddress,
+    TaskItem, TaskPriority, TaskStatus, TransportSecurity, WorkspaceItemId,
 };
 use maicenta_graph_connector::{
     GraphDraftIdentity, GraphDraftOperation, GraphMailboxCheckpoint, GraphMessage, GraphMutation,
@@ -454,25 +455,72 @@ pub struct MailboxIdleDto {
     pub changed: bool,
 }
 
+/// One local calendar event. `all_day` events carry local midnight
+/// boundaries; `reminder_minutes_before` is `None` without a reminder.
 pub struct CalendarEventDto {
     pub id: String,
     pub title: String,
     pub starts_at_ms: i64,
     pub ends_at_ms: i64,
+    pub all_day: bool,
     pub location: Option<String>,
+    pub description: Option<String>,
+    pub reminder_minutes_before: Option<u32>,
+    pub reminder_dismissed: bool,
 }
 
+/// One local task. `status` is one of `not_started`, `in_progress`,
+/// `waiting`, `deferred`, `completed`; `priority` is `low`, `normal`, or
+/// `high`.
 pub struct TaskDto {
     pub id: String,
     pub title: String,
+    pub description: Option<String>,
+    pub starts_at_ms: Option<i64>,
     pub due_at_ms: Option<i64>,
-    pub completed: bool,
+    pub status: String,
+    pub priority: String,
+    pub reminder_at_ms: Option<i64>,
+    pub reminder_dismissed: bool,
+    pub completed_at_ms: Option<i64>,
 }
 
+/// One labelled contact email address. `label` is one of `work`, `home`,
+/// `mobile`, `fax`, `other`.
+pub struct ContactEmailDto {
+    pub label: String,
+    pub address: String,
+}
+
+/// One labelled contact phone number; labels as in [`ContactEmailDto`].
+pub struct ContactPhoneDto {
+    pub label: String,
+    pub number: String,
+}
+
+/// One labelled postal address; labels as in [`ContactEmailDto`]. Lines may
+/// be empty, at least one is filled.
+pub struct ContactAddressDto {
+    pub label: String,
+    pub street: String,
+    pub postal_code: String,
+    pub city: String,
+    pub country: String,
+}
+
+/// One local contact with all stored details. `birthday` is an ISO 8601
+/// calendar date (`YYYY-MM-DD`).
 pub struct ContactDto {
     pub id: String,
     pub name: String,
-    pub email: String,
+    pub company: Option<String>,
+    pub job_title: Option<String>,
+    pub emails: Vec<ContactEmailDto>,
+    pub phones: Vec<ContactPhoneDto>,
+    pub addresses: Vec<ContactAddressDto>,
+    pub birthday: Option<String>,
+    pub website: Option<String>,
+    pub notes: Option<String>,
 }
 
 /// One additional sender address of an account. Used in snapshots and in
@@ -527,25 +575,46 @@ pub struct LocalMessageInput {
     pub has_attachment: bool,
 }
 
+/// User-supplied calendar event; fields as in [`CalendarEventDto`].
 pub struct LocalCalendarEventInput {
     pub id: String,
     pub title: String,
     pub starts_at_ms: i64,
     pub ends_at_ms: i64,
+    pub all_day: bool,
     pub location: Option<String>,
+    pub description: Option<String>,
+    pub reminder_minutes_before: Option<u32>,
+    pub reminder_dismissed: bool,
 }
 
+/// User-supplied task; fields as in [`TaskDto`].
 pub struct LocalTaskInput {
     pub id: String,
     pub title: String,
+    pub description: Option<String>,
+    pub starts_at_ms: Option<i64>,
     pub due_at_ms: Option<i64>,
-    pub completed: bool,
+    pub status: String,
+    pub priority: String,
+    pub reminder_at_ms: Option<i64>,
+    pub reminder_dismissed: bool,
+    pub completed_at_ms: Option<i64>,
 }
 
+/// User-supplied contact; fields as in [`ContactDto`]. Blank optional
+/// fields are stored as absent, blank detail rows are dropped.
 pub struct LocalContactInput {
     pub id: String,
     pub name: String,
-    pub email: String,
+    pub company: Option<String>,
+    pub job_title: Option<String>,
+    pub emails: Vec<ContactEmailDto>,
+    pub phones: Vec<ContactPhoneDto>,
+    pub addresses: Vec<ContactAddressDto>,
+    pub birthday: Option<String>,
+    pub website: Option<String>,
+    pub notes: Option<String>,
 }
 
 /// Complete user-supplied account configuration. `password` is accepted only
@@ -1614,16 +1683,43 @@ pub fn save_local_calendar_event(
     database_path: String,
     input: LocalCalendarEventInput,
 ) -> Result<(), String> {
-    let title = validated_text(input.title, "calendar title", 200)?;
+    if input.ends_at_ms <= input.starts_at_ms {
+        return Err("calendar event must end after it starts".into());
+    }
+    if input
+        .reminder_minutes_before
+        .is_some_and(|minutes| minutes > MAX_REMINDER_MINUTES)
+    {
+        return Err(format!(
+            "reminder may be at most {MAX_REMINDER_MINUTES} minutes before the start"
+        ));
+    }
     let event = CalendarEvent {
         id: WorkspaceItemId::parse(input.id).map_err(|error| error.to_string())?,
-        title,
+        title: validated_text(input.title, "calendar title", 200)?,
         starts_at_ms: input.starts_at_ms,
         ends_at_ms: input.ends_at_ms,
-        location: input.location.filter(|value| !value.trim().is_empty()),
+        all_day: input.all_day,
+        location: optional_text(input.location, "location", 500)?,
+        description: optional_text(input.description, "description", MAX_NOTES_LENGTH)?,
+        reminder_minutes_before: input.reminder_minutes_before,
+        reminder_dismissed: input.reminder_dismissed,
     };
     open_profile_store(database_path)?
         .save_calendar_event(&event)
+        .map_err(|error| error.to_string())
+}
+
+/// Removes a local calendar event.
+///
+/// # Errors
+///
+/// Returns an error when the identifier is invalid or unknown, or the change
+/// cannot be committed.
+pub fn delete_local_calendar_event(database_path: String, event_id: String) -> Result<(), String> {
+    let event_id = WorkspaceItemId::parse(event_id).map_err(|error| error.to_string())?;
+    open_profile_store(database_path)?
+        .delete_calendar_event(&event_id)
         .map_err(|error| error.to_string())
 }
 
@@ -1633,32 +1729,132 @@ pub fn save_local_calendar_event(
 ///
 /// Returns a validation or storage error when the task cannot be committed.
 pub fn save_local_task(database_path: String, input: LocalTaskInput) -> Result<(), String> {
+    if let (Some(starts_at_ms), Some(due_at_ms)) = (input.starts_at_ms, input.due_at_ms) {
+        if due_at_ms < starts_at_ms {
+            return Err("task must not be due before it starts".into());
+        }
+    }
     let task = TaskItem {
         id: WorkspaceItemId::parse(input.id).map_err(|error| error.to_string())?,
         title: validated_text(input.title, "task title", 200)?,
+        description: optional_text(input.description, "description", MAX_NOTES_LENGTH)?,
+        starts_at_ms: input.starts_at_ms,
         due_at_ms: input.due_at_ms,
-        completed: input.completed,
+        status: parse_task_status(&input.status)?,
+        priority: parse_task_priority(&input.priority)?,
+        reminder_at_ms: input.reminder_at_ms,
+        reminder_dismissed: input.reminder_dismissed,
+        completed_at_ms: input.completed_at_ms,
     };
     open_profile_store(database_path)?
         .save_task(&task)
         .map_err(|error| error.to_string())
 }
 
-/// Creates or updates a local contact.
+/// Removes a local task.
+///
+/// # Errors
+///
+/// Returns an error when the identifier is invalid or unknown, or the change
+/// cannot be committed.
+pub fn delete_local_task(database_path: String, task_id: String) -> Result<(), String> {
+    let task_id = WorkspaceItemId::parse(task_id).map_err(|error| error.to_string())?;
+    open_profile_store(database_path)?
+        .delete_task(&task_id)
+        .map_err(|error| error.to_string())
+}
+
+/// Creates or updates a local contact with all its details.
 ///
 /// # Errors
 ///
 /// Returns a validation or storage error when the contact cannot be committed.
 pub fn save_local_contact(database_path: String, input: LocalContactInput) -> Result<(), String> {
-    let name = validated_text(input.name, "contact name", 200)?;
+    if input.emails.len() > MAX_CONTACT_DETAILS
+        || input.phones.len() > MAX_CONTACT_DETAILS
+        || input.addresses.len() > MAX_CONTACT_DETAILS
+    {
+        return Err(format!(
+            "a contact may hold at most {MAX_CONTACT_DETAILS} entries per detail kind"
+        ));
+    }
+    let emails = input
+        .emails
+        .into_iter()
+        .filter(|email| !email.address.trim().is_empty())
+        .map(|email| {
+            Ok(ContactEmail {
+                label: parse_contact_label(&email.label)?,
+                address: MailAddress::new(email.address.trim(), None)
+                    .map_err(|error| error.to_string())?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let phones = input
+        .phones
+        .into_iter()
+        .filter(|phone| !phone.number.trim().is_empty())
+        .map(|phone| {
+            Ok(ContactPhone {
+                label: parse_contact_label(&phone.label)?,
+                number: validated_text(phone.number, "phone number", 60)?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let addresses = input
+        .addresses
+        .into_iter()
+        .map(|address| {
+            Ok(PostalAddress {
+                label: parse_contact_label(&address.label)?,
+                street: bounded_line(address.street, "street", 200)?,
+                postal_code: bounded_line(address.postal_code, "postal code", 40)?,
+                city: bounded_line(address.city, "city", 200)?,
+                country: bounded_line(address.country, "country", 200)?,
+            })
+        })
+        .filter(|address| {
+            address.as_ref().is_ok_and(|address: &PostalAddress| {
+                !(address.street.is_empty()
+                    && address.postal_code.is_empty()
+                    && address.city.is_empty()
+                    && address.country.is_empty())
+            }) || address.is_err()
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let birthday = optional_text(input.birthday, "birthday", 10)?;
+    if let Some(birthday) = &birthday {
+        if !is_iso_calendar_date(birthday) {
+            return Err("birthday must be an ISO 8601 calendar date (YYYY-MM-DD)".into());
+        }
+    }
     let contact = Contact {
         id: WorkspaceItemId::parse(input.id).map_err(|error| error.to_string())?,
-        email: MailAddress::new(input.email, Some(name.clone()))
-            .map_err(|error| error.to_string())?,
-        name,
+        name: validated_text(input.name, "contact name", 200)?,
+        company: optional_text(input.company, "company", 200)?,
+        job_title: optional_text(input.job_title, "job title", 200)?,
+        emails,
+        phones,
+        addresses,
+        birthday,
+        website: optional_text(input.website, "website", 500)?,
+        notes: optional_text(input.notes, "notes", MAX_NOTES_LENGTH)?,
     };
     open_profile_store(database_path)?
         .save_contact(&contact)
+        .map_err(|error| error.to_string())
+}
+
+/// Removes a local contact and all its details.
+///
+/// # Errors
+///
+/// Returns an error when the identifier is invalid or unknown, or the change
+/// cannot be committed.
+pub fn delete_local_contact(database_path: String, contact_id: String) -> Result<(), String> {
+    let contact_id = WorkspaceItemId::parse(contact_id).map_err(|error| error.to_string())?;
+    open_profile_store(database_path)?
+        .delete_contact(&contact_id)
         .map_err(|error| error.to_string())
 }
 
@@ -3299,6 +3495,111 @@ fn validated_server_name(value: String, field: &str) -> Result<String, String> {
     }
 }
 
+/// Longest free-text note accepted for events, tasks, and contacts.
+const MAX_NOTES_LENGTH: usize = 10_000;
+/// Longest reminder lead time: four weeks.
+const MAX_REMINDER_MINUTES: u32 = 40_320;
+/// Email addresses, phone numbers, or postal addresses per contact.
+const MAX_CONTACT_DETAILS: usize = 10;
+
+/// Trims an optional text and treats a blank value as absent.
+fn optional_text(
+    value: Option<String>,
+    field: &str,
+    maximum: usize,
+) -> Result<Option<String>, String> {
+    match value {
+        Some(value) if !value.trim().is_empty() => validated_text(value, field, maximum).map(Some),
+        _ => Ok(None),
+    }
+}
+
+/// Trims one line of a postal address; blank lines are kept as empty.
+fn bounded_line(value: String, field: &str, maximum: usize) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.chars().count() > maximum {
+        return Err(format!("{field} must contain at most {maximum} characters"));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn is_iso_calendar_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    let digits = |range: std::ops::Range<usize>| {
+        value[range.clone()]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+    };
+    if !(digits(0..4) && digits(5..7) && digits(8..10)) {
+        return false;
+    }
+    let month: u32 = value[5..7].parse().unwrap_or(0);
+    let day: u32 = value[8..10].parse().unwrap_or(0);
+    (1..=12).contains(&month) && (1..=31).contains(&day)
+}
+
+fn parse_task_status(value: &str) -> Result<TaskStatus, String> {
+    match value {
+        "not_started" => Ok(TaskStatus::NotStarted),
+        "in_progress" => Ok(TaskStatus::InProgress),
+        "waiting" => Ok(TaskStatus::Waiting),
+        "deferred" => Ok(TaskStatus::Deferred),
+        "completed" => Ok(TaskStatus::Completed),
+        other => Err(format!("unknown task status {other}")),
+    }
+}
+
+fn task_status_key(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::NotStarted => "not_started",
+        TaskStatus::InProgress => "in_progress",
+        TaskStatus::Waiting => "waiting",
+        TaskStatus::Deferred => "deferred",
+        TaskStatus::Completed => "completed",
+    }
+}
+
+fn parse_task_priority(value: &str) -> Result<TaskPriority, String> {
+    match value {
+        "low" => Ok(TaskPriority::Low),
+        "normal" => Ok(TaskPriority::Normal),
+        "high" => Ok(TaskPriority::High),
+        other => Err(format!("unknown task priority {other}")),
+    }
+}
+
+fn task_priority_key(priority: TaskPriority) -> &'static str {
+    match priority {
+        TaskPriority::Low => "low",
+        TaskPriority::Normal => "normal",
+        TaskPriority::High => "high",
+    }
+}
+
+fn parse_contact_label(value: &str) -> Result<ContactLabel, String> {
+    match value {
+        "work" => Ok(ContactLabel::Work),
+        "home" => Ok(ContactLabel::Home),
+        "mobile" => Ok(ContactLabel::Mobile),
+        "fax" => Ok(ContactLabel::Fax),
+        "other" => Ok(ContactLabel::Other),
+        other => Err(format!("unknown contact label {other}")),
+    }
+}
+
+fn contact_label_key(label: ContactLabel) -> &'static str {
+    match label {
+        ContactLabel::Work => "work",
+        ContactLabel::Home => "home",
+        ContactLabel::Mobile => "mobile",
+        ContactLabel::Fax => "fax",
+        ContactLabel::Other => "other",
+    }
+}
+
 fn validated_text(value: String, field: &str, maximum: usize) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed.chars().count() > maximum {
@@ -3616,7 +3917,11 @@ fn calendar_event_dto(event: CalendarEvent) -> CalendarEventDto {
         title: event.title,
         starts_at_ms: event.starts_at_ms,
         ends_at_ms: event.ends_at_ms,
+        all_day: event.all_day,
         location: event.location,
+        description: event.description,
+        reminder_minutes_before: event.reminder_minutes_before,
+        reminder_dismissed: event.reminder_dismissed,
     }
 }
 
@@ -3624,8 +3929,14 @@ fn task_dto(task: TaskItem) -> TaskDto {
     TaskDto {
         id: task.id.to_string(),
         title: task.title,
+        description: task.description,
+        starts_at_ms: task.starts_at_ms,
         due_at_ms: task.due_at_ms,
-        completed: task.completed,
+        status: task_status_key(task.status).to_owned(),
+        priority: task_priority_key(task.priority).to_owned(),
+        reminder_at_ms: task.reminder_at_ms,
+        reminder_dismissed: task.reminder_dismissed,
+        completed_at_ms: task.completed_at_ms,
     }
 }
 
@@ -3633,7 +3944,38 @@ fn contact_dto(contact: Contact) -> ContactDto {
     ContactDto {
         id: contact.id.to_string(),
         name: contact.name,
-        email: contact.email.address().to_owned(),
+        company: contact.company,
+        job_title: contact.job_title,
+        emails: contact
+            .emails
+            .into_iter()
+            .map(|email| ContactEmailDto {
+                label: contact_label_key(email.label).to_owned(),
+                address: email.address.address().to_owned(),
+            })
+            .collect(),
+        phones: contact
+            .phones
+            .into_iter()
+            .map(|phone| ContactPhoneDto {
+                label: contact_label_key(phone.label).to_owned(),
+                number: phone.number,
+            })
+            .collect(),
+        addresses: contact
+            .addresses
+            .into_iter()
+            .map(|address| ContactAddressDto {
+                label: contact_label_key(address.label).to_owned(),
+                street: address.street,
+                postal_code: address.postal_code,
+                city: address.city,
+                country: address.country,
+            })
+            .collect(),
+        birthday: contact.birthday,
+        website: contact.website,
+        notes: contact.notes,
     }
 }
 
@@ -3836,10 +4178,12 @@ mod tests {
     };
 
     use super::{
-        ACCOUNT_PASSWORD_KEY, LocalCalendarEventInput, LocalContactInput, LocalMessageInput,
-        LocalTaskInput, MICROSOFT_TOKEN_ENDPOINT, MailAccountInput, OAUTH_REFRESH_TOKEN_KEY,
-        OAuthTokenInput, attachment_content_type, attachment_object_path, cache_remote_message,
-        create_local_mailbox, delete_local_mailbox, export_local_attachment, export_profile,
+        ACCOUNT_PASSWORD_KEY, ContactAddressDto, ContactEmailDto, ContactPhoneDto,
+        LocalCalendarEventInput, LocalContactInput, LocalMessageInput, LocalTaskInput,
+        MICROSOFT_TOKEN_ENDPOINT, MailAccountInput, OAUTH_REFRESH_TOKEN_KEY, OAuthTokenInput,
+        attachment_content_type, attachment_object_path, cache_remote_message,
+        create_local_mailbox, delete_local_calendar_event, delete_local_contact,
+        delete_local_mailbox, delete_local_task, export_local_attachment, export_profile,
         import_profile, load_mailbox_messages, load_outgoing_attachments, mail_account_from_input,
         open_profile_store, open_workspace, remote_mailbox_id, remote_message_id,
         rename_local_mailbox, save_collapsed_mailboxes, save_dark_mode, save_favorite_mailboxes,
@@ -4251,7 +4595,11 @@ mod tests {
                 title: "Bridge-Termin".into(),
                 starts_at_ms: 1_785_830_400_000,
                 ends_at_ms: 1_785_834_000_000,
+                all_day: false,
                 location: Some("Lokal".into()),
+                description: Some("  Agenda  ".into()),
+                reminder_minutes_before: Some(30),
+                reminder_dismissed: false,
             },
         )
         .expect("save event");
@@ -4260,8 +4608,14 @@ mod tests {
             LocalTaskInput {
                 id: "local.task.bridge".into(),
                 title: "Bridge-Aufgabe".into(),
-                due_at_ms: None,
-                completed: true,
+                description: None,
+                starts_at_ms: None,
+                due_at_ms: Some(1_785_916_800_000),
+                status: "completed".into(),
+                priority: "high".into(),
+                reminder_at_ms: Some(1_785_900_000_000),
+                reminder_dismissed: true,
+                completed_at_ms: Some(1_785_910_000_000),
             },
         )
         .expect("save task");
@@ -4270,30 +4624,109 @@ mod tests {
             LocalContactInput {
                 id: "local.contact.bridge".into(),
                 name: "Bridge Kontakt".into(),
-                email: "bridge@example.org".into(),
+                company: Some("Beispiel GmbH".into()),
+                job_title: Some(" ".into()),
+                emails: vec![
+                    ContactEmailDto {
+                        label: "work".into(),
+                        address: " bridge@example.org ".into(),
+                    },
+                    ContactEmailDto {
+                        label: "home".into(),
+                        address: String::new(),
+                    },
+                ],
+                phones: vec![ContactPhoneDto {
+                    label: "mobile".into(),
+                    number: "+49 170 1234567".into(),
+                }],
+                addresses: vec![
+                    ContactAddressDto {
+                        label: "work".into(),
+                        street: "Musterstraße 1".into(),
+                        postal_code: "12345".into(),
+                        city: "Berlin".into(),
+                        country: String::new(),
+                    },
+                    ContactAddressDto {
+                        label: "home".into(),
+                        street: String::new(),
+                        postal_code: String::new(),
+                        city: String::new(),
+                        country: String::new(),
+                    },
+                ],
+                birthday: Some("1980-05-17".into()),
+                website: None,
+                notes: Some("Notiz".into()),
             },
         )
         .expect("save contact");
 
-        let restarted = open_workspace(database_path).expect("restart workspace");
+        let restarted = open_workspace(database_path.clone()).expect("restart workspace");
+        let event = restarted
+            .calendar_events
+            .iter()
+            .find(|event| event.id == "local.event.bridge")
+            .expect("event");
+        assert_eq!(event.description.as_deref(), Some("Agenda"));
+        assert_eq!(event.reminder_minutes_before, Some(30));
+        let task = restarted
+            .tasks
+            .iter()
+            .find(|task| task.id == "local.task.bridge")
+            .expect("task");
+        assert_eq!(task.status, "completed");
+        assert_eq!(task.priority, "high");
+        assert!(task.reminder_dismissed);
+        let contact = restarted
+            .contacts
+            .iter()
+            .find(|contact| contact.id == "local.contact.bridge")
+            .expect("contact");
+        assert_eq!(contact.company.as_deref(), Some("Beispiel GmbH"));
+        assert_eq!(contact.job_title, None, "blank optional text is dropped");
+        assert_eq!(contact.emails.len(), 1, "blank email rows are dropped");
+        assert_eq!(contact.emails[0].address, "bridge@example.org");
+        assert_eq!(contact.emails[0].label, "work");
+        assert_eq!(contact.phones.len(), 1);
+        assert_eq!(contact.addresses.len(), 1, "blank address rows are dropped");
+        assert_eq!(contact.addresses[0].city, "Berlin");
+        assert_eq!(contact.birthday.as_deref(), Some("1980-05-17"));
+
         assert!(
-            restarted
-                .calendar_events
-                .iter()
-                .any(|event| event.id == "local.event.bridge")
+            save_local_contact(
+                database_path.clone(),
+                LocalContactInput {
+                    id: "local.contact.invalid".into(),
+                    name: "Ungültig".into(),
+                    company: None,
+                    job_title: None,
+                    emails: Vec::new(),
+                    phones: Vec::new(),
+                    addresses: Vec::new(),
+                    birthday: Some("17.05.1980".into()),
+                    website: None,
+                    notes: None,
+                },
+            )
+            .is_err(),
+            "non-ISO birthdays are rejected"
         );
+
+        delete_local_calendar_event(database_path.clone(), "local.event.bridge".into())
+            .expect("delete event");
+        delete_local_task(database_path.clone(), "local.task.bridge".into()).expect("delete task");
+        delete_local_contact(database_path.clone(), "local.contact.bridge".into())
+            .expect("delete contact");
         assert!(
-            restarted
-                .tasks
-                .iter()
-                .any(|task| task.id == "local.task.bridge" && task.completed)
+            delete_local_contact(database_path.clone(), "local.contact.bridge".into()).is_err(),
+            "deleting twice reports the missing contact"
         );
-        assert!(
-            restarted
-                .contacts
-                .iter()
-                .any(|contact| contact.email == "bridge@example.org")
-        );
+        let emptied = open_workspace(database_path).expect("workspace after deletes");
+        assert!(emptied.calendar_events.is_empty());
+        assert!(emptied.tasks.is_empty());
+        assert!(emptied.contacts.is_empty());
 
         for suffix in ["", "-shm", "-wal"] {
             let _ = fs::remove_file(format!("{}{suffix}", path.display()));

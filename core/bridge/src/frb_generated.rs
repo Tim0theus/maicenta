@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -714880088;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 59163550;
 
 // Section: executor
 
@@ -220,6 +220,80 @@ fn wire__crate__api__workspace__create_local_mailbox_impl(
         },
     )
 }
+fn wire__crate__api__workspace__delete_local_calendar_event_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "delete_local_calendar_event",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_database_path = <String>::sse_decode(&mut deserializer);
+            let api_event_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::workspace::delete_local_calendar_event(
+                        api_database_path,
+                        api_event_id,
+                    )?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__workspace__delete_local_contact_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "delete_local_contact",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_database_path = <String>::sse_decode(&mut deserializer);
+            let api_contact_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::workspace::delete_local_contact(
+                        api_database_path,
+                        api_contact_id,
+                    )?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__workspace__delete_local_mailbox_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -253,6 +327,41 @@ fn wire__crate__api__workspace__delete_local_mailbox_impl(
                         api_mailbox_id,
                         api_fallback_mailbox_id,
                     )?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__workspace__delete_local_task_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "delete_local_task",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_database_path = <String>::sse_decode(&mut deserializer);
+            let api_task_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::workspace::delete_local_task(api_database_path, api_task_id)?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -1442,13 +1551,39 @@ impl SseDecode for crate::api::workspace::CalendarEventDto {
         let mut var_title = <String>::sse_decode(deserializer);
         let mut var_startsAtMs = <i64>::sse_decode(deserializer);
         let mut var_endsAtMs = <i64>::sse_decode(deserializer);
+        let mut var_allDay = <bool>::sse_decode(deserializer);
         let mut var_location = <Option<String>>::sse_decode(deserializer);
+        let mut var_description = <Option<String>>::sse_decode(deserializer);
+        let mut var_reminderMinutesBefore = <Option<u32>>::sse_decode(deserializer);
+        let mut var_reminderDismissed = <bool>::sse_decode(deserializer);
         return crate::api::workspace::CalendarEventDto {
             id: var_id,
             title: var_title,
             starts_at_ms: var_startsAtMs,
             ends_at_ms: var_endsAtMs,
+            all_day: var_allDay,
             location: var_location,
+            description: var_description,
+            reminder_minutes_before: var_reminderMinutesBefore,
+            reminder_dismissed: var_reminderDismissed,
+        };
+    }
+}
+
+impl SseDecode for crate::api::workspace::ContactAddressDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_label = <String>::sse_decode(deserializer);
+        let mut var_street = <String>::sse_decode(deserializer);
+        let mut var_postalCode = <String>::sse_decode(deserializer);
+        let mut var_city = <String>::sse_decode(deserializer);
+        let mut var_country = <String>::sse_decode(deserializer);
+        return crate::api::workspace::ContactAddressDto {
+            label: var_label,
+            street: var_street,
+            postal_code: var_postalCode,
+            city: var_city,
+            country: var_country,
         };
     }
 }
@@ -1458,11 +1593,52 @@ impl SseDecode for crate::api::workspace::ContactDto {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
         let mut var_name = <String>::sse_decode(deserializer);
-        let mut var_email = <String>::sse_decode(deserializer);
+        let mut var_company = <Option<String>>::sse_decode(deserializer);
+        let mut var_jobTitle = <Option<String>>::sse_decode(deserializer);
+        let mut var_emails =
+            <Vec<crate::api::workspace::ContactEmailDto>>::sse_decode(deserializer);
+        let mut var_phones =
+            <Vec<crate::api::workspace::ContactPhoneDto>>::sse_decode(deserializer);
+        let mut var_addresses =
+            <Vec<crate::api::workspace::ContactAddressDto>>::sse_decode(deserializer);
+        let mut var_birthday = <Option<String>>::sse_decode(deserializer);
+        let mut var_website = <Option<String>>::sse_decode(deserializer);
+        let mut var_notes = <Option<String>>::sse_decode(deserializer);
         return crate::api::workspace::ContactDto {
             id: var_id,
             name: var_name,
-            email: var_email,
+            company: var_company,
+            job_title: var_jobTitle,
+            emails: var_emails,
+            phones: var_phones,
+            addresses: var_addresses,
+            birthday: var_birthday,
+            website: var_website,
+            notes: var_notes,
+        };
+    }
+}
+
+impl SseDecode for crate::api::workspace::ContactEmailDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_label = <String>::sse_decode(deserializer);
+        let mut var_address = <String>::sse_decode(deserializer);
+        return crate::api::workspace::ContactEmailDto {
+            label: var_label,
+            address: var_address,
+        };
+    }
+}
+
+impl SseDecode for crate::api::workspace::ContactPhoneDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_label = <String>::sse_decode(deserializer);
+        let mut var_number = <String>::sse_decode(deserializer);
+        return crate::api::workspace::ContactPhoneDto {
+            label: var_label,
+            number: var_number,
         };
     }
 }
@@ -1521,6 +1697,20 @@ impl SseDecode for Vec<crate::api::workspace::CalendarEventDto> {
     }
 }
 
+impl SseDecode for Vec<crate::api::workspace::ContactAddressDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::workspace::ContactAddressDto>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<crate::api::workspace::ContactDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1528,6 +1718,34 @@ impl SseDecode for Vec<crate::api::workspace::ContactDto> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<crate::api::workspace::ContactDto>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::workspace::ContactEmailDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::workspace::ContactEmailDto>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::workspace::ContactPhoneDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::workspace::ContactPhoneDto>::sse_decode(
                 deserializer,
             ));
         }
@@ -1636,13 +1854,21 @@ impl SseDecode for crate::api::workspace::LocalCalendarEventInput {
         let mut var_title = <String>::sse_decode(deserializer);
         let mut var_startsAtMs = <i64>::sse_decode(deserializer);
         let mut var_endsAtMs = <i64>::sse_decode(deserializer);
+        let mut var_allDay = <bool>::sse_decode(deserializer);
         let mut var_location = <Option<String>>::sse_decode(deserializer);
+        let mut var_description = <Option<String>>::sse_decode(deserializer);
+        let mut var_reminderMinutesBefore = <Option<u32>>::sse_decode(deserializer);
+        let mut var_reminderDismissed = <bool>::sse_decode(deserializer);
         return crate::api::workspace::LocalCalendarEventInput {
             id: var_id,
             title: var_title,
             starts_at_ms: var_startsAtMs,
             ends_at_ms: var_endsAtMs,
+            all_day: var_allDay,
             location: var_location,
+            description: var_description,
+            reminder_minutes_before: var_reminderMinutesBefore,
+            reminder_dismissed: var_reminderDismissed,
         };
     }
 }
@@ -1652,11 +1878,28 @@ impl SseDecode for crate::api::workspace::LocalContactInput {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
         let mut var_name = <String>::sse_decode(deserializer);
-        let mut var_email = <String>::sse_decode(deserializer);
+        let mut var_company = <Option<String>>::sse_decode(deserializer);
+        let mut var_jobTitle = <Option<String>>::sse_decode(deserializer);
+        let mut var_emails =
+            <Vec<crate::api::workspace::ContactEmailDto>>::sse_decode(deserializer);
+        let mut var_phones =
+            <Vec<crate::api::workspace::ContactPhoneDto>>::sse_decode(deserializer);
+        let mut var_addresses =
+            <Vec<crate::api::workspace::ContactAddressDto>>::sse_decode(deserializer);
+        let mut var_birthday = <Option<String>>::sse_decode(deserializer);
+        let mut var_website = <Option<String>>::sse_decode(deserializer);
+        let mut var_notes = <Option<String>>::sse_decode(deserializer);
         return crate::api::workspace::LocalContactInput {
             id: var_id,
             name: var_name,
-            email: var_email,
+            company: var_company,
+            job_title: var_jobTitle,
+            emails: var_emails,
+            phones: var_phones,
+            addresses: var_addresses,
+            birthday: var_birthday,
+            website: var_website,
+            notes: var_notes,
         };
     }
 }
@@ -1714,13 +1957,25 @@ impl SseDecode for crate::api::workspace::LocalTaskInput {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
         let mut var_title = <String>::sse_decode(deserializer);
+        let mut var_description = <Option<String>>::sse_decode(deserializer);
+        let mut var_startsAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_dueAtMs = <Option<i64>>::sse_decode(deserializer);
-        let mut var_completed = <bool>::sse_decode(deserializer);
+        let mut var_status = <String>::sse_decode(deserializer);
+        let mut var_priority = <String>::sse_decode(deserializer);
+        let mut var_reminderAtMs = <Option<i64>>::sse_decode(deserializer);
+        let mut var_reminderDismissed = <bool>::sse_decode(deserializer);
+        let mut var_completedAtMs = <Option<i64>>::sse_decode(deserializer);
         return crate::api::workspace::LocalTaskInput {
             id: var_id,
             title: var_title,
+            description: var_description,
+            starts_at_ms: var_startsAtMs,
             due_at_ms: var_dueAtMs,
-            completed: var_completed,
+            status: var_status,
+            priority: var_priority,
+            reminder_at_ms: var_reminderAtMs,
+            reminder_dismissed: var_reminderDismissed,
+            completed_at_ms: var_completedAtMs,
         };
     }
 }
@@ -1991,6 +2246,17 @@ impl SseDecode for Option<crate::api::updates::ReleaseNoticeDto> {
     }
 }
 
+impl SseDecode for Option<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<u32>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for crate::api::workspace::OutgoingMessageInput {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2058,13 +2324,25 @@ impl SseDecode for crate::api::workspace::TaskDto {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
         let mut var_title = <String>::sse_decode(deserializer);
+        let mut var_description = <Option<String>>::sse_decode(deserializer);
+        let mut var_startsAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_dueAtMs = <Option<i64>>::sse_decode(deserializer);
-        let mut var_completed = <bool>::sse_decode(deserializer);
+        let mut var_status = <String>::sse_decode(deserializer);
+        let mut var_priority = <String>::sse_decode(deserializer);
+        let mut var_reminderAtMs = <Option<i64>>::sse_decode(deserializer);
+        let mut var_reminderDismissed = <bool>::sse_decode(deserializer);
+        let mut var_completedAtMs = <Option<i64>>::sse_decode(deserializer);
         return crate::api::workspace::TaskDto {
             id: var_id,
             title: var_title,
+            description: var_description,
+            starts_at_ms: var_startsAtMs,
             due_at_ms: var_dueAtMs,
-            completed: var_completed,
+            status: var_status,
+            priority: var_priority,
+            reminder_at_ms: var_reminderAtMs,
+            reminder_dismissed: var_reminderDismissed,
+            completed_at_ms: var_completedAtMs,
         };
     }
 }
@@ -2174,126 +2452,143 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        6 => wire__crate__api__workspace__delete_local_mailbox_impl(
+        6 => wire__crate__api__workspace__delete_local_calendar_event_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        7 => {
+        7 => wire__crate__api__workspace__delete_local_contact_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        8 => wire__crate__api__workspace__delete_local_mailbox_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        9 => wire__crate__api__workspace__delete_local_task_impl(port, ptr, rust_vec_len, data_len),
+        10 => {
             wire__crate__api__workspace__delete_mail_account_impl(port, ptr, rust_vec_len, data_len)
         }
-        8 => wire__crate__api__updates__download_app_update_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__workspace__export_attachment_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__workspace__export_profile_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__workspace__import_profile_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__workspace__init_app_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__workspace__load_mailbox_messages_impl(
+        11 => {
+            wire__crate__api__updates__download_app_update_impl(port, ptr, rust_vec_len, data_len)
+        }
+        12 => {
+            wire__crate__api__workspace__export_attachment_impl(port, ptr, rust_vec_len, data_len)
+        }
+        13 => wire__crate__api__workspace__export_profile_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__workspace__import_profile_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__workspace__init_app_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__workspace__load_mailbox_messages_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        14 => wire__crate__api__workspace__load_remote_message_content_impl(
+        17 => wire__crate__api__workspace__load_remote_message_content_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        15 => wire__crate__api__workspace__open_workspace_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__workspace__rename_local_mailbox_impl(
+        18 => wire__crate__api__workspace__open_workspace_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__workspace__rename_local_mailbox_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        17 => wire__crate__api__workspace__save_collapsed_mailboxes_impl(
+        20 => wire__crate__api__workspace__save_collapsed_mailboxes_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        18 => wire__crate__api__workspace__save_dark_mode_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__workspace__save_favorite_mailboxes_impl(
+        21 => wire__crate__api__workspace__save_dark_mode_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__workspace__save_favorite_mailboxes_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        20 => wire__crate__api__workspace__save_local_calendar_event_impl(
+        23 => wire__crate__api__workspace__save_local_calendar_event_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        21 => {
+        24 => {
             wire__crate__api__workspace__save_local_contact_impl(port, ptr, rust_vec_len, data_len)
         }
-        22 => {
+        25 => {
             wire__crate__api__workspace__save_local_message_impl(port, ptr, rust_vec_len, data_len)
         }
-        23 => wire__crate__api__workspace__save_local_task_impl(port, ptr, rust_vec_len, data_len),
-        24 => {
+        26 => wire__crate__api__workspace__save_local_task_impl(port, ptr, rust_vec_len, data_len),
+        27 => {
             wire__crate__api__workspace__save_mail_account_impl(port, ptr, rust_vec_len, data_len)
         }
-        25 => wire__crate__api__workspace__save_mail_account_aliases_impl(
+        28 => wire__crate__api__workspace__save_mail_account_aliases_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        26 => {
+        29 => {
             wire__crate__api__workspace__save_mailbox_order_impl(port, ptr, rust_vec_len, data_len)
         }
-        27 => wire__crate__api__workspace__save_oauth_mail_account_impl(
+        30 => wire__crate__api__workspace__save_oauth_mail_account_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__workspace__search_profile_messages_impl(
+        31 => wire__crate__api__workspace__search_profile_messages_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        29 => wire__crate__api__workspace__send_account_message_impl(
+        32 => wire__crate__api__workspace__send_account_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        30 => wire__crate__api__workspace__synchronize_mail_account_drafts_impl(
+        33 => wire__crate__api__workspace__synchronize_mail_account_drafts_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        31 => wire__crate__api__workspace__synchronize_mail_accounts_impl(
+        34 => wire__crate__api__workspace__synchronize_mail_accounts_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        32 => wire__crate__api__workspace__test_mail_account_connection_impl(
+        35 => wire__crate__api__workspace__test_mail_account_connection_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        33 => wire__crate__api__workspace__test_oauth_mail_account_connection_impl(
+        36 => wire__crate__api__workspace__test_oauth_mail_account_connection_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        34 => wire__crate__api__workspace__update_local_message_impl(
+        37 => wire__crate__api__workspace__update_local_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        35 => wire__crate__api__workspace__wait_for_mailbox_idle_change_impl(
+        38 => wire__crate__api__workspace__wait_for_mailbox_idle_change_impl(
             port,
             ptr,
             rust_vec_len,
@@ -2349,7 +2644,11 @@ impl flutter_rust_bridge::IntoDart for crate::api::workspace::CalendarEventDto {
             self.title.into_into_dart().into_dart(),
             self.starts_at_ms.into_into_dart().into_dart(),
             self.ends_at_ms.into_into_dart().into_dart(),
+            self.all_day.into_into_dart().into_dart(),
             self.location.into_into_dart().into_dart(),
+            self.description.into_into_dart().into_dart(),
+            self.reminder_minutes_before.into_into_dart().into_dart(),
+            self.reminder_dismissed.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2366,12 +2665,43 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::workspace::CalendarEventDto>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::workspace::ContactAddressDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.label.into_into_dart().into_dart(),
+            self.street.into_into_dart().into_dart(),
+            self.postal_code.into_into_dart().into_dart(),
+            self.city.into_into_dart().into_dart(),
+            self.country.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::workspace::ContactAddressDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::workspace::ContactAddressDto>
+    for crate::api::workspace::ContactAddressDto
+{
+    fn into_into_dart(self) -> crate::api::workspace::ContactAddressDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::workspace::ContactDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.id.into_into_dart().into_dart(),
             self.name.into_into_dart().into_dart(),
-            self.email.into_into_dart().into_dart(),
+            self.company.into_into_dart().into_dart(),
+            self.job_title.into_into_dart().into_dart(),
+            self.emails.into_into_dart().into_dart(),
+            self.phones.into_into_dart().into_dart(),
+            self.addresses.into_into_dart().into_dart(),
+            self.birthday.into_into_dart().into_dart(),
+            self.website.into_into_dart().into_dart(),
+            self.notes.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2384,6 +2714,48 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::workspace::ContactDto>
     for crate::api::workspace::ContactDto
 {
     fn into_into_dart(self) -> crate::api::workspace::ContactDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::workspace::ContactEmailDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.label.into_into_dart().into_dart(),
+            self.address.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::workspace::ContactEmailDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::workspace::ContactEmailDto>
+    for crate::api::workspace::ContactEmailDto
+{
+    fn into_into_dart(self) -> crate::api::workspace::ContactEmailDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::workspace::ContactPhoneDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.label.into_into_dart().into_dart(),
+            self.number.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::workspace::ContactPhoneDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::workspace::ContactPhoneDto>
+    for crate::api::workspace::ContactPhoneDto
+{
+    fn into_into_dart(self) -> crate::api::workspace::ContactPhoneDto {
         self
     }
 }
@@ -2417,7 +2789,11 @@ impl flutter_rust_bridge::IntoDart for crate::api::workspace::LocalCalendarEvent
             self.title.into_into_dart().into_dart(),
             self.starts_at_ms.into_into_dart().into_dart(),
             self.ends_at_ms.into_into_dart().into_dart(),
+            self.all_day.into_into_dart().into_dart(),
             self.location.into_into_dart().into_dart(),
+            self.description.into_into_dart().into_dart(),
+            self.reminder_minutes_before.into_into_dart().into_dart(),
+            self.reminder_dismissed.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2439,7 +2815,14 @@ impl flutter_rust_bridge::IntoDart for crate::api::workspace::LocalContactInput 
         [
             self.id.into_into_dart().into_dart(),
             self.name.into_into_dart().into_dart(),
-            self.email.into_into_dart().into_dart(),
+            self.company.into_into_dart().into_dart(),
+            self.job_title.into_into_dart().into_dart(),
+            self.emails.into_into_dart().into_dart(),
+            self.phones.into_into_dart().into_dart(),
+            self.addresses.into_into_dart().into_dart(),
+            self.birthday.into_into_dart().into_dart(),
+            self.website.into_into_dart().into_dart(),
+            self.notes.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2500,8 +2883,14 @@ impl flutter_rust_bridge::IntoDart for crate::api::workspace::LocalTaskInput {
         [
             self.id.into_into_dart().into_dart(),
             self.title.into_into_dart().into_dart(),
+            self.description.into_into_dart().into_dart(),
+            self.starts_at_ms.into_into_dart().into_dart(),
             self.due_at_ms.into_into_dart().into_dart(),
-            self.completed.into_into_dart().into_dart(),
+            self.status.into_into_dart().into_dart(),
+            self.priority.into_into_dart().into_dart(),
+            self.reminder_at_ms.into_into_dart().into_dart(),
+            self.reminder_dismissed.into_into_dart().into_dart(),
+            self.completed_at_ms.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2805,8 +3194,14 @@ impl flutter_rust_bridge::IntoDart for crate::api::workspace::TaskDto {
         [
             self.id.into_into_dart().into_dart(),
             self.title.into_into_dart().into_dart(),
+            self.description.into_into_dart().into_dart(),
+            self.starts_at_ms.into_into_dart().into_dart(),
             self.due_at_ms.into_into_dart().into_dart(),
-            self.completed.into_into_dart().into_dart(),
+            self.status.into_into_dart().into_dart(),
+            self.priority.into_into_dart().into_dart(),
+            self.reminder_at_ms.into_into_dart().into_dart(),
+            self.reminder_dismissed.into_into_dart().into_dart(),
+            self.completed_at_ms.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2907,7 +3302,22 @@ impl SseEncode for crate::api::workspace::CalendarEventDto {
         <String>::sse_encode(self.title, serializer);
         <i64>::sse_encode(self.starts_at_ms, serializer);
         <i64>::sse_encode(self.ends_at_ms, serializer);
+        <bool>::sse_encode(self.all_day, serializer);
         <Option<String>>::sse_encode(self.location, serializer);
+        <Option<String>>::sse_encode(self.description, serializer);
+        <Option<u32>>::sse_encode(self.reminder_minutes_before, serializer);
+        <bool>::sse_encode(self.reminder_dismissed, serializer);
+    }
+}
+
+impl SseEncode for crate::api::workspace::ContactAddressDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.label, serializer);
+        <String>::sse_encode(self.street, serializer);
+        <String>::sse_encode(self.postal_code, serializer);
+        <String>::sse_encode(self.city, serializer);
+        <String>::sse_encode(self.country, serializer);
     }
 }
 
@@ -2916,7 +3326,30 @@ impl SseEncode for crate::api::workspace::ContactDto {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
         <String>::sse_encode(self.name, serializer);
-        <String>::sse_encode(self.email, serializer);
+        <Option<String>>::sse_encode(self.company, serializer);
+        <Option<String>>::sse_encode(self.job_title, serializer);
+        <Vec<crate::api::workspace::ContactEmailDto>>::sse_encode(self.emails, serializer);
+        <Vec<crate::api::workspace::ContactPhoneDto>>::sse_encode(self.phones, serializer);
+        <Vec<crate::api::workspace::ContactAddressDto>>::sse_encode(self.addresses, serializer);
+        <Option<String>>::sse_encode(self.birthday, serializer);
+        <Option<String>>::sse_encode(self.website, serializer);
+        <Option<String>>::sse_encode(self.notes, serializer);
+    }
+}
+
+impl SseEncode for crate::api::workspace::ContactEmailDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.label, serializer);
+        <String>::sse_encode(self.address, serializer);
+    }
+}
+
+impl SseEncode for crate::api::workspace::ContactPhoneDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.label, serializer);
+        <String>::sse_encode(self.number, serializer);
     }
 }
 
@@ -2963,12 +3396,42 @@ impl SseEncode for Vec<crate::api::workspace::CalendarEventDto> {
     }
 }
 
+impl SseEncode for Vec<crate::api::workspace::ContactAddressDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::workspace::ContactAddressDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<crate::api::workspace::ContactDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::api::workspace::ContactDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::workspace::ContactEmailDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::workspace::ContactEmailDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::workspace::ContactPhoneDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::workspace::ContactPhoneDto>::sse_encode(item, serializer);
         }
     }
 }
@@ -3050,7 +3513,11 @@ impl SseEncode for crate::api::workspace::LocalCalendarEventInput {
         <String>::sse_encode(self.title, serializer);
         <i64>::sse_encode(self.starts_at_ms, serializer);
         <i64>::sse_encode(self.ends_at_ms, serializer);
+        <bool>::sse_encode(self.all_day, serializer);
         <Option<String>>::sse_encode(self.location, serializer);
+        <Option<String>>::sse_encode(self.description, serializer);
+        <Option<u32>>::sse_encode(self.reminder_minutes_before, serializer);
+        <bool>::sse_encode(self.reminder_dismissed, serializer);
     }
 }
 
@@ -3059,7 +3526,14 @@ impl SseEncode for crate::api::workspace::LocalContactInput {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
         <String>::sse_encode(self.name, serializer);
-        <String>::sse_encode(self.email, serializer);
+        <Option<String>>::sse_encode(self.company, serializer);
+        <Option<String>>::sse_encode(self.job_title, serializer);
+        <Vec<crate::api::workspace::ContactEmailDto>>::sse_encode(self.emails, serializer);
+        <Vec<crate::api::workspace::ContactPhoneDto>>::sse_encode(self.phones, serializer);
+        <Vec<crate::api::workspace::ContactAddressDto>>::sse_encode(self.addresses, serializer);
+        <Option<String>>::sse_encode(self.birthday, serializer);
+        <Option<String>>::sse_encode(self.website, serializer);
+        <Option<String>>::sse_encode(self.notes, serializer);
     }
 }
 
@@ -3094,8 +3568,14 @@ impl SseEncode for crate::api::workspace::LocalTaskInput {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
         <String>::sse_encode(self.title, serializer);
+        <Option<String>>::sse_encode(self.description, serializer);
+        <Option<i64>>::sse_encode(self.starts_at_ms, serializer);
         <Option<i64>>::sse_encode(self.due_at_ms, serializer);
-        <bool>::sse_encode(self.completed, serializer);
+        <String>::sse_encode(self.status, serializer);
+        <String>::sse_encode(self.priority, serializer);
+        <Option<i64>>::sse_encode(self.reminder_at_ms, serializer);
+        <bool>::sse_encode(self.reminder_dismissed, serializer);
+        <Option<i64>>::sse_encode(self.completed_at_ms, serializer);
     }
 }
 
@@ -3267,6 +3747,16 @@ impl SseEncode for Option<crate::api::updates::ReleaseNoticeDto> {
     }
 }
 
+impl SseEncode for Option<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <u32>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for crate::api::workspace::OutgoingMessageInput {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -3309,8 +3799,14 @@ impl SseEncode for crate::api::workspace::TaskDto {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
         <String>::sse_encode(self.title, serializer);
+        <Option<String>>::sse_encode(self.description, serializer);
+        <Option<i64>>::sse_encode(self.starts_at_ms, serializer);
         <Option<i64>>::sse_encode(self.due_at_ms, serializer);
-        <bool>::sse_encode(self.completed, serializer);
+        <String>::sse_encode(self.status, serializer);
+        <String>::sse_encode(self.priority, serializer);
+        <Option<i64>>::sse_encode(self.reminder_at_ms, serializer);
+        <bool>::sse_encode(self.reminder_dismissed, serializer);
+        <Option<i64>>::sse_encode(self.completed_at_ms, serializer);
     }
 }
 

@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `attachment_content_type`, `attachment_object_path`, `cache_remote_message`, `calendar_event_dto`, `cleanup_import_backups`, `compact_preview`, `connector_credential`, `contact_dto`, `copy_local_attachment`, `current_timestamp_ms`, `draft_recipient_list`, `imap_identities`, `import_backup_path`, `install_staged_profile`, `load_account_credential`, `load_outgoing_attachments`, `load_snapshot`, `load_stored_outgoing_attachments`, `local_mailbox`, `mail_account_dto`, `mail_account_from_input`, `mail_provider_name`, `mailbox_dto`, `mailbox_role_name`, `message_dto`, `message_dtos`, `migrate_legacy_credentials`, `oauth_access_token`, `open_profile_store`, `parse_mail_provider`, `parse_transport_security`, `persist_attachment_objects`, `plain_text_as_html`, `profile_object_root`, `profile_vault`, `remote_mailbox_id`, `remote_message_id`, `remove_attachment_objects`, `remove_oauth_secrets`, `replace_cached_vault`, `required_secret`, `rollback_imported_profile`, `seed_local_area`, `sender_aliases_from_input`, `synchronize_account`, `synchronize_graph_account`, `synchronize_imap_account`, `synchronize_pending_drafts`, `synchronized_draft_ids`, `task_dto`, `transport_security_name`, `validate_combined_outgoing_attachments`, `validate_draft_metadata`, `validate_oauth_provider_for_account`, `validate_oauth_token_endpoint`, `validate_oauth_token_input`, `validate_outgoing_attachment_set`, `validated_display_name`, `validated_server_name`, `validated_text`, `welcome_message`, `write_exported_attachment`
+// These functions are ignored because they are not marked as `pub`: `attachment_content_type`, `attachment_object_path`, `bounded_line`, `cache_remote_message`, `calendar_event_dto`, `cleanup_import_backups`, `compact_preview`, `connector_credential`, `contact_dto`, `contact_label_key`, `copy_local_attachment`, `current_timestamp_ms`, `draft_recipient_list`, `imap_identities`, `import_backup_path`, `install_staged_profile`, `is_iso_calendar_date`, `load_account_credential`, `load_outgoing_attachments`, `load_snapshot`, `load_stored_outgoing_attachments`, `local_mailbox`, `mail_account_dto`, `mail_account_from_input`, `mail_provider_name`, `mailbox_dto`, `mailbox_role_name`, `message_dto`, `message_dtos`, `migrate_legacy_credentials`, `oauth_access_token`, `open_profile_store`, `optional_text`, `parse_contact_label`, `parse_mail_provider`, `parse_task_priority`, `parse_task_status`, `parse_transport_security`, `persist_attachment_objects`, `plain_text_as_html`, `profile_object_root`, `profile_vault`, `remote_mailbox_id`, `remote_message_id`, `remove_attachment_objects`, `remove_oauth_secrets`, `replace_cached_vault`, `required_secret`, `rollback_imported_profile`, `seed_local_area`, `sender_aliases_from_input`, `synchronize_account`, `synchronize_graph_account`, `synchronize_imap_account`, `synchronize_pending_drafts`, `synchronized_draft_ids`, `task_dto`, `task_priority_key`, `task_status_key`, `transport_security_name`, `validate_combined_outgoing_attachments`, `validate_draft_metadata`, `validate_oauth_provider_for_account`, `validate_oauth_token_endpoint`, `validate_oauth_token_input`, `validate_outgoing_attachment_set`, `validated_display_name`, `validated_server_name`, `validated_text`, `welcome_message`, `write_exported_attachment`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AccountSyncReport`, `CachedRemoteInput`, `PendingDraftUpload`, `RemoteAttachmentDescriptor`, `StoredMailCredential`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `from`, `from`
 
@@ -319,6 +319,20 @@ Future<void> saveLocalCalendarEvent({
   input: input,
 );
 
+/// Removes a local calendar event.
+///
+/// # Errors
+///
+/// Returns an error when the identifier is invalid or unknown, or the change
+/// cannot be committed.
+Future<void> deleteLocalCalendarEvent({
+  required String databasePath,
+  required String eventId,
+}) => RustLib.instance.api.crateApiWorkspaceDeleteLocalCalendarEvent(
+  databasePath: databasePath,
+  eventId: eventId,
+);
+
 /// Creates or updates a local task.
 ///
 /// # Errors
@@ -332,7 +346,21 @@ Future<void> saveLocalTask({
   input: input,
 );
 
-/// Creates or updates a local contact.
+/// Removes a local task.
+///
+/// # Errors
+///
+/// Returns an error when the identifier is invalid or unknown, or the change
+/// cannot be committed.
+Future<void> deleteLocalTask({
+  required String databasePath,
+  required String taskId,
+}) => RustLib.instance.api.crateApiWorkspaceDeleteLocalTask(
+  databasePath: databasePath,
+  taskId: taskId,
+);
+
+/// Creates or updates a local contact with all its details.
 ///
 /// # Errors
 ///
@@ -343,6 +371,20 @@ Future<void> saveLocalContact({
 }) => RustLib.instance.api.crateApiWorkspaceSaveLocalContact(
   databasePath: databasePath,
   input: input,
+);
+
+/// Removes a local contact and all its details.
+///
+/// # Errors
+///
+/// Returns an error when the identifier is invalid or unknown, or the change
+/// cannot be committed.
+Future<void> deleteLocalContact({
+  required String databasePath,
+  required String contactId,
+}) => RustLib.instance.api.crateApiWorkspaceDeleteLocalContact(
+  databasePath: databasePath,
+  contactId: contactId,
 );
 
 /// Saves account configuration and places its password inside the encrypted
@@ -479,19 +521,29 @@ Future<String> sendAccountMessage({
   input: input,
 );
 
+/// One local calendar event. `all_day` events carry local midnight
+/// boundaries; `reminder_minutes_before` is `None` without a reminder.
 class CalendarEventDto {
   final String id;
   final String title;
   final PlatformInt64 startsAtMs;
   final PlatformInt64 endsAtMs;
+  final bool allDay;
   final String? location;
+  final String? description;
+  final int? reminderMinutesBefore;
+  final bool reminderDismissed;
 
   const CalendarEventDto({
     required this.id,
     required this.title,
     required this.startsAtMs,
     required this.endsAtMs,
+    required this.allDay,
     this.location,
+    this.description,
+    this.reminderMinutesBefore,
+    required this.reminderDismissed,
   });
 
   @override
@@ -500,7 +552,11 @@ class CalendarEventDto {
       title.hashCode ^
       startsAtMs.hashCode ^
       endsAtMs.hashCode ^
-      location.hashCode;
+      allDay.hashCode ^
+      location.hashCode ^
+      description.hashCode ^
+      reminderMinutesBefore.hashCode ^
+      reminderDismissed.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -511,18 +567,89 @@ class CalendarEventDto {
           title == other.title &&
           startsAtMs == other.startsAtMs &&
           endsAtMs == other.endsAtMs &&
-          location == other.location;
+          allDay == other.allDay &&
+          location == other.location &&
+          description == other.description &&
+          reminderMinutesBefore == other.reminderMinutesBefore &&
+          reminderDismissed == other.reminderDismissed;
 }
 
+/// One labelled postal address; labels as in [`ContactEmailDto`]. Lines may
+/// be empty, at least one is filled.
+class ContactAddressDto {
+  final String label;
+  final String street;
+  final String postalCode;
+  final String city;
+  final String country;
+
+  const ContactAddressDto({
+    required this.label,
+    required this.street,
+    required this.postalCode,
+    required this.city,
+    required this.country,
+  });
+
+  @override
+  int get hashCode =>
+      label.hashCode ^
+      street.hashCode ^
+      postalCode.hashCode ^
+      city.hashCode ^
+      country.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ContactAddressDto &&
+          runtimeType == other.runtimeType &&
+          label == other.label &&
+          street == other.street &&
+          postalCode == other.postalCode &&
+          city == other.city &&
+          country == other.country;
+}
+
+/// One local contact with all stored details. `birthday` is an ISO 8601
+/// calendar date (`YYYY-MM-DD`).
 class ContactDto {
   final String id;
   final String name;
-  final String email;
+  final String? company;
+  final String? jobTitle;
+  final List<ContactEmailDto> emails;
+  final List<ContactPhoneDto> phones;
+  final List<ContactAddressDto> addresses;
+  final String? birthday;
+  final String? website;
+  final String? notes;
 
-  const ContactDto({required this.id, required this.name, required this.email});
+  const ContactDto({
+    required this.id,
+    required this.name,
+    this.company,
+    this.jobTitle,
+    required this.emails,
+    required this.phones,
+    required this.addresses,
+    this.birthday,
+    this.website,
+    this.notes,
+  });
 
   @override
-  int get hashCode => id.hashCode ^ name.hashCode ^ email.hashCode;
+  int get hashCode =>
+      id.hashCode ^
+      name.hashCode ^
+      company.hashCode ^
+      jobTitle.hashCode ^
+      emails.hashCode ^
+      phones.hashCode ^
+      addresses.hashCode ^
+      birthday.hashCode ^
+      website.hashCode ^
+      notes.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -531,7 +658,53 @@ class ContactDto {
           runtimeType == other.runtimeType &&
           id == other.id &&
           name == other.name &&
-          email == other.email;
+          company == other.company &&
+          jobTitle == other.jobTitle &&
+          emails == other.emails &&
+          phones == other.phones &&
+          addresses == other.addresses &&
+          birthday == other.birthday &&
+          website == other.website &&
+          notes == other.notes;
+}
+
+/// One labelled contact email address. `label` is one of `work`, `home`,
+/// `mobile`, `fax`, `other`.
+class ContactEmailDto {
+  final String label;
+  final String address;
+
+  const ContactEmailDto({required this.label, required this.address});
+
+  @override
+  int get hashCode => label.hashCode ^ address.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ContactEmailDto &&
+          runtimeType == other.runtimeType &&
+          label == other.label &&
+          address == other.address;
+}
+
+/// One labelled contact phone number; labels as in [`ContactEmailDto`].
+class ContactPhoneDto {
+  final String label;
+  final String number;
+
+  const ContactPhoneDto({required this.label, required this.number});
+
+  @override
+  int get hashCode => label.hashCode ^ number.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ContactPhoneDto &&
+          runtimeType == other.runtimeType &&
+          label == other.label &&
+          number == other.number;
 }
 
 /// Result of pushing the durable draft queue for one account.
@@ -560,19 +733,28 @@ class DraftSyncDto {
           warnings == other.warnings;
 }
 
+/// User-supplied calendar event; fields as in [`CalendarEventDto`].
 class LocalCalendarEventInput {
   final String id;
   final String title;
   final PlatformInt64 startsAtMs;
   final PlatformInt64 endsAtMs;
+  final bool allDay;
   final String? location;
+  final String? description;
+  final int? reminderMinutesBefore;
+  final bool reminderDismissed;
 
   const LocalCalendarEventInput({
     required this.id,
     required this.title,
     required this.startsAtMs,
     required this.endsAtMs,
+    required this.allDay,
     this.location,
+    this.description,
+    this.reminderMinutesBefore,
+    required this.reminderDismissed,
   });
 
   @override
@@ -581,7 +763,11 @@ class LocalCalendarEventInput {
       title.hashCode ^
       startsAtMs.hashCode ^
       endsAtMs.hashCode ^
-      location.hashCode;
+      allDay.hashCode ^
+      location.hashCode ^
+      description.hashCode ^
+      reminderMinutesBefore.hashCode ^
+      reminderDismissed.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -592,22 +778,52 @@ class LocalCalendarEventInput {
           title == other.title &&
           startsAtMs == other.startsAtMs &&
           endsAtMs == other.endsAtMs &&
-          location == other.location;
+          allDay == other.allDay &&
+          location == other.location &&
+          description == other.description &&
+          reminderMinutesBefore == other.reminderMinutesBefore &&
+          reminderDismissed == other.reminderDismissed;
 }
 
+/// User-supplied contact; fields as in [`ContactDto`]. Blank optional
+/// fields are stored as absent, blank detail rows are dropped.
 class LocalContactInput {
   final String id;
   final String name;
-  final String email;
+  final String? company;
+  final String? jobTitle;
+  final List<ContactEmailDto> emails;
+  final List<ContactPhoneDto> phones;
+  final List<ContactAddressDto> addresses;
+  final String? birthday;
+  final String? website;
+  final String? notes;
 
   const LocalContactInput({
     required this.id,
     required this.name,
-    required this.email,
+    this.company,
+    this.jobTitle,
+    required this.emails,
+    required this.phones,
+    required this.addresses,
+    this.birthday,
+    this.website,
+    this.notes,
   });
 
   @override
-  int get hashCode => id.hashCode ^ name.hashCode ^ email.hashCode;
+  int get hashCode =>
+      id.hashCode ^
+      name.hashCode ^
+      company.hashCode ^
+      jobTitle.hashCode ^
+      emails.hashCode ^
+      phones.hashCode ^
+      addresses.hashCode ^
+      birthday.hashCode ^
+      website.hashCode ^
+      notes.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -616,7 +832,14 @@ class LocalContactInput {
           runtimeType == other.runtimeType &&
           id == other.id &&
           name == other.name &&
-          email == other.email;
+          company == other.company &&
+          jobTitle == other.jobTitle &&
+          emails == other.emails &&
+          phones == other.phones &&
+          addresses == other.addresses &&
+          birthday == other.birthday &&
+          website == other.website &&
+          notes == other.notes;
 }
 
 /// User-created local message passed from the composition workflow.
@@ -715,22 +938,44 @@ class LocalMessageInput {
           hasAttachment == other.hasAttachment;
 }
 
+/// User-supplied task; fields as in [`TaskDto`].
 class LocalTaskInput {
   final String id;
   final String title;
+  final String? description;
+  final PlatformInt64? startsAtMs;
   final PlatformInt64? dueAtMs;
-  final bool completed;
+  final String status;
+  final String priority;
+  final PlatformInt64? reminderAtMs;
+  final bool reminderDismissed;
+  final PlatformInt64? completedAtMs;
 
   const LocalTaskInput({
     required this.id,
     required this.title,
+    this.description,
+    this.startsAtMs,
     this.dueAtMs,
-    required this.completed,
+    required this.status,
+    required this.priority,
+    this.reminderAtMs,
+    required this.reminderDismissed,
+    this.completedAtMs,
   });
 
   @override
   int get hashCode =>
-      id.hashCode ^ title.hashCode ^ dueAtMs.hashCode ^ completed.hashCode;
+      id.hashCode ^
+      title.hashCode ^
+      description.hashCode ^
+      startsAtMs.hashCode ^
+      dueAtMs.hashCode ^
+      status.hashCode ^
+      priority.hashCode ^
+      reminderAtMs.hashCode ^
+      reminderDismissed.hashCode ^
+      completedAtMs.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -739,8 +984,14 @@ class LocalTaskInput {
           runtimeType == other.runtimeType &&
           id == other.id &&
           title == other.title &&
+          description == other.description &&
+          startsAtMs == other.startsAtMs &&
           dueAtMs == other.dueAtMs &&
-          completed == other.completed;
+          status == other.status &&
+          priority == other.priority &&
+          reminderAtMs == other.reminderAtMs &&
+          reminderDismissed == other.reminderDismissed &&
+          completedAtMs == other.completedAtMs;
 }
 
 class MailAccountDto {
@@ -1239,22 +1490,46 @@ class SenderAliasDto {
           displayName == other.displayName;
 }
 
+/// One local task. `status` is one of `not_started`, `in_progress`,
+/// `waiting`, `deferred`, `completed`; `priority` is `low`, `normal`, or
+/// `high`.
 class TaskDto {
   final String id;
   final String title;
+  final String? description;
+  final PlatformInt64? startsAtMs;
   final PlatformInt64? dueAtMs;
-  final bool completed;
+  final String status;
+  final String priority;
+  final PlatformInt64? reminderAtMs;
+  final bool reminderDismissed;
+  final PlatformInt64? completedAtMs;
 
   const TaskDto({
     required this.id,
     required this.title,
+    this.description,
+    this.startsAtMs,
     this.dueAtMs,
-    required this.completed,
+    required this.status,
+    required this.priority,
+    this.reminderAtMs,
+    required this.reminderDismissed,
+    this.completedAtMs,
   });
 
   @override
   int get hashCode =>
-      id.hashCode ^ title.hashCode ^ dueAtMs.hashCode ^ completed.hashCode;
+      id.hashCode ^
+      title.hashCode ^
+      description.hashCode ^
+      startsAtMs.hashCode ^
+      dueAtMs.hashCode ^
+      status.hashCode ^
+      priority.hashCode ^
+      reminderAtMs.hashCode ^
+      reminderDismissed.hashCode ^
+      completedAtMs.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1263,8 +1538,14 @@ class TaskDto {
           runtimeType == other.runtimeType &&
           id == other.id &&
           title == other.title &&
+          description == other.description &&
+          startsAtMs == other.startsAtMs &&
           dueAtMs == other.dueAtMs &&
-          completed == other.completed;
+          status == other.status &&
+          priority == other.priority &&
+          reminderAtMs == other.reminderAtMs &&
+          reminderDismissed == other.reminderDismissed &&
+          completedAtMs == other.completedAtMs;
 }
 
 /// Complete initial state required by the mail workspace.

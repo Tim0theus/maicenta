@@ -12,7 +12,11 @@ import 'package:path_provider/path_provider.dart';
 import 'app_theme.dart';
 import 'build_version.dart';
 import 'features/about/about_dialog.dart';
+import 'features/calendar/calendar_workspace.dart';
+import 'features/calendar/event_editor.dart';
 import 'features/compose/compose_window.dart';
+import 'features/contacts/contact_editor.dart';
+import 'features/contacts/contacts_workspace.dart';
 import 'features/mail/account_autodiscovery.dart';
 import 'features/mail/account_setup_detection.dart';
 import 'features/mail/folder_tree.dart';
@@ -22,8 +26,12 @@ import 'features/mail/message_window.dart';
 import 'features/mail/oauth_service.dart';
 import 'features/mail/safe_message_html.dart';
 import 'features/mail/sender_aliases_dialog.dart';
+import 'features/reminders/reminder_dialog.dart';
+import 'features/tasks/task_editor.dart';
+import 'features/tasks/tasks_workspace.dart';
 import 'features/updates/app_updates.dart';
 import 'features/updates/update_dialog.dart';
+import 'features/workspace/german_dates.dart';
 import 'l10n/app_localizations.dart';
 import 'src/rust/frb_generated.dart';
 
@@ -334,6 +342,17 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   bool showFolderPane = true;
   bool showReadingPane = true;
   bool calendarEnabled = true;
+  DateTime calendarFocus = DateTime.now();
+  CalendarView calendarView = CalendarView.week;
+  TaskListFilter taskFilter = TaskListFilter.all;
+  String? selectedTaskId;
+  String? selectedContactId;
+  String contactQuery = '';
+  Timer? reminderTimer;
+
+  /// Reminders the user postponed, by item identifier, until the given time.
+  final Map<String, DateTime> snoozedReminders = {};
+  bool reminderDialogOpen = false;
   double readingZoom = 1;
   late List<LocalCalendarItem> calendarItems;
   late List<LocalTaskItem> tasks;
@@ -357,6 +376,13 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     mailAccounts = widget.mailDataSource.mailAccounts.toList();
     offlineMode = mailAccounts.isEmpty;
     pendingMailOperations = widget.mailDataSource.pendingMailOperations;
+    reminderTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => unawaited(checkReminders()),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(checkReminders());
+    });
     if (widget.appUpdates?.supported ?? false) {
       // Hourly ticks; the service decides whether a daily check is due.
       updateCheckTimer = Timer.periodic(
@@ -387,6 +413,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     searchDebounce?.cancel();
     automaticSyncTimer?.cancel();
     updateCheckTimer?.cancel();
+    reminderTimer?.cancel();
     super.dispose();
   }
 
@@ -1645,91 +1672,390 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       case WorkspaceModule.mail:
         await createMail();
       case WorkspaceModule.calendar:
-        final title = await showTextPrompt(
-          context,
-          title: 'Neuer Termin',
-          label: 'Titel',
-        );
-        if (title == null || title.trim().isEmpty) return;
-        final event = LocalCalendarItem(
-          id: 'local.event.${DateTime.now().microsecondsSinceEpoch}',
-          title: title.trim(),
-          startsAt: DateTime(2026, 7, 30, 11),
-          endsAt: DateTime(2026, 7, 30, 11, 30),
-        );
-        try {
-          await widget.mailDataSource.saveCalendarEvent(event);
-        } on Object catch (error) {
-          showPersistenceError(error);
-          return;
-        }
-        if (!mounted) return;
-        setState(() => calendarItems.add(event));
-        showNotice('Der Termin wurde lokal eingetragen.');
+        await openEvent(null, initialStart: defaultEventStart());
       case WorkspaceModule.tasks:
-        final title = await showTextPrompt(
-          context,
-          title: 'Neue Aufgabe',
-          label: 'Aufgabe',
-        );
-        if (title == null || title.trim().isEmpty) return;
-        final task = LocalTaskItem(
-          id: 'local.task.${DateTime.now().microsecondsSinceEpoch}',
-          title: title.trim(),
-          dueAt: DateTime.now(),
-          done: false,
-        );
-        try {
-          await widget.mailDataSource.saveTask(task);
-        } on Object catch (error) {
-          showPersistenceError(error);
-          return;
-        }
-        if (!mounted) return;
-        setState(() => tasks.insert(0, task));
-        showNotice('Die Aufgabe wurde lokal gespeichert.');
+        await openTask(null);
       case WorkspaceModule.contacts:
-        final name = await showTextPrompt(
-          context,
-          title: 'Neuer Kontakt',
-          label: 'Name',
-        );
-        if (name == null || name.trim().isEmpty) return;
-        if (!mounted) return;
-        final email = await showTextPrompt(
-          context,
-          title: 'Neuer Kontakt',
-          label: 'E-Mail-Adresse',
-        );
-        if (email == null || email.trim().isEmpty) return;
-        final contact = LocalContactItem(
-          id: 'local.contact.${DateTime.now().microsecondsSinceEpoch}',
-          name: name.trim(),
-          email: email.trim(),
-        );
-        try {
-          await widget.mailDataSource.saveContact(contact);
-        } on Object catch (error) {
-          showPersistenceError(error);
-          return;
-        }
-        if (!mounted) return;
-        setState(() => contacts.add(contact));
-        showNotice('Der Kontakt wurde lokal gespeichert.');
+        await openContact(null);
     }
   }
 
-  Future<void> toggleTask(int index) async {
-    if (index < 0 || index >= tasks.length) return;
-    final updated = tasks[index].copyWith(done: !tasks[index].done);
+  // ---------------------------------------------------------------------
+  // Calendar
+
+  /// Start proposed for a new event: the focused day at the next full hour
+  /// when it is today, otherwise 09:00.
+  DateTime defaultEventStart() {
+    final now = DateTime.now();
+    if (isSameDay(calendarFocus, now)) {
+      return DateTime(now.year, now.month, now.day, now.hour + 1);
+    }
+    return DateTime(
+      calendarFocus.year,
+      calendarFocus.month,
+      calendarFocus.day,
+      9,
+    );
+  }
+
+  Future<void> openEvent(
+    LocalCalendarItem? event, {
+    DateTime? initialStart,
+    bool initialAllDay = false,
+  }) async {
+    final result = await showEventEditor(
+      context,
+      event: event,
+      initialStart: initialStart,
+      initialAllDay: initialAllDay,
+    );
+    if (result == null || !mounted) return;
+    switch (result.action) {
+      case EditorAction.save:
+        await saveEvent(result.event);
+      case EditorAction.delete:
+        await deleteEvent(result.event);
+    }
+  }
+
+  Future<void> saveEvent(LocalCalendarItem event) async {
     try {
-      await widget.mailDataSource.saveTask(updated);
+      await widget.mailDataSource.saveCalendarEvent(event);
     } on Object catch (error) {
       showPersistenceError(error);
       return;
     }
     if (!mounted) return;
-    setState(() => tasks[index] = updated);
+    setState(() {
+      final index = calendarItems.indexWhere((item) => item.id == event.id);
+      if (index < 0) {
+        calendarItems.add(event);
+      } else {
+        calendarItems[index] = event;
+      }
+      calendarItems.sort((a, b) => a.startsAt.compareTo(b.startsAt));
+      calendarFocus = event.startsAt;
+      snoozedReminders.remove(event.id);
+    });
+    showNotice('Der Termin wurde gespeichert.');
+  }
+
+  Future<void> deleteEvent(LocalCalendarItem event) async {
+    try {
+      await widget.mailDataSource.deleteCalendarEvent(event.id);
+    } on Object catch (error) {
+      showPersistenceError(error);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      calendarItems.removeWhere((item) => item.id == event.id);
+      snoozedReminders.remove(event.id);
+    });
+    showNotice('Der Termin wurde gelöscht.');
+  }
+
+  // ---------------------------------------------------------------------
+  // Tasks
+
+  Future<void> openTask(LocalTaskItem? task, {String initialTitle = ''}) async {
+    final result = await showTaskEditor(
+      context,
+      task: task,
+      initialTitle: initialTitle,
+    );
+    if (result == null || !mounted) return;
+    switch (result.action) {
+      case EditorAction.save:
+        await saveTask(result.task);
+      case EditorAction.delete:
+        await deleteTask(result.task);
+    }
+  }
+
+  Future<void> saveTask(LocalTaskItem task) async {
+    try {
+      await widget.mailDataSource.saveTask(task);
+    } on Object catch (error) {
+      showPersistenceError(error);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      final index = tasks.indexWhere((item) => item.id == task.id);
+      if (index < 0) {
+        tasks.insert(0, task);
+      } else {
+        tasks[index] = task;
+      }
+      selectedTaskId = task.id;
+      snoozedReminders.remove(task.id);
+    });
+  }
+
+  Future<void> quickAddTask(String title) async {
+    final now = DateTime.now();
+    await saveTask(
+      LocalTaskItem(
+        id: 'local.task.${now.microsecondsSinceEpoch}',
+        title: title,
+        dueAt: taskFilter == TaskListFilter.today ? dateOnly(now) : null,
+      ),
+    );
+    if (mounted) showNotice('Die Aufgabe wurde angelegt.');
+  }
+
+  Future<void> toggleTask(LocalTaskItem task) async {
+    await saveTask(task.withDone(!task.done));
+  }
+
+  Future<void> deleteTask(LocalTaskItem task) async {
+    try {
+      await widget.mailDataSource.deleteTask(task.id);
+    } on Object catch (error) {
+      showPersistenceError(error);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      tasks.removeWhere((item) => item.id == task.id);
+      if (selectedTaskId == task.id) selectedTaskId = null;
+      snoozedReminders.remove(task.id);
+    });
+    showNotice('Die Aufgabe wurde gelöscht.');
+  }
+
+  Future<void> confirmDeleteTask(LocalTaskItem task) async {
+    final confirmed = await confirmDeletion(
+      'Aufgabe löschen?',
+      '„${task.title}“ wird endgültig entfernt.',
+    );
+    if (confirmed) await deleteTask(task);
+  }
+
+  // ---------------------------------------------------------------------
+  // Contacts
+
+  Future<void> openContact(LocalContactItem? contact) async {
+    final result = await showContactEditor(context, contact: contact);
+    if (result == null || !mounted) return;
+    switch (result.action) {
+      case EditorAction.save:
+        await saveContact(result.contact);
+      case EditorAction.delete:
+        await deleteContact(result.contact);
+    }
+  }
+
+  Future<void> saveContact(LocalContactItem contact) async {
+    try {
+      await widget.mailDataSource.saveContact(contact);
+    } on Object catch (error) {
+      showPersistenceError(error);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      final index = contacts.indexWhere((item) => item.id == contact.id);
+      if (index < 0) {
+        contacts.add(contact);
+      } else {
+        contacts[index] = contact;
+      }
+      selectedContactId = contact.id;
+    });
+    showNotice('Der Kontakt wurde gespeichert.');
+  }
+
+  Future<void> deleteContact(LocalContactItem contact) async {
+    try {
+      await widget.mailDataSource.deleteContact(contact.id);
+    } on Object catch (error) {
+      showPersistenceError(error);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      contacts.removeWhere((item) => item.id == contact.id);
+      if (selectedContactId == contact.id) selectedContactId = null;
+    });
+    showNotice('Der Kontakt wurde gelöscht.');
+  }
+
+  Future<void> confirmDeleteContact(LocalContactItem contact) async {
+    final confirmed = await confirmDeletion(
+      'Kontakt löschen?',
+      '„${contact.name}“ wird endgültig entfernt.',
+    );
+    if (confirmed) await deleteContact(contact);
+  }
+
+  Future<void> composeToContact(
+    LocalContactItem contact,
+    String address,
+  ) async {
+    final result = await showComposeWindow(
+      context,
+      initialTo: '${contact.name} <$address>',
+      senders: composeSenders(mailAccounts),
+    );
+    await handleComposeResult(result);
+  }
+
+  Future<bool> confirmDeletion(String title, String message) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Abbrechen'),
+          ),
+          FilledButton(
+            key: const Key('confirm-delete'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Löschen'),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+
+  // ---------------------------------------------------------------------
+  // Reminders
+
+  /// Reminders that are due now and neither closed nor postponed.
+  List<ReminderEntry> dueReminders(DateTime now) {
+    bool postponed(String id) {
+      final until = snoozedReminders[id];
+      return until != null && until.isAfter(now);
+    }
+
+    final entries = <ReminderEntry>[];
+    for (final event in calendarItems) {
+      final at = event.reminderAt;
+      if (at == null ||
+          event.reminderDismissed ||
+          at.isAfter(now) ||
+          postponed(event.id)) {
+        continue;
+      }
+      entries.add(
+        ReminderEntry(
+          id: event.id,
+          kind: ReminderKind.event,
+          title: event.title,
+          detail: [
+            if (event.allDay)
+              'Ganztägig am ${formatDate(event.startsAt)}'
+            else
+              'Beginn: ${formatDateTime(event.startsAt)}',
+            if (event.location case final location? when location.isNotEmpty)
+              location,
+          ].join(' · '),
+          dueAt: event.startsAt,
+        ),
+      );
+    }
+    for (final task in tasks) {
+      final at = task.reminderAt;
+      if (at == null ||
+          task.done ||
+          task.reminderDismissed ||
+          at.isAfter(now) ||
+          postponed(task.id)) {
+        continue;
+      }
+      entries.add(
+        ReminderEntry(
+          id: task.id,
+          kind: ReminderKind.task,
+          title: task.title,
+          detail: task.dueAt == null
+              ? 'Aufgabe ohne Fälligkeitsdatum'
+              : 'Fällig am ${formatDate(task.dueAt!)}',
+          dueAt: at,
+        ),
+      );
+    }
+    entries.sort((a, b) => a.dueAt.compareTo(b.dueAt));
+    return entries;
+  }
+
+  Future<void> checkReminders() async {
+    if (!mounted || reminderDialogOpen) return;
+    final entries = dueReminders(DateTime.now());
+    if (entries.isEmpty) return;
+    reminderDialogOpen = true;
+    try {
+      await showReminderDialog(
+        context,
+        entries: entries,
+        onDismiss: dismissReminder,
+        onSnooze: (entry, delay) =>
+            snoozedReminders[entry.id] = DateTime.now().add(delay),
+        onOpen: openReminder,
+      );
+    } finally {
+      reminderDialogOpen = false;
+    }
+  }
+
+  Future<void> dismissReminder(ReminderEntry entry) async {
+    switch (entry.kind) {
+      case ReminderKind.event:
+        final index = calendarItems.indexWhere((item) => item.id == entry.id);
+        if (index < 0) return;
+        final updated = calendarItems[index].copyWith(reminderDismissed: true);
+        try {
+          await widget.mailDataSource.saveCalendarEvent(updated);
+        } on Object catch (error) {
+          showPersistenceError(error);
+          return;
+        }
+        if (mounted) setState(() => calendarItems[index] = updated);
+      case ReminderKind.task:
+        final index = tasks.indexWhere((item) => item.id == entry.id);
+        if (index < 0) return;
+        final updated = tasks[index].copyWith(reminderDismissed: true);
+        try {
+          await widget.mailDataSource.saveTask(updated);
+        } on Object catch (error) {
+          showPersistenceError(error);
+          return;
+        }
+        if (mounted) setState(() => tasks[index] = updated);
+    }
+  }
+
+  void openReminder(ReminderEntry entry) {
+    switch (entry.kind) {
+      case ReminderKind.event:
+        final event = calendarItems.cast<LocalCalendarItem?>().firstWhere(
+          (item) => item!.id == entry.id,
+          orElse: () => null,
+        );
+        if (event == null) return;
+        setState(() {
+          module = WorkspaceModule.calendar;
+          calendarFocus = event.startsAt;
+        });
+        unawaited(openEvent(event));
+      case ReminderKind.task:
+        final task = tasks.cast<LocalTaskItem?>().firstWhere(
+          (item) => item!.id == entry.id,
+          orElse: () => null,
+        );
+        if (task == null) return;
+        setState(() {
+          module = WorkspaceModule.tasks;
+          selectedTaskId = task.id;
+        });
+        unawaited(openTask(task));
+    }
   }
 
   Future<void> showAccountSettings() async {
@@ -2411,6 +2737,12 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       body: Column(
         children: [
           AppTitleBar(
+            moduleLabel: switch (module) {
+              WorkspaceModule.mail => 'E-Mail',
+              WorkspaceModule.calendar => 'Kalender',
+              WorkspaceModule.tasks => 'Aufgaben',
+              WorkspaceModule.contacts => 'Kontakte',
+            },
             onSearch: searchWorkspace,
             searching: searchInProgress,
             searchActive: query.trim().isNotEmpty,
@@ -2491,6 +2823,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
           Expanded(child: moduleView()),
           StatusBar(
             module: module,
+            summary: moduleSummary(),
             itemCount: messages.length,
             unreadCount: messages
                 .where((message) => message.unread && !message.draft)
@@ -2560,17 +2893,82 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         module: module,
         onModuleSelected: selectModule,
         onMoreApps: showMoreApps,
+        sidebar: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              MiniCalendar(
+                focused: calendarFocus,
+                events: calendarItems,
+                onSelected: (day) => setState(() {
+                  calendarFocus = day;
+                  if (calendarView == CalendarView.month &&
+                      day.month != calendarFocus.month) {
+                    calendarView = CalendarView.day;
+                  }
+                }),
+              ),
+              const Divider(height: 28),
+              Text(
+                'MEINE KALENDER',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: MaicentaPalette.of(context).mutedText,
+                ),
+              ),
+              Material(
+                color: Colors.transparent,
+                child: CheckboxListTile(
+                  key: const Key('calendar-personal-toggle'),
+                  value: calendarEnabled,
+                  onChanged: (value) =>
+                      setState(() => calendarEnabled = value ?? true),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text(
+                    'Persönlicher Kalender',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
         child: CalendarWorkspace(
           events: calendarItems,
           enabled: calendarEnabled,
-          onEnabledChanged: (value) => setState(() => calendarEnabled = value),
+          focused: calendarFocus,
+          view: calendarView,
+          onFocusedChanged: (day) => setState(() => calendarFocus = day),
+          onViewChanged: (view) => setState(() => calendarView = view),
+          onOpenEvent: (event) => unawaited(openEvent(event)),
+          onCreateAt: (start, allDay) => unawaited(
+            openEvent(null, initialStart: start, initialAllDay: allDay),
+          ),
         ),
       ),
       WorkspaceModule.tasks => ClassicModuleWorkspace(
         module: module,
         onModuleSelected: selectModule,
         onMoreApps: showMoreApps,
-        child: TasksWorkspace(tasks: tasks, onToggle: toggleTask),
+        sidebar: TaskFilterList(
+          tasks: tasks,
+          selected: taskFilter,
+          onSelected: (filter) => setState(() => taskFilter = filter),
+        ),
+        child: TasksWorkspace(
+          tasks: tasks,
+          filter: taskFilter,
+          selectedId: selectedTaskId,
+          onSelected: (task) => setState(() => selectedTaskId = task.id),
+          onToggle: (task) => unawaited(toggleTask(task)),
+          onOpen: (task) => unawaited(openTask(task)),
+          onDelete: (task) => unawaited(confirmDeleteTask(task)),
+          onQuickAdd: (title) => unawaited(quickAddTask(title)),
+        ),
       ),
       WorkspaceModule.contacts => ClassicModuleWorkspace(
         module: module,
@@ -2578,13 +2976,41 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         onMoreApps: showMoreApps,
         child: ContactsWorkspace(
           contacts: contacts,
-          onSelected: (contact) => showInformation(
-            contact.name,
-            '${contact.email}\n\nLokaler Kontakt',
-          ),
+          query: contactQuery,
+          onQueryChanged: (value) => setState(() => contactQuery = value),
+          selectedId: selectedContactId,
+          onSelected: (contact) =>
+              setState(() => selectedContactId = contact.id),
+          onOpen: (contact) => unawaited(openContact(contact)),
+          onDelete: (contact) => unawaited(confirmDeleteContact(contact)),
+          onCompose: (contact, address) =>
+              unawaited(composeToContact(contact, address)),
         ),
       ),
     };
+  }
+
+  /// Status-bar text for the calendar, task, and contact modules.
+  String moduleSummary() {
+    final today = dateOnly(DateTime.now());
+    switch (module) {
+      case WorkspaceModule.mail:
+        return '';
+      case WorkspaceModule.calendar:
+        final todayCount = calendarItems
+            .where((event) => event.occursOn(today))
+            .length;
+        return '${calendarItems.length} Termine · $todayCount heute';
+      case WorkspaceModule.tasks:
+        final open = tasks.where((task) => !task.done).length;
+        final overdue = tasks.where((task) => task.overdue).length;
+        return '$open offene Aufgaben'
+            '${overdue > 0 ? ' · $overdue überfällig' : ''}';
+      case WorkspaceModule.contacts:
+        return contacts.length == 1
+            ? '1 Kontakt'
+            : '${contacts.length} Kontakte';
+    }
   }
 
   void showMoreApps() {
@@ -3824,6 +4250,7 @@ class _ServerRow extends StatelessWidget {
 class AppTitleBar extends StatelessWidget {
   const AppTitleBar({
     super.key,
+    this.moduleLabel = 'E-Mail',
     required this.onSearch,
     required this.searching,
     required this.searchActive,
@@ -3836,6 +4263,8 @@ class AppTitleBar extends StatelessWidget {
     required this.onProfile,
   });
 
+  /// Name of the active module shown next to the application name.
+  final String moduleLabel;
   final ValueChanged<String> onSearch;
   final bool searching;
   final bool searchActive;
@@ -3895,7 +4324,7 @@ class AppTitleBar extends StatelessWidget {
             ),
           ),
           Text(
-            '  –  E-Mail',
+            '  –  $moduleLabel',
             style: TextStyle(
               color: MaicentaPalette.of(context).mutedText,
               fontSize: 12,
@@ -4378,7 +4807,12 @@ class _RibbonState extends State<Ribbon> {
   Widget _newItemButton(String label) {
     return RibbonAction(
       key: const Key('new-item-button'),
-      icon: Icons.mail_outline,
+      icon: switch (widget.module) {
+        WorkspaceModule.mail => Icons.mail_outline,
+        WorkspaceModule.calendar => Icons.event_outlined,
+        WorkspaceModule.tasks => Icons.add_task_outlined,
+        WorkspaceModule.contacts => Icons.person_add_outlined,
+      },
       label: label,
       onTap: widget.commands.newItem,
     );
@@ -4582,12 +5016,16 @@ class ClassicModuleWorkspace extends StatelessWidget {
     required this.onModuleSelected,
     required this.onMoreApps,
     required this.child,
+    this.sidebar,
   });
 
   final WorkspaceModule module;
   final ValueChanged<WorkspaceModule> onModuleSelected;
   final VoidCallback onMoreApps;
   final Widget child;
+
+  /// Replaces the default single entry in the navigation pane.
+  final Widget? sidebar;
 
   @override
   Widget build(BuildContext context) {
@@ -4636,36 +5074,40 @@ class ClassicModuleWorkspace extends StatelessWidget {
                   ),
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(13, 14, 10, 5),
-                child: Text(
-                  title.toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    color: MaicentaPalette.of(context).mutedText,
+              if (sidebar case final sidebar?)
+                Expanded(child: SingleChildScrollView(child: sidebar))
+              else ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(13, 14, 10, 5),
+                  child: Text(
+                    title.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: MaicentaPalette.of(context).mutedText,
+                    ),
                   ),
                 ),
-              ),
-              Container(
-                height: 29,
-                padding: const EdgeInsets.symmetric(horizontal: 17),
-                color: MaicentaPalette.of(context).selected,
-                child: Row(
-                  children: [
-                    Icon(icon, size: 16, color: MaicentaApp.primaryBlue),
-                    const SizedBox(width: 8),
-                    Text(
-                      itemLabel,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
+                Container(
+                  height: 29,
+                  padding: const EdgeInsets.symmetric(horizontal: 17),
+                  color: MaicentaPalette.of(context).selected,
+                  child: Row(
+                    children: [
+                      Icon(icon, size: 16, color: MaicentaApp.primaryBlue),
+                      const SizedBox(width: 8),
+                      Text(
+                        itemLabel,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const Spacer(),
+                const Spacer(),
+              ],
               ModuleRail(
                 selected: module,
                 onSelected: onModuleSelected,
@@ -6725,436 +7167,11 @@ class _ReadingMessageHeader extends StatelessWidget {
   }
 }
 
-class CalendarWorkspace extends StatelessWidget {
-  const CalendarWorkspace({
-    super.key,
-    required this.events,
-    required this.enabled,
-    required this.onEnabledChanged,
-  });
-
-  final List<LocalCalendarItem> events;
-  final bool enabled;
-  final ValueChanged<bool> onEnabledChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    const days = [
-      'Montag, 27.',
-      'Dienstag, 28.',
-      'Mittwoch, 29.',
-      'Donnerstag, 30.',
-      'Freitag, 31.',
-    ];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SectionHeader(title: 'Kalender', subtitle: '28. Juli 2026'),
-        Expanded(
-          child: Row(
-            children: [
-              Container(
-                width: 220,
-                color: MaicentaPalette.of(context).pane,
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Juli 2026',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 14),
-                    const MiniCalendar(),
-                    const Divider(height: 32),
-                    const Text(
-                      'MEINE KALENDER',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Material(
-                      color: Colors.transparent,
-                      child: CheckboxListTile(
-                        value: enabled,
-                        onChanged: (value) => onEnabledChanged(value ?? true),
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text(
-                          'Persönlicher Kalender',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const VerticalDivider(width: 1),
-              Expanded(
-                child: Row(
-                  children: [
-                    for (final day in days)
-                      Expanded(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            border: Border(
-                              right: BorderSide(
-                                color: MaicentaPalette.of(context).border,
-                              ),
-                            ),
-                          ),
-                          child: Column(
-                            children: [
-                              Container(
-                                height: 44,
-                                alignment: Alignment.center,
-                                color: day.contains('28')
-                                    ? MaicentaPalette.of(context).selected
-                                    : MaicentaPalette.of(context).pane,
-                                child: Text(
-                                  day,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                              if (enabled)
-                                for (final event in events.where(
-                                  (event) => day.contains('${event.day}'),
-                                ))
-                                  CalendarEvent(
-                                    title: event.title,
-                                    time: event.time,
-                                  ),
-                            ],
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class MiniCalendar extends StatelessWidget {
-  const MiniCalendar({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return GridView.count(
-      shrinkWrap: true,
-      crossAxisCount: 7,
-      physics: const NeverScrollableScrollPhysics(),
-      children: List.generate(35, (index) {
-        final day = index - 2;
-        return Center(
-          child: Container(
-            width: 24,
-            height: 24,
-            alignment: Alignment.center,
-            decoration: day == 28
-                ? const BoxDecoration(
-                    color: MaicentaApp.primaryBlue,
-                    shape: BoxShape.circle,
-                  )
-                : null,
-            child: day > 0 && day <= 31
-                ? Text(
-                    '$day',
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: day == 28 ? Colors.white : null,
-                    ),
-                  )
-                : null,
-          ),
-        );
-      }),
-    );
-  }
-}
-
-class CalendarEvent extends StatelessWidget {
-  const CalendarEvent({super.key, required this.title, required this.time});
-
-  final String title;
-  final String time;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () => showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(title),
-          content: Text('Zeit: $time\nKalender: Persönlicher Kalender'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Schließen'),
-            ),
-          ],
-        ),
-      ),
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(5, 70, 5, 0),
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: MaicentaPalette.of(context).selected,
-          border: Border(
-            left: BorderSide(color: MaicentaApp.primaryBlue, width: 4),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-            ),
-            Text(time, style: const TextStyle(fontSize: 10)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class TasksWorkspace extends StatelessWidget {
-  const TasksWorkspace({
-    super.key,
-    required this.tasks,
-    required this.onToggle,
-  });
-
-  final List<LocalTaskItem> tasks;
-  final ValueChanged<int> onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SectionHeader(title: 'Aufgaben', subtitle: 'Meine Aufgaben'),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              children: [
-                for (var index = 0; index < tasks.length; index++)
-                  PrototypeTask(
-                    title: tasks[index].title,
-                    due: tasks[index].due,
-                    done: tasks[index].done,
-                    onTap: () => onToggle(index),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class PrototypeTask extends StatelessWidget {
-  const PrototypeTask({
-    super.key,
-    required this.title,
-    required this.due,
-    required this.done,
-    required this.onTap,
-  });
-
-  final String title;
-  final String due;
-  final bool done;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: MaicentaPalette.of(context).pane,
-          border: Border.all(color: MaicentaPalette.of(context).border),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              done ? Icons.check_circle : Icons.radio_button_unchecked,
-              color: done
-                  ? Theme.of(context).colorScheme.primary
-                  : MaicentaPalette.of(context).mutedText,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                title,
-                style: TextStyle(
-                  decoration: done ? TextDecoration.lineThrough : null,
-                ),
-              ),
-            ),
-            Text(
-              due,
-              style: TextStyle(
-                fontSize: 11,
-                color: MaicentaPalette.of(context).mutedText,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class ContactsWorkspace extends StatelessWidget {
-  const ContactsWorkspace({
-    super.key,
-    required this.contacts,
-    required this.onSelected,
-  });
-
-  final List<LocalContactItem> contacts;
-  final ValueChanged<LocalContactItem> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SectionHeader(title: 'Kontakte', subtitle: 'Alle Kontakte'),
-        Expanded(
-          child: GridView.count(
-            padding: const EdgeInsets.all(24),
-            crossAxisCount: 3,
-            childAspectRatio: 2.7,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            children: [
-              for (final contact in contacts)
-                ContactCard(
-                  name: contact.name,
-                  email: contact.email,
-                  onTap: () => onSelected(contact),
-                ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class ContactCard extends StatelessWidget {
-  const ContactCard({
-    super.key,
-    required this.name,
-    required this.email,
-    required this.onTap,
-  });
-
-  final String name;
-  final String email;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: MaicentaPalette.of(context).pane,
-          border: Border.all(color: MaicentaPalette.of(context).border),
-        ),
-        child: Row(
-          children: [
-            CircleAvatar(
-              backgroundColor: MaicentaPalette.of(context).selected,
-              child: Text(
-                initials(name),
-                style: const TextStyle(color: MaicentaApp.primaryBlue),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    name,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  Text(
-                    email,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: MaicentaPalette.of(context).mutedText,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class SectionHeader extends StatelessWidget {
-  const SectionHeader({super.key, required this.title, required this.subtitle});
-
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 62,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      decoration: BoxDecoration(
-        color: MaicentaPalette.of(context).pane,
-        border: Border(
-          bottom: BorderSide(color: MaicentaPalette.of(context).border),
-        ),
-      ),
-      child: Row(
-        children: [
-          Text(
-            title,
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-          ),
-          const Spacer(),
-          Text(
-            subtitle,
-            style: TextStyle(color: MaicentaPalette.of(context).mutedText),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class StatusBar extends StatelessWidget {
   const StatusBar({
     super.key,
     required this.module,
+    this.summary = '',
     required this.itemCount,
     required this.unreadCount,
     required this.pendingMailOperations,
@@ -7165,6 +7182,9 @@ class StatusBar extends StatelessWidget {
   });
 
   final WorkspaceModule module;
+
+  /// Text shown for the non-mail modules.
+  final String summary;
   final int itemCount;
   final int unreadCount;
   final int pendingMailOperations;
@@ -7183,9 +7203,9 @@ class StatusBar extends StatelessWidget {
       WorkspaceModule.mail =>
         'Elemente: $itemCount · Ungelesen: $unreadCount'
             '${pendingMailOperations == 0 ? '' : ' · $pendingMailOperations ausstehend'}',
-      WorkspaceModule.calendar => 'Kalenderansicht',
-      WorkspaceModule.tasks => '3 Aufgaben',
-      WorkspaceModule.contacts => '3 Kontakte',
+      WorkspaceModule.calendar ||
+      WorkspaceModule.tasks ||
+      WorkspaceModule.contacts => summary,
     };
     final syncStatus = synchronizing
         ? catalogMessagesRemaining > 0

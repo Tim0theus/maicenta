@@ -14,6 +14,7 @@ import 'package:maicenta/features/about/about_dialog.dart';
 import 'package:maicenta/features/mail/account_autodiscovery.dart';
 import 'package:maicenta/features/mail/account_setup_detection.dart';
 import 'package:maicenta/features/mail/mail_data.dart';
+import 'package:maicenta/features/workspace/german_dates.dart';
 import 'package:maicenta/features/mail/oauth_service.dart';
 import 'package:maicenta/features/mail/safe_message_html.dart';
 
@@ -762,8 +763,102 @@ void main() {
     await tester.tap(find.byKey(const Key('module-Kalender')));
     await tester.pumpAndSettle();
 
-    expect(find.text('28. Juli 2026'), findsOneWidget);
+    // The week view opens on the current week and shows today's demo event.
+    expect(find.byKey(const Key('calendar-range-label')), findsOneWidget);
     expect(find.text('Team-Stand-up'), findsOneWidget);
+    expect(find.text('Persönlicher Kalender'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('calendar-view-month')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Team-Stand-up'), findsOneWidget);
+    expect(
+      find.text(formatMonthYear(DateTime.now())),
+      findsWidgets,
+      reason: 'the month heading and the mini calendar name the month',
+    );
+
+    await tester.tap(find.byKey(const Key('calendar-view-day')));
+    await tester.pumpAndSettle();
+    expect(find.text(formatLongDate(DateTime.now())), findsWidgets);
+
+    // Switching the personal calendar off hides its events.
+    await tester.tap(find.byKey(const Key('calendar-personal-toggle')));
+    await tester.pumpAndSettle();
+    expect(find.text('Team-Stand-up'), findsNothing);
+  });
+
+  testWidgets('creates and edits an appointment through the event window', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final dataSource = RecordingMailDataSource(configuredCalendarEvents: []);
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.tap(find.byKey(const Key('module-Kalender')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('new-item-button')));
+    await tester.pumpAndSettle();
+
+    final today = formatDate(DateTime.now());
+    await tester.enterText(
+      find.byKey(const Key('event-title')),
+      'Kundentermin',
+    );
+    await tester.enterText(find.byKey(const Key('event-location')), 'Hamburg');
+    await tester.enterText(find.byKey(const Key('event-start-date')), today);
+    await tester.enterText(find.byKey(const Key('event-start-time')), '13:00');
+    await tester.enterText(find.byKey(const Key('event-end-date')), today);
+    await tester.enterText(find.byKey(const Key('event-end-time')), '12:00');
+    await tester.enterText(
+      find.byKey(const Key('event-description')),
+      'Vertrag besprechen',
+    );
+    await tester.tap(find.byKey(const Key('event-save')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('event-range-error')),
+      findsOneWidget,
+      reason: 'an end before the start is rejected',
+    );
+    expect(dataSource.savedEvents, isEmpty);
+
+    await tester.enterText(find.byKey(const Key('event-end-time')), '14:30');
+    await tester.tap(find.byKey(const Key('event-save')));
+    await tester.pumpAndSettle();
+
+    expect(dataSource.savedEvents, hasLength(1));
+    final saved = dataSource.savedEvents.single;
+    expect(saved.title, 'Kundentermin');
+    expect(saved.location, 'Hamburg');
+    expect(saved.description, 'Vertrag besprechen');
+    expect(saved.startsAt.hour, 13);
+    expect(saved.endsAt.hour, 14);
+    expect(saved.endsAt.minute, 30);
+    expect(saved.reminderMinutesBefore, 15);
+    expect(find.text('Kundentermin'), findsOneWidget);
+
+    // Opening the event again shows the editor with delete available.
+    await tester.tap(find.byKey(Key('calendar-event-${saved.id}')));
+    await tester.pumpAndSettle();
+    expect(find.text('Termin bearbeiten'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('event-all-day')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('event-save')));
+    await tester.pumpAndSettle();
+    expect(dataSource.savedEvents.last.allDay, isTrue);
+    expect(find.text('Kundentermin'), findsOneWidget);
+
+    await tester.tap(find.byKey(Key('calendar-chip-${saved.id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('event-delete')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('event-delete-confirm')));
+    await tester.pumpAndSettle();
+    expect(dataSource.deletedEventIds, [saved.id]);
+    expect(find.text('Kundentermin'), findsNothing);
   });
 
   testWidgets('filters messages using global search', (tester) async {
@@ -2018,22 +2113,273 @@ void main() {
     await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
     await tester.tap(find.byKey(const Key('module-Aufgaben')));
     await tester.pump();
+    expect(find.text('Alle Aufgaben'), findsWidgets);
+    expect(find.textContaining('offene Aufgaben'), findsWidgets);
+
     await tester.tap(find.byKey(const Key('new-item-button')));
     await tester.pumpAndSettle();
+    expect(find.text('Neue Aufgabe'), findsNWidgets(2));
     await tester.enterText(
-      find.byKey(const Key('prompt-input')),
+      find.byKey(const Key('task-title')),
       'Interaktionen prüfen',
     );
-    await tester.tap(find.text('Speichern'));
+    await tester.enterText(
+      find.byKey(const Key('task-due-date')),
+      formatDate(DateTime.now()),
+    );
+    await tester.enterText(
+      find.byKey(const Key('task-description')),
+      'Alle Dialoge durchklicken.',
+    );
+    await tester.tap(find.byKey(const Key('task-save')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Interaktionen prüfen'), findsOneWidget);
-    await tester.tap(find.text('Interaktionen prüfen'));
-    await tester.pump();
-    final taskText = tester.widget<Text>(find.text('Interaktionen prüfen'));
-    expect(taskText.style?.decoration, TextDecoration.lineThrough);
+    expect(dataSource.savedTasks, hasLength(1));
+    final saved = dataSource.savedTasks.single;
+    expect(saved.title, 'Interaktionen prüfen');
+    expect(saved.description, 'Alle Dialoge durchklicken.');
+    expect(saved.dueAt, isNotNull);
+    expect(saved.done, isFalse);
+    // The new task is selected: list row and detail pane both show it.
+    expect(find.text('Interaktionen prüfen'), findsNWidgets(2));
+    expect(find.text('Alle Dialoge durchklicken.'), findsOneWidget);
+
+    await tester.tap(find.byKey(Key('task-check-${saved.id}')));
+    await tester.pumpAndSettle();
     expect(dataSource.savedTasks, hasLength(2));
     expect(dataSource.savedTasks.last.done, isTrue);
+    expect(dataSource.savedTasks.last.completedAt, isNotNull);
+    expect(find.text('Erneut öffnen'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('task-filter-completed')));
+    await tester.pump();
+    expect(find.text('Interaktionen prüfen'), findsNWidgets(2));
+    expect(find.text('IMAP-Testkonto vorbereiten'), findsNothing);
+  });
+
+  testWidgets('adds a task through quick entry and deletes it', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final dataSource = RecordingMailDataSource(configuredTasks: []);
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.tap(find.byKey(const Key('module-Aufgaben')));
+    await tester.pump();
+    expect(find.text('Keine Aufgaben in dieser Liste.'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const Key('task-quick-add')),
+      'Rechnung schreiben',
+    );
+    await tester.tap(find.byKey(const Key('task-quick-add-submit')));
+    await tester.pumpAndSettle();
+    expect(dataSource.savedTasks, hasLength(1));
+    final saved = dataSource.savedTasks.single;
+    expect(saved.title, 'Rechnung schreiben');
+    expect(find.text('Rechnung schreiben'), findsNWidgets(2));
+
+    // Editing through the task window changes priority and reminder.
+    await tester.tap(find.byKey(const Key('task-edit')));
+    await tester.pumpAndSettle();
+    expect(find.text('Aufgabe bearbeiten'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('task-priority')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Hoch').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('task-reminder-enabled')));
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('task-reminder-date')),
+      formatDate(DateTime.now().add(const Duration(days: 1))),
+    );
+    await tester.enterText(
+      find.byKey(const Key('task-reminder-time')),
+      '08:30',
+    );
+    await tester.tap(find.byKey(const Key('task-save')));
+    await tester.pumpAndSettle();
+    expect(dataSource.savedTasks.last.priority, TaskPriority.high);
+    expect(dataSource.savedTasks.last.reminderAt?.hour, 8);
+    expect(dataSource.savedTasks.last.reminderAt?.minute, 30);
+    expect(find.textContaining('08:30'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('task-delete')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-delete')));
+    await tester.pumpAndSettle();
+    expect(dataSource.deletedTaskIds, [saved.id]);
+    expect(find.text('Rechnung schreiben'), findsNothing);
+    expect(find.text('Keine Aufgabe ausgewählt.'), findsOneWidget);
+  });
+
+  testWidgets('creates a contact with several details and composes to it', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final dataSource = RecordingMailDataSource();
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.tap(find.byKey(const Key('module-Kontakte')));
+    await tester.pump();
+    expect(find.text('Anna Schneider'), findsOneWidget);
+    expect(find.text('3 Kontakte'), findsWidgets);
+
+    // Selecting a demo contact shows the full card.
+    await tester.tap(find.byKey(const Key('contact-row-demo.contact.anna')));
+    await tester.pump();
+    expect(find.byKey(const Key('contact-detail-name')), findsOneWidget);
+    expect(find.text('anna@example.org'), findsWidgets);
+    expect(find.text('+49 170 1234567'), findsOneWidget);
+    expect(find.textContaining('10115 Berlin'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('new-item-button')));
+    await tester.pumpAndSettle();
+    expect(find.text('Neuer Kontakt'), findsNWidgets(2));
+    await tester.enterText(
+      find.byKey(const Key('contact-name')),
+      'Lena Fischer',
+    );
+    await tester.enterText(
+      find.byKey(const Key('contact-company')),
+      'Fischer GmbH',
+    );
+    await tester.enterText(
+      find.byKey(const Key('contact-email-0')),
+      'lena@example.org',
+    );
+    await tester.enterText(
+      find.byKey(const Key('contact-phone-0')),
+      '+49 40 123456',
+    );
+    await tester.ensureVisible(find.byKey(const Key('contact-add-address')));
+    await tester.tap(find.byKey(const Key('contact-add-address')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('contact-address-street-0')),
+      'Hafenweg 2',
+    );
+    await tester.enterText(
+      find.byKey(const Key('contact-address-postal-code-0')),
+      '20457',
+    );
+    await tester.enterText(
+      find.byKey(const Key('contact-address-city-0')),
+      'Hamburg',
+    );
+    await tester.enterText(
+      find.byKey(const Key('contact-birthday')),
+      '17.05.1980',
+    );
+    await tester.enterText(
+      find.byKey(const Key('contact-notes')),
+      'Kennt das Projekt seit 2024.',
+    );
+    await tester.tap(find.byKey(const Key('contact-save')));
+    await tester.pumpAndSettle();
+
+    expect(dataSource.savedContacts, hasLength(1));
+    final saved = dataSource.savedContacts.single;
+    expect(saved.name, 'Lena Fischer');
+    expect(saved.company, 'Fischer GmbH');
+    expect(saved.emails.single.address, 'lena@example.org');
+    expect(saved.emails.single.label, ContactLabel.work);
+    expect(saved.phones.single.number, '+49 40 123456');
+    expect(saved.addresses.single.city, 'Hamburg');
+    expect(saved.birthday, DateTime(1980, 5, 17));
+    expect(saved.notes, 'Kennt das Projekt seit 2024.');
+    expect(find.text('Lena Fischer'), findsNWidgets(2));
+    expect(find.textContaining('20457 Hamburg'), findsOneWidget);
+    expect(find.text('17.05.1980'), findsOneWidget);
+
+    // The search narrows the list.
+    await tester.enterText(find.byKey(const Key('contact-search')), 'Fischer');
+    await tester.pump();
+    expect(find.text('Anna Schneider'), findsNothing);
+    expect(find.text('Lena Fischer'), findsNWidgets(2));
+
+    // "E-Mail senden" opens the composer addressed to the contact.
+    await tester.tap(find.byKey(const Key('contact-compose')));
+    await tester.pumpAndSettle();
+    expect(find.text('Lena Fischer <lena@example.org>'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('compose-close')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Verwerfen'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('contact-delete')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-delete')));
+    await tester.pumpAndSettle();
+    expect(dataSource.deletedContactIds, [saved.id]);
+    expect(find.text('Lena Fischer'), findsNothing);
+  });
+
+  testWidgets('shows due reminders and lets the user close or postpone them', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final now = DateTime.now();
+    final dataSource = RecordingMailDataSource(
+      configuredTasks: [
+        LocalTaskItem(
+          id: 'local.task.reminder',
+          title: 'Steuerunterlagen einreichen',
+          dueAt: dateOnly(now),
+          reminderAt: now.subtract(const Duration(minutes: 3)),
+        ),
+        LocalTaskItem(
+          id: 'local.task.dismissed',
+          title: 'Bereits geschlossen',
+          reminderAt: now.subtract(const Duration(minutes: 3)),
+          reminderDismissed: true,
+        ),
+      ],
+      configuredCalendarEvents: [
+        LocalCalendarItem(
+          id: 'local.event.reminder',
+          title: 'Zahnarzt',
+          startsAt: now.add(const Duration(minutes: 10)),
+          endsAt: now.add(const Duration(minutes: 40)),
+          reminderMinutesBefore: 15,
+        ),
+      ],
+    );
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('reminder-dialog')), findsOneWidget);
+    expect(find.text('2 Erinnerungen'), findsOneWidget);
+    expect(find.text('Steuerunterlagen einreichen'), findsOneWidget);
+    expect(find.text('Zahnarzt'), findsOneWidget);
+    expect(find.text('Bereits geschlossen'), findsNothing);
+
+    await tester.tap(
+      find.byKey(const Key('reminder-snooze-local.event.reminder')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('In 10 Minuten erneut erinnern'));
+    await tester.pumpAndSettle();
+    expect(find.text('Zahnarzt'), findsNothing);
+    expect(find.text('1 Erinnerung'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const Key('reminder-dismiss-local.task.reminder')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('reminder-dialog')), findsNothing);
+    expect(dataSource.savedTasks, hasLength(1));
+    expect(dataSource.savedTasks.single.id, 'local.task.reminder');
+    expect(dataSource.savedTasks.single.reminderDismissed, isTrue);
+    expect(dataSource.savedEvents, isEmpty, reason: 'postponing is not saved');
   });
 
   testWidgets('enters manual server settings when nothing is detected', (
@@ -2927,7 +3273,17 @@ class RecordingMailDataSource implements MailDataSource {
     this.syncQresyncMailboxes = 0,
     this.pendingOperations = 0,
     this.draftSyncOutcome = const DraftSyncOutcome(synchronized: 1, pending: 0),
-  });
+    List<LocalCalendarItem>? configuredCalendarEvents,
+    List<LocalTaskItem>? configuredTasks,
+    List<LocalContactItem>? configuredContacts,
+  }) : configuredCalendarEvents =
+           configuredCalendarEvents ?? demoCalendarEvents,
+       configuredTasks = configuredTasks ?? demoTasks,
+       configuredContacts = configuredContacts ?? demoContacts;
+
+  final List<LocalCalendarItem> configuredCalendarEvents;
+  final List<LocalTaskItem> configuredTasks;
+  final List<LocalContactItem> configuredContacts;
 
   final List<MailAccountConfig> configuredAccounts;
   final List<MailFolder> configuredFolders;
@@ -2980,6 +3336,11 @@ class RecordingMailDataSource implements MailDataSource {
   final List<({String attachmentId, String destinationPath})>
   exportedAttachments = [];
   final List<LocalTaskItem> savedTasks = [];
+  final List<LocalCalendarItem> savedEvents = [];
+  final List<LocalContactItem> savedContacts = [];
+  final List<String> deletedEventIds = [];
+  final List<String> deletedTaskIds = [];
+  final List<String> deletedContactIds = [];
   final List<String> deletedAccountIds = [];
   final Map<String, List<MailSenderAlias>> savedAliases = {};
   final List<
@@ -3020,13 +3381,13 @@ class RecordingMailDataSource implements MailDataSource {
   List<DemoMessage> get messages => configuredMessages;
 
   @override
-  List<LocalCalendarItem> get calendarEvents => demoCalendarEvents;
+  List<LocalCalendarItem> get calendarEvents => configuredCalendarEvents;
 
   @override
-  List<LocalTaskItem> get tasks => demoTasks;
+  List<LocalTaskItem> get tasks => configuredTasks;
 
   @override
-  List<LocalContactItem> get contacts => demoContacts;
+  List<LocalContactItem> get contacts => configuredContacts;
 
   @override
   List<MailAccountConfig> get mailAccounts => configuredAccounts;
@@ -3198,7 +3559,14 @@ class RecordingMailDataSource implements MailDataSource {
   }
 
   @override
-  Future<void> saveCalendarEvent(LocalCalendarItem event) async {}
+  Future<void> saveCalendarEvent(LocalCalendarItem event) async {
+    savedEvents.add(event);
+  }
+
+  @override
+  Future<void> deleteCalendarEvent(String eventId) async {
+    deletedEventIds.add(eventId);
+  }
 
   @override
   Future<void> saveTask(LocalTaskItem task) async {
@@ -3206,7 +3574,19 @@ class RecordingMailDataSource implements MailDataSource {
   }
 
   @override
-  Future<void> saveContact(LocalContactItem contact) async {}
+  Future<void> deleteTask(String taskId) async {
+    deletedTaskIds.add(taskId);
+  }
+
+  @override
+  Future<void> saveContact(LocalContactItem contact) async {
+    savedContacts.add(contact);
+  }
+
+  @override
+  Future<void> deleteContact(String contactId) async {
+    deletedContactIds.add(contactId);
+  }
 
   @override
   Future<void> testAccount(MailAccountConfig account, String password) async {}

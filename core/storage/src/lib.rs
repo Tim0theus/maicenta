@@ -17,13 +17,14 @@ use maicenta_application::{
     WorkspaceStore,
 };
 use maicenta_domain::{
-    AccountId, AttachmentId, CalendarEvent, Contact, MailAccount, MailAddress, MailProvider,
-    Mailbox, MailboxId, MailboxRole, MessageAttachment, MessageBody, MessageFlag, MessageId,
-    MessageRecipients, MessageSummary, TaskItem, TransportSecurity, WorkspaceItemId,
+    AccountId, AttachmentId, CalendarEvent, Contact, ContactEmail, ContactLabel, ContactPhone,
+    MailAccount, MailAddress, MailProvider, Mailbox, MailboxId, MailboxRole, MessageAttachment,
+    MessageBody, MessageFlag, MessageId, MessageRecipients, MessageSummary, PostalAddress,
+    TaskItem, TaskPriority, TaskStatus, TransportSecurity, WorkspaceItemId,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-const CURRENT_SCHEMA_VERSION: u32 = 16;
+const CURRENT_SCHEMA_VERSION: u32 = 17;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const FAVORITE_MAILBOXES_KEY: &str = "favorite_mailbox_ids";
 const COLLAPSED_MAILBOXES_KEY: &str = "collapsed_mailbox_ids";
@@ -1725,31 +1726,40 @@ impl WorkspaceStore for SqliteMailStore {
         let connection = self.connection()?;
         let mut statement = connection
             .prepare(
-                "SELECT id, title, starts_at_ms, ends_at_ms, location
+                "SELECT id, title, starts_at_ms, ends_at_ms, all_day, location, description,
+                        reminder_minutes_before, reminder_dismissed
                  FROM calendar_events
                  ORDER BY starts_at_ms, id",
             )
             .map_err(storage_error)?;
         let rows = statement
             .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                ))
+                Ok(CalendarEventRow {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    starts_at_ms: row.get(2)?,
+                    ends_at_ms: row.get(3)?,
+                    all_day: row.get(4)?,
+                    location: row.get(5)?,
+                    description: row.get(6)?,
+                    reminder_minutes_before: row.get(7)?,
+                    reminder_dismissed: row.get(8)?,
+                })
             })
             .map_err(storage_error)?;
 
         rows.map(|row| {
-            let (id, title, starts_at_ms, ends_at_ms, location) = row.map_err(storage_error)?;
+            let row = row.map_err(storage_error)?;
             Ok(CalendarEvent {
-                id: WorkspaceItemId::parse(id).map_err(invalid_data)?,
-                title,
-                starts_at_ms,
-                ends_at_ms,
-                location,
+                id: WorkspaceItemId::parse(row.id).map_err(invalid_data)?,
+                title: row.title,
+                starts_at_ms: row.starts_at_ms,
+                ends_at_ms: row.ends_at_ms,
+                all_day: row.all_day,
+                location: row.location,
+                description: row.description,
+                reminder_minutes_before: row.reminder_minutes_before,
+                reminder_dismissed: row.reminder_dismissed,
             })
         })
         .collect()
@@ -1763,52 +1773,93 @@ impl WorkspaceStore for SqliteMailStore {
         }
         self.connection()?
             .execute(
-                "INSERT INTO calendar_events (id, title, starts_at_ms, ends_at_ms, location)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
+                "INSERT INTO calendar_events (
+                    id, title, starts_at_ms, ends_at_ms, all_day, location, description,
+                    reminder_minutes_before, reminder_dismissed
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
                     starts_at_ms = excluded.starts_at_ms,
                     ends_at_ms = excluded.ends_at_ms,
-                    location = excluded.location",
+                    all_day = excluded.all_day,
+                    location = excluded.location,
+                    description = excluded.description,
+                    reminder_minutes_before = excluded.reminder_minutes_before,
+                    reminder_dismissed = excluded.reminder_dismissed",
                 params![
                     event.id.as_str(),
                     event.title,
                     event.starts_at_ms,
                     event.ends_at_ms,
+                    event.all_day,
                     event.location,
+                    event.description,
+                    event.reminder_minutes_before,
+                    event.reminder_dismissed,
                 ],
             )
             .map(|_| ())
             .map_err(storage_error)
     }
 
+    fn delete_calendar_event(
+        &mut self,
+        event_id: &WorkspaceItemId,
+    ) -> Result<(), ApplicationError> {
+        let deleted = self
+            .connection()?
+            .execute(
+                "DELETE FROM calendar_events WHERE id = ?1",
+                [event_id.as_str()],
+            )
+            .map_err(storage_error)?;
+        if deleted == 0 {
+            return Err(ApplicationError::NotFound);
+        }
+        Ok(())
+    }
+
     fn list_tasks(&self) -> Result<Vec<TaskItem>, ApplicationError> {
         let connection = self.connection()?;
         let mut statement = connection
             .prepare(
-                "SELECT id, title, due_at_ms, completed
+                "SELECT id, title, description, starts_at_ms, due_at_ms, status, priority,
+                        reminder_at_ms, reminder_dismissed, completed_at_ms
                  FROM tasks
-                 ORDER BY completed, due_at_ms IS NULL, due_at_ms, id",
+                 ORDER BY status = 'completed', due_at_ms IS NULL, due_at_ms, id",
             )
             .map_err(storage_error)?;
         let rows = statement
             .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<i64>>(2)?,
-                    row.get::<_, bool>(3)?,
-                ))
+                Ok(TaskRow {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    description: row.get(2)?,
+                    starts_at_ms: row.get(3)?,
+                    due_at_ms: row.get(4)?,
+                    status: row.get(5)?,
+                    priority: row.get(6)?,
+                    reminder_at_ms: row.get(7)?,
+                    reminder_dismissed: row.get(8)?,
+                    completed_at_ms: row.get(9)?,
+                })
             })
             .map_err(storage_error)?;
 
         rows.map(|row| {
-            let (id, title, due_at_ms, completed) = row.map_err(storage_error)?;
+            let row = row.map_err(storage_error)?;
             Ok(TaskItem {
-                id: WorkspaceItemId::parse(id).map_err(invalid_data)?,
-                title,
-                due_at_ms,
-                completed,
+                id: WorkspaceItemId::parse(row.id).map_err(invalid_data)?,
+                title: row.title,
+                description: row.description,
+                starts_at_ms: row.starts_at_ms,
+                due_at_ms: row.due_at_ms,
+                status: parse_task_status(&row.status)?,
+                priority: parse_task_priority(&row.priority)?,
+                reminder_at_ms: row.reminder_at_ms,
+                reminder_dismissed: row.reminder_dismissed,
+                completed_at_ms: row.completed_at_ms,
             })
         })
         .collect()
@@ -1817,60 +1868,340 @@ impl WorkspaceStore for SqliteMailStore {
     fn save_task(&mut self, task: &TaskItem) -> Result<(), ApplicationError> {
         self.connection()?
             .execute(
-                "INSERT INTO tasks (id, title, due_at_ms, completed)
-                 VALUES (?1, ?2, ?3, ?4)
+                "INSERT INTO tasks (
+                    id, title, description, starts_at_ms, due_at_ms, status, priority,
+                    reminder_at_ms, reminder_dismissed, completed_at_ms
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
+                    description = excluded.description,
+                    starts_at_ms = excluded.starts_at_ms,
                     due_at_ms = excluded.due_at_ms,
-                    completed = excluded.completed",
-                params![task.id.as_str(), task.title, task.due_at_ms, task.completed],
+                    status = excluded.status,
+                    priority = excluded.priority,
+                    reminder_at_ms = excluded.reminder_at_ms,
+                    reminder_dismissed = excluded.reminder_dismissed,
+                    completed_at_ms = excluded.completed_at_ms",
+                params![
+                    task.id.as_str(),
+                    task.title,
+                    task.description,
+                    task.starts_at_ms,
+                    task.due_at_ms,
+                    task_status_key(task.status),
+                    task_priority_key(task.priority),
+                    task.reminder_at_ms,
+                    task.reminder_dismissed,
+                    task.completed_at_ms,
+                ],
             )
             .map(|_| ())
             .map_err(storage_error)
     }
 
+    fn delete_task(&mut self, task_id: &WorkspaceItemId) -> Result<(), ApplicationError> {
+        let deleted = self
+            .connection()?
+            .execute("DELETE FROM tasks WHERE id = ?1", [task_id.as_str()])
+            .map_err(storage_error)?;
+        if deleted == 0 {
+            return Err(ApplicationError::NotFound);
+        }
+        Ok(())
+    }
+
     fn list_contacts(&self) -> Result<Vec<Contact>, ApplicationError> {
         let connection = self.connection()?;
+        let mut emails = load_contact_details(
+            &connection,
+            "SELECT contact_id, label, address
+             FROM contact_emails
+             ORDER BY contact_id, position",
+            |row| {
+                Ok(ContactEmail {
+                    label: parse_contact_label(&row.get::<_, String>(1).map_err(storage_error)?)?,
+                    address: MailAddress::new(
+                        row.get::<_, String>(2).map_err(storage_error)?,
+                        None,
+                    )
+                    .map_err(invalid_data)?,
+                })
+            },
+        )?;
+        let mut phones = load_contact_details(
+            &connection,
+            "SELECT contact_id, label, number
+             FROM contact_phones
+             ORDER BY contact_id, position",
+            |row| {
+                Ok(ContactPhone {
+                    label: parse_contact_label(&row.get::<_, String>(1).map_err(storage_error)?)?,
+                    number: row.get(2).map_err(storage_error)?,
+                })
+            },
+        )?;
+        let mut addresses = load_contact_details(
+            &connection,
+            "SELECT contact_id, label, street, postal_code, city, country
+             FROM contact_addresses
+             ORDER BY contact_id, position",
+            |row| {
+                Ok(PostalAddress {
+                    label: parse_contact_label(&row.get::<_, String>(1).map_err(storage_error)?)?,
+                    street: row.get(2).map_err(storage_error)?,
+                    postal_code: row.get(3).map_err(storage_error)?,
+                    city: row.get(4).map_err(storage_error)?,
+                    country: row.get(5).map_err(storage_error)?,
+                })
+            },
+        )?;
+
         let mut statement = connection
             .prepare(
-                "SELECT id, display_name, email
+                "SELECT id, display_name, company, job_title, birthday, website, notes
                  FROM contacts
                  ORDER BY display_name COLLATE NOCASE, id",
             )
             .map_err(storage_error)?;
         let rows = statement
             .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
+                Ok(ContactRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    company: row.get(2)?,
+                    job_title: row.get(3)?,
+                    birthday: row.get(4)?,
+                    website: row.get(5)?,
+                    notes: row.get(6)?,
+                })
             })
             .map_err(storage_error)?;
 
         rows.map(|row| {
-            let (id, name, email) = row.map_err(storage_error)?;
+            let row = row.map_err(storage_error)?;
             Ok(Contact {
-                id: WorkspaceItemId::parse(id).map_err(invalid_data)?,
-                email: MailAddress::new(email, Some(name.clone())).map_err(invalid_data)?,
-                name,
+                emails: emails.remove(&row.id).unwrap_or_default(),
+                phones: phones.remove(&row.id).unwrap_or_default(),
+                addresses: addresses.remove(&row.id).unwrap_or_default(),
+                id: WorkspaceItemId::parse(row.id).map_err(invalid_data)?,
+                name: row.name,
+                company: row.company,
+                job_title: row.job_title,
+                birthday: row.birthday,
+                website: row.website,
+                notes: row.notes,
             })
         })
         .collect()
     }
 
     fn save_contact(&mut self, contact: &Contact) -> Result<(), ApplicationError> {
-        self.connection()?
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(storage_error)?;
+        transaction
             .execute(
-                "INSERT INTO contacts (id, display_name, email)
-                 VALUES (?1, ?2, ?3)
+                "INSERT INTO contacts (
+                    id, display_name, company, job_title, birthday, website, notes
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(id) DO UPDATE SET
                     display_name = excluded.display_name,
-                    email = excluded.email",
-                params![contact.id.as_str(), contact.name, contact.email.address()],
+                    company = excluded.company,
+                    job_title = excluded.job_title,
+                    birthday = excluded.birthday,
+                    website = excluded.website,
+                    notes = excluded.notes",
+                params![
+                    contact.id.as_str(),
+                    contact.name,
+                    contact.company,
+                    contact.job_title,
+                    contact.birthday,
+                    contact.website,
+                    contact.notes,
+                ],
             )
-            .map(|_| ())
-            .map_err(storage_error)
+            .map_err(storage_error)?;
+        for table in ["contact_emails", "contact_phones", "contact_addresses"] {
+            transaction
+                .execute(
+                    &format!("DELETE FROM {table} WHERE contact_id = ?1"),
+                    [contact.id.as_str()],
+                )
+                .map_err(storage_error)?;
+        }
+        for (email, position) in contact.emails.iter().zip(0_i64..) {
+            transaction
+                .execute(
+                    "INSERT INTO contact_emails (contact_id, position, label, address)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        contact.id.as_str(),
+                        position,
+                        contact_label_key(email.label),
+                        email.address.address(),
+                    ],
+                )
+                .map_err(storage_error)?;
+        }
+        for (phone, position) in contact.phones.iter().zip(0_i64..) {
+            transaction
+                .execute(
+                    "INSERT INTO contact_phones (contact_id, position, label, number)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        contact.id.as_str(),
+                        position,
+                        contact_label_key(phone.label),
+                        phone.number,
+                    ],
+                )
+                .map_err(storage_error)?;
+        }
+        for (address, position) in contact.addresses.iter().zip(0_i64..) {
+            transaction
+                .execute(
+                    "INSERT INTO contact_addresses (
+                        contact_id, position, label, street, postal_code, city, country
+                     )
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        contact.id.as_str(),
+                        position,
+                        contact_label_key(address.label),
+                        address.street,
+                        address.postal_code,
+                        address.city,
+                        address.country,
+                    ],
+                )
+                .map_err(storage_error)?;
+        }
+        transaction.commit().map_err(storage_error)
+    }
+
+    fn delete_contact(&mut self, contact_id: &WorkspaceItemId) -> Result<(), ApplicationError> {
+        let deleted = self
+            .connection()?
+            .execute("DELETE FROM contacts WHERE id = ?1", [contact_id.as_str()])
+            .map_err(storage_error)?;
+        if deleted == 0 {
+            return Err(ApplicationError::NotFound);
+        }
+        Ok(())
+    }
+}
+
+/// Loads one kind of contact detail for every contact, keyed by contact
+/// identifier and in stored position order. Column 0 of `sql` is the
+/// contact identifier; `map` reads the remaining columns.
+fn load_contact_details<T>(
+    connection: &Connection,
+    sql: &str,
+    map: impl Fn(&rusqlite::Row<'_>) -> Result<T, ApplicationError>,
+) -> Result<HashMap<String, Vec<T>>, ApplicationError> {
+    let mut statement = connection.prepare(sql).map_err(storage_error)?;
+    let mut rows = statement.query([]).map_err(storage_error)?;
+    let mut details: HashMap<String, Vec<T>> = HashMap::new();
+    while let Some(row) = rows.next().map_err(storage_error)? {
+        let contact_id: String = row.get(0).map_err(storage_error)?;
+        details.entry(contact_id).or_default().push(map(row)?);
+    }
+    Ok(details)
+}
+
+struct CalendarEventRow {
+    id: String,
+    title: String,
+    starts_at_ms: i64,
+    ends_at_ms: i64,
+    all_day: bool,
+    location: Option<String>,
+    description: Option<String>,
+    reminder_minutes_before: Option<u32>,
+    reminder_dismissed: bool,
+}
+
+struct TaskRow {
+    id: String,
+    title: String,
+    description: Option<String>,
+    starts_at_ms: Option<i64>,
+    due_at_ms: Option<i64>,
+    status: String,
+    priority: String,
+    reminder_at_ms: Option<i64>,
+    reminder_dismissed: bool,
+    completed_at_ms: Option<i64>,
+}
+
+struct ContactRow {
+    id: String,
+    name: String,
+    company: Option<String>,
+    job_title: Option<String>,
+    birthday: Option<String>,
+    website: Option<String>,
+    notes: Option<String>,
+}
+
+fn task_status_key(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::NotStarted => "not_started",
+        TaskStatus::InProgress => "in_progress",
+        TaskStatus::Waiting => "waiting",
+        TaskStatus::Deferred => "deferred",
+        TaskStatus::Completed => "completed",
+    }
+}
+
+fn parse_task_status(value: &str) -> Result<TaskStatus, ApplicationError> {
+    match value {
+        "not_started" => Ok(TaskStatus::NotStarted),
+        "in_progress" => Ok(TaskStatus::InProgress),
+        "waiting" => Ok(TaskStatus::Waiting),
+        "deferred" => Ok(TaskStatus::Deferred),
+        "completed" => Ok(TaskStatus::Completed),
+        other => Err(invalid_data(format!("unknown task status {other}"))),
+    }
+}
+
+fn task_priority_key(priority: TaskPriority) -> &'static str {
+    match priority {
+        TaskPriority::Low => "low",
+        TaskPriority::Normal => "normal",
+        TaskPriority::High => "high",
+    }
+}
+
+fn parse_task_priority(value: &str) -> Result<TaskPriority, ApplicationError> {
+    match value {
+        "low" => Ok(TaskPriority::Low),
+        "normal" => Ok(TaskPriority::Normal),
+        "high" => Ok(TaskPriority::High),
+        other => Err(invalid_data(format!("unknown task priority {other}"))),
+    }
+}
+
+fn contact_label_key(label: ContactLabel) -> &'static str {
+    match label {
+        ContactLabel::Work => "work",
+        ContactLabel::Home => "home",
+        ContactLabel::Mobile => "mobile",
+        ContactLabel::Fax => "fax",
+        ContactLabel::Other => "other",
+    }
+}
+
+fn parse_contact_label(value: &str) -> Result<ContactLabel, ApplicationError> {
+    match value {
+        "work" => Ok(ContactLabel::Work),
+        "home" => Ok(ContactLabel::Home),
+        "mobile" => Ok(ContactLabel::Mobile),
+        "fax" => Ok(ContactLabel::Fax),
+        "other" => Ok(ContactLabel::Other),
+        other => Err(invalid_data(format!("unknown contact label {other}"))),
     }
 }
 
@@ -2801,6 +3132,10 @@ fn migrate(connection: &mut Connection) -> Result<(), ApplicationError> {
         apply_migration_v16(connection)?;
     }
 
+    if version < 17 {
+        apply_migration_v17(connection)?;
+    }
+
     Ok(())
 }
 
@@ -3700,6 +4035,140 @@ fn apply_migration_v16(connection: &mut Connection) -> Result<(), ApplicationErr
     transaction.commit().map_err(storage_error)
 }
 
+/// Gives calendar events, tasks, and contacts the details of a full
+/// personal information manager: all-day events with descriptions and
+/// reminders, tasks with status, priority, dates, notes, and reminders, and
+/// contacts with several email addresses, phone numbers, and postal
+/// addresses. Existing rows are carried over; the single contact email
+/// becomes the first entry of the new email list.
+#[allow(clippy::too_many_lines)]
+fn apply_migration_v17(connection: &mut Connection) -> Result<(), ApplicationError> {
+    let transaction = connection.transaction().map_err(storage_error)?;
+    transaction
+        .execute_batch(
+            "
+                CREATE TABLE calendar_events_v17 (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    title TEXT NOT NULL,
+                    starts_at_ms INTEGER NOT NULL,
+                    ends_at_ms INTEGER NOT NULL,
+                    all_day INTEGER NOT NULL DEFAULT 0 CHECK (all_day IN (0, 1)),
+                    location TEXT,
+                    description TEXT,
+                    reminder_minutes_before INTEGER
+                        CHECK (reminder_minutes_before IS NULL
+                            OR reminder_minutes_before >= 0),
+                    reminder_dismissed INTEGER NOT NULL DEFAULT 0
+                        CHECK (reminder_dismissed IN (0, 1)),
+                    CHECK (ends_at_ms > starts_at_ms)
+                ) STRICT;
+
+                INSERT INTO calendar_events_v17 (
+                    id, title, starts_at_ms, ends_at_ms, location
+                )
+                SELECT id, title, starts_at_ms, ends_at_ms, location
+                FROM calendar_events;
+
+                DROP TABLE calendar_events;
+                ALTER TABLE calendar_events_v17 RENAME TO calendar_events;
+                CREATE INDEX calendar_events_start
+                    ON calendar_events (starts_at_ms);
+
+                CREATE TABLE tasks_v17 (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    starts_at_ms INTEGER,
+                    due_at_ms INTEGER,
+                    status TEXT NOT NULL DEFAULT 'not_started'
+                        CHECK (status IN (
+                            'not_started', 'in_progress', 'waiting',
+                            'deferred', 'completed'
+                        )),
+                    priority TEXT NOT NULL DEFAULT 'normal'
+                        CHECK (priority IN ('low', 'normal', 'high')),
+                    reminder_at_ms INTEGER,
+                    reminder_dismissed INTEGER NOT NULL DEFAULT 0
+                        CHECK (reminder_dismissed IN (0, 1)),
+                    completed_at_ms INTEGER
+                ) STRICT;
+
+                INSERT INTO tasks_v17 (id, title, due_at_ms, status)
+                SELECT id, title, due_at_ms,
+                       CASE completed WHEN 1 THEN 'completed' ELSE 'not_started' END
+                FROM tasks;
+
+                DROP TABLE tasks;
+                ALTER TABLE tasks_v17 RENAME TO tasks;
+                CREATE INDEX tasks_state_due
+                    ON tasks (status, due_at_ms);
+
+                DROP INDEX contacts_display_name;
+                ALTER TABLE contacts RENAME TO contacts_v2;
+
+                CREATE TABLE contacts (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    display_name TEXT NOT NULL,
+                    company TEXT,
+                    job_title TEXT,
+                    birthday TEXT,
+                    website TEXT,
+                    notes TEXT
+                ) STRICT;
+
+                CREATE INDEX contacts_display_name
+                    ON contacts (display_name COLLATE NOCASE);
+
+                CREATE TABLE contact_emails (
+                    contact_id TEXT NOT NULL
+                        REFERENCES contacts(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL CHECK (position >= 0),
+                    label TEXT NOT NULL
+                        CHECK (label IN ('work', 'home', 'mobile', 'fax', 'other')),
+                    address TEXT NOT NULL,
+                    PRIMARY KEY (contact_id, position)
+                ) STRICT;
+
+                CREATE TABLE contact_phones (
+                    contact_id TEXT NOT NULL
+                        REFERENCES contacts(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL CHECK (position >= 0),
+                    label TEXT NOT NULL
+                        CHECK (label IN ('work', 'home', 'mobile', 'fax', 'other')),
+                    number TEXT NOT NULL,
+                    PRIMARY KEY (contact_id, position)
+                ) STRICT;
+
+                CREATE TABLE contact_addresses (
+                    contact_id TEXT NOT NULL
+                        REFERENCES contacts(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL CHECK (position >= 0),
+                    label TEXT NOT NULL
+                        CHECK (label IN ('work', 'home', 'mobile', 'fax', 'other')),
+                    street TEXT NOT NULL,
+                    postal_code TEXT NOT NULL,
+                    city TEXT NOT NULL,
+                    country TEXT NOT NULL,
+                    PRIMARY KEY (contact_id, position)
+                ) STRICT;
+
+                INSERT INTO contacts (id, display_name)
+                SELECT id, display_name FROM contacts_v2;
+
+                INSERT INTO contact_emails (contact_id, position, label, address)
+                SELECT id, 0, 'other', email
+                FROM contacts_v2
+                WHERE email != '';
+
+                DROP TABLE contacts_v2;
+
+                PRAGMA user_version = 17;
+                ",
+        )
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)
+}
+
 fn search_expression(
     query: &str,
     include_content: bool,
@@ -4085,9 +4554,10 @@ mod tests {
         RemoteMessageMetadata, SecretStore, WorkspaceStore,
     };
     use maicenta_domain::{
-        AccountId, AttachmentId, CalendarEvent, Contact, MailAccount, MailAddress, MailProvider,
-        Mailbox, MailboxId, MailboxRole, MessageAttachment, MessageBody, MessageFlag, MessageId,
-        MessageRecipients, MessageSummary, TaskItem, TransportSecurity, WorkspaceItemId,
+        AccountId, AttachmentId, CalendarEvent, Contact, ContactEmail, ContactLabel, ContactPhone,
+        MailAccount, MailAddress, MailProvider, Mailbox, MailboxId, MailboxRole, MessageAttachment,
+        MessageBody, MessageFlag, MessageId, MessageRecipients, MessageSummary, PostalAddress,
+        TaskItem, TaskPriority, TaskStatus, TransportSecurity, WorkspaceItemId,
     };
 
     use rusqlite::Connection;
@@ -4704,6 +5174,26 @@ mod tests {
                     previous_remote_uid INTEGER,
                     updated_at_ms INTEGER NOT NULL
                 ) STRICT;
+                CREATE TABLE calendar_events (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    title TEXT NOT NULL,
+                    starts_at_ms INTEGER NOT NULL,
+                    ends_at_ms INTEGER NOT NULL,
+                    location TEXT
+                ) STRICT;
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    title TEXT NOT NULL,
+                    due_at_ms INTEGER,
+                    completed INTEGER NOT NULL DEFAULT 0
+                ) STRICT;
+                CREATE TABLE contacts (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    display_name TEXT NOT NULL,
+                    email TEXT NOT NULL
+                ) STRICT;
+                CREATE INDEX contacts_display_name
+                    ON contacts (display_name COLLATE NOCASE);
                 INSERT INTO mail_accounts (id) VALUES ('work');
                 INSERT INTO account_secrets (account_id, password)
                 VALUES ('work', 'existing-password');
@@ -5068,18 +5558,67 @@ mod tests {
             connection
                 .execute(
                     "INSERT INTO tasks (id, title, due_at_ms, completed) \
-                     VALUES ('v2.task', 'Aufgabe aus Version 2', NULL, 0)",
+                     VALUES ('v2.task', 'Aufgabe aus Version 2', NULL, 1)",
                     [],
                 )
                 .expect("v2 task");
+            connection
+                .execute(
+                    "INSERT INTO contacts (id, display_name, email) \
+                     VALUES ('v2.contact', 'Kontakt aus Version 2', 'v2@example.org')",
+                    [],
+                )
+                .expect("v2 contact");
+            connection
+                .execute(
+                    "INSERT INTO calendar_events (id, title, starts_at_ms, ends_at_ms, location) \
+                     VALUES ('v2.event', 'Termin aus Version 2', 1785830400000, \
+                             1785834000000, 'Besprechungsraum')",
+                    [],
+                )
+                .expect("v2 event");
         }
 
-        let store = SqliteMailStore::open(&database.path).expect("upgrade database");
+        let mut store = SqliteMailStore::open(&database.path).expect("upgrade database");
         assert_eq!(
             store.schema_version().expect("schema version"),
             CURRENT_SCHEMA_VERSION
         );
-        assert_eq!(store.list_tasks().expect("v2 tasks").len(), 1);
+        assert_eq!(
+            store.list_calendar_events().expect("v2 events"),
+            vec![CalendarEvent {
+                id: WorkspaceItemId::parse("v2.event").expect("event id"),
+                title: "Termin aus Version 2".into(),
+                starts_at_ms: 1_785_830_400_000,
+                ends_at_ms: 1_785_834_000_000,
+                all_day: false,
+                location: Some("Besprechungsraum".into()),
+                description: None,
+                reminder_minutes_before: None,
+                reminder_dismissed: false,
+            }]
+        );
+        let tasks = store.list_tasks().expect("v2 tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].status, TaskStatus::Completed);
+        assert_eq!(tasks[0].priority, TaskPriority::Normal);
+        let contacts = store.list_contacts().expect("v2 contacts");
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(contacts[0].name, "Kontakt aus Version 2");
+        assert_eq!(contacts[0].emails.len(), 1);
+        assert_eq!(contacts[0].emails[0].address.address(), "v2@example.org");
+        assert_eq!(
+            contacts[0].primary_email().expect("primary").display_name(),
+            Some("Kontakt aus Version 2")
+        );
+        store
+            .delete_contact(&contacts[0].id)
+            .expect("delete migrated contact");
+        assert_eq!(store.list_contacts().expect("contacts"), Vec::new());
+        assert_eq!(
+            store.delete_contact(&contacts[0].id),
+            Err(ApplicationError::NotFound)
+        );
         assert_eq!(store.pending_mail_mutation_count(), Ok(0));
     }
 
@@ -5689,19 +6228,53 @@ mod tests {
             title: "Persistenter Termin".into(),
             starts_at_ms: 1_785_830_400_000,
             ends_at_ms: 1_785_834_000_000,
+            all_day: false,
             location: Some("Lokal".into()),
+            description: Some("Agenda folgt".into()),
+            reminder_minutes_before: Some(15),
+            reminder_dismissed: true,
         };
         let task = TaskItem {
             id: WorkspaceItemId::parse("local.task.persisted").expect("task id"),
             title: "Persistente Aufgabe".into(),
+            description: Some("Mit Notizen".into()),
+            starts_at_ms: Some(1_785_830_400_000),
             due_at_ms: Some(1_785_916_800_000),
-            completed: true,
+            status: TaskStatus::Completed,
+            priority: TaskPriority::High,
+            reminder_at_ms: Some(1_785_900_000_000),
+            reminder_dismissed: false,
+            completed_at_ms: Some(1_785_910_000_000),
         };
         let contact = Contact {
             id: WorkspaceItemId::parse("local.contact.persisted").expect("contact id"),
             name: "Testkontakt".into(),
-            email: MailAddress::new("contact@example.org", Some("Testkontakt".into()))
-                .expect("contact address"),
+            company: Some("Beispiel GmbH".into()),
+            job_title: Some("Leitung".into()),
+            emails: vec![
+                ContactEmail {
+                    label: ContactLabel::Work,
+                    address: MailAddress::new("contact@example.org", None).expect("work"),
+                },
+                ContactEmail {
+                    label: ContactLabel::Home,
+                    address: MailAddress::new("privat@example.org", None).expect("home"),
+                },
+            ],
+            phones: vec![ContactPhone {
+                label: ContactLabel::Mobile,
+                number: "+49 170 1234567".into(),
+            }],
+            addresses: vec![PostalAddress {
+                label: ContactLabel::Work,
+                street: "Musterstraße 1".into(),
+                postal_code: "12345".into(),
+                city: "Berlin".into(),
+                country: "Deutschland".into(),
+            }],
+            birthday: Some("1980-05-17".into()),
+            website: Some("https://example.org".into()),
+            notes: Some("Kennt das Projekt".into()),
         };
         let account = mail_account();
 

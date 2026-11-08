@@ -86,31 +86,147 @@ pub struct CalendarEvent {
     pub title: String,
     pub starts_at_ms: i64,
     pub ends_at_ms: i64,
+    /// The event covers whole days. `starts_at_ms` and `ends_at_ms` then
+    /// mark local midnight boundaries supplied by the client; the end is the
+    /// midnight after the last day.
+    pub all_day: bool,
     pub location: Option<String>,
+    pub description: Option<String>,
+    /// Minutes before `starts_at_ms` at which the reminder becomes due.
+    /// `None` means the event has no reminder.
+    pub reminder_minutes_before: Option<u32>,
+    /// The user closed the reminder. Clients reset the flag when the start
+    /// time or the reminder lead time changes.
+    pub reminder_dismissed: bool,
 }
 
-/// One local task with an optional due date.
+impl CalendarEvent {
+    /// Unix timestamp at which the reminder becomes due, if one is set.
+    #[must_use]
+    pub fn reminder_at_ms(&self) -> Option<i64> {
+        self.reminder_minutes_before
+            .map(|minutes| self.starts_at_ms - i64::from(minutes) * 60_000)
+    }
+}
+
+/// Importance of a task, mirroring the three classic levels.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TaskPriority {
+    Low,
+    #[default]
+    Normal,
+    High,
+}
+
+/// Progress state of a task.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TaskStatus {
+    #[default]
+    NotStarted,
+    InProgress,
+    Waiting,
+    Deferred,
+    Completed,
+}
+
+/// One local task with optional dates, a reminder, and notes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskItem {
     pub id: WorkspaceItemId,
     pub title: String,
+    pub description: Option<String>,
+    pub starts_at_ms: Option<i64>,
     pub due_at_ms: Option<i64>,
-    pub completed: bool,
+    pub status: TaskStatus,
+    pub priority: TaskPriority,
+    /// Absolute time at which the reminder becomes due.
+    pub reminder_at_ms: Option<i64>,
+    /// The user closed the reminder. Clients reset the flag when the
+    /// reminder time changes.
+    pub reminder_dismissed: bool,
+    pub completed_at_ms: Option<i64>,
+}
+
+impl TaskItem {
+    /// Whether the task reached its final state.
+    #[must_use]
+    pub fn completed(&self) -> bool {
+        self.status == TaskStatus::Completed
+    }
+}
+
+/// Kind of a contact detail such as an email address or phone number.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ContactLabel {
+    Work,
+    Home,
+    Mobile,
+    Fax,
+    #[default]
+    Other,
+}
+
+/// One labelled email address of a contact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContactEmail {
+    pub label: ContactLabel,
+    pub address: MailAddress,
+}
+
+/// One labelled phone number of a contact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContactPhone {
+    pub label: ContactLabel,
+    pub number: String,
+}
+
+/// One labelled postal address of a contact. Individual lines may be empty;
+/// at least one line is filled.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PostalAddress {
+    pub label: ContactLabel,
+    pub street: String,
+    pub postal_code: String,
+    pub city: String,
+    pub country: String,
 }
 
 /// One local address-book contact.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Contact {
     pub id: WorkspaceItemId,
+    /// Display name shown in lists and used as the sender/recipient name.
     pub name: String,
-    pub email: MailAddress,
+    pub company: Option<String>,
+    pub job_title: Option<String>,
+    pub emails: Vec<ContactEmail>,
+    pub phones: Vec<ContactPhone>,
+    pub addresses: Vec<PostalAddress>,
+    /// ISO 8601 calendar date (`YYYY-MM-DD`) without a time zone.
+    pub birthday: Option<String>,
+    pub website: Option<String>,
+    pub notes: Option<String>,
+}
+
+impl Contact {
+    /// The first email address, carrying the contact's display name so it can
+    /// be used directly as a recipient.
+    #[must_use]
+    pub fn primary_email(&self) -> Option<MailAddress> {
+        self.emails.first().and_then(|email| {
+            MailAddress::new(email.address.address(), Some(self.name.clone())).ok()
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{AccountId, MailAddress, WorkspaceItemId};
 
-    use super::{MailAccount, MailProvider, TransportSecurity};
+    use super::{
+        CalendarEvent, Contact, ContactEmail, ContactLabel, MailAccount, MailProvider, TaskItem,
+        TaskPriority, TaskStatus, TransportSecurity,
+    };
 
     #[test]
     fn account_configuration_contains_no_secret_material() {
@@ -175,5 +291,54 @@ mod tests {
         assert_eq!(unnamed.display_name(), Some("Timm Beckmann"));
 
         assert_eq!(account.sender_identity("ceo@bank.example"), None);
+    }
+
+    #[test]
+    fn derives_reminder_and_completion_state() {
+        let event = CalendarEvent {
+            id: WorkspaceItemId::parse("local.event.1").expect("event id"),
+            title: "Planung".into(),
+            starts_at_ms: 3_600_000,
+            ends_at_ms: 7_200_000,
+            all_day: false,
+            location: None,
+            description: None,
+            reminder_minutes_before: Some(15),
+            reminder_dismissed: false,
+        };
+        assert_eq!(event.reminder_at_ms(), Some(2_700_000));
+
+        let task = TaskItem {
+            id: WorkspaceItemId::parse("local.task.1").expect("task id"),
+            title: "Aufgabe".into(),
+            description: None,
+            starts_at_ms: None,
+            due_at_ms: None,
+            status: TaskStatus::Completed,
+            priority: TaskPriority::High,
+            reminder_at_ms: None,
+            reminder_dismissed: false,
+            completed_at_ms: Some(1),
+        };
+        assert!(task.completed());
+
+        let contact = Contact {
+            id: WorkspaceItemId::parse("local.contact.1").expect("contact id"),
+            name: "Anna Schneider".into(),
+            company: None,
+            job_title: None,
+            emails: vec![ContactEmail {
+                label: ContactLabel::Work,
+                address: MailAddress::new("anna@example.org", None).expect("address"),
+            }],
+            phones: Vec::new(),
+            addresses: Vec::new(),
+            birthday: None,
+            website: None,
+            notes: None,
+        };
+        let primary = contact.primary_email().expect("primary email");
+        assert_eq!(primary.address(), "anna@example.org");
+        assert_eq!(primary.display_name(), Some("Anna Schneider"));
     }
 }
