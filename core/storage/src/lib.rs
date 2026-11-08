@@ -5614,7 +5614,7 @@ mod tests {
         store
             .delete_contact(&contacts[0].id)
             .expect("delete migrated contact");
-        assert!(store.list_contacts().expect("contacts").is_empty());
+        assert_eq!(store.list_contacts().expect("contacts"), Vec::new());
         assert_eq!(
             store.delete_contact(&contacts[0].id),
             Err(ApplicationError::NotFound)
