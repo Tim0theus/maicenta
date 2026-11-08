@@ -1,0 +1,22 @@
+[package]
+name = "maicenta-dav-connector"
+version = "0.1.0-beta.1"
+description = "CalDAV/CardDAV connector: iCalendar and vCard mapping, WebDAV client, and two-way synchronization of calendars, task lists, and address books."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+chrono-tz = "0.10.4"
+maicenta-application = { path = "../../core/application" }
+maicenta-domain = { path = "../../core/domain" }
+reqwest = { version = "0.12.22", default-features = false, features = ["rustls-tls"] }
+url = "2.5.8"
+
+[dev-dependencies]
+maicenta-storage = { path = "../../core/storage" }
+tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

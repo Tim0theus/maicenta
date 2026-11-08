@@ -4,6 +4,7 @@ import '../../app_theme.dart';
 import '../workspace/double_click.dart';
 import '../workspace/german_dates.dart';
 import '../workspace/workspace_items.dart';
+import 'recurrence.dart';
 
 /// Layouts offered by the calendar module.
 enum CalendarView {
@@ -79,6 +80,21 @@ String rangeLabel(CalendarView view, DateTime focused) {
   }
 }
 
+/// Color used for an event; synchronized calendars may carry their own.
+typedef EventColorResolver = Color Function(LocalCalendarItem event);
+
+Color _defaultColor(LocalCalendarItem event) => maicentaPrimaryBlue;
+
+/// Parses `#RRGGBB` or `#RRGGBBAA`; null for anything else.
+Color? parseCssColor(String? value) {
+  if (value == null) return null;
+  final hex = value.trim().replaceFirst('#', '');
+  if (hex.length != 6 && hex.length != 8) return null;
+  final parsed = int.tryParse(hex.substring(0, 6), radix: 16);
+  if (parsed == null) return null;
+  return Color(0xFF000000 | parsed);
+}
+
 /// Mini month calendar for the navigation pane.
 class MiniCalendar extends StatelessWidget {
   const MiniCalendar({
@@ -99,10 +115,15 @@ class MiniCalendar extends StatelessWidget {
     final palette = MaicentaPalette.of(context);
     final now = dateOnly(today ?? DateTime.now());
     final days = visibleDays(CalendarView.month, focused);
+    final occurrences = expandEvents(
+      events,
+      days.first,
+      days.last.add(const Duration(days: 1)),
+    );
     final busyDays = <DateTime>{
-      for (final event in events)
+      for (final occurrence in occurrences)
         for (final day in days)
-          if (event.occursOn(day)) day,
+          if (occurrence.occursOn(day)) day,
     };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -249,34 +270,34 @@ class _NavIcon extends StatelessWidget {
 }
 
 /// The calendar module body: toolbar with navigation and view switch, and
-/// the day, week, or month layout beneath it.
+/// the day, week, or month layout beneath it. Recurring events are expanded
+/// into their occurrences for the visible range.
 class CalendarWorkspace extends StatefulWidget {
   const CalendarWorkspace({
     super.key,
     required this.events,
-    required this.enabled,
     required this.focused,
     required this.view,
     required this.onFocusedChanged,
     required this.onViewChanged,
     required this.onOpenEvent,
     required this.onCreateAt,
+    this.colorOf = _defaultColor,
     this.today,
   });
 
+  /// Events of every calendar that is switched on.
   final List<LocalCalendarItem> events;
-
-  /// Whether the personal calendar is switched on in the navigation pane.
-  final bool enabled;
   final DateTime focused;
   final CalendarView view;
   final ValueChanged<DateTime> onFocusedChanged;
   final ValueChanged<CalendarView> onViewChanged;
-  final ValueChanged<LocalCalendarItem> onOpenEvent;
+  final ValueChanged<EventOccurrence> onOpenEvent;
 
   /// Called with the start of the double-clicked slot; `allDay` for a month
   /// cell or the all-day row.
   final void Function(DateTime start, bool allDay) onCreateAt;
+  final EventColorResolver colorOf;
 
   /// Overrides the current day, for tests.
   final DateTime? today;
@@ -297,12 +318,17 @@ class _CalendarWorkspaceState extends State<CalendarWorkspace> {
     super.dispose();
   }
 
-  List<LocalCalendarItem> get visibleEvents =>
-      widget.enabled ? widget.events : const [];
+  List<EventOccurrence> visibleOccurrences(List<DateTime> days) => expandEvents(
+    widget.events,
+    days.first,
+    days.last.add(const Duration(days: 1)),
+  );
 
   @override
   Widget build(BuildContext context) {
     final palette = MaicentaPalette.of(context);
+    final days = visibleDays(widget.view, widget.focused);
+    final occurrences = visibleOccurrences(days);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -362,18 +388,20 @@ class _CalendarWorkspaceState extends State<CalendarWorkspace> {
         Expanded(
           child: widget.view == CalendarView.month
               ? _MonthGrid(
-                  days: visibleDays(CalendarView.month, widget.focused),
+                  days: days,
                   focused: widget.focused,
                   today: widget.today ?? DateTime.now(),
-                  events: visibleEvents,
+                  occurrences: occurrences,
+                  colorOf: widget.colorOf,
                   onSelectDay: widget.onFocusedChanged,
                   onOpenEvent: widget.onOpenEvent,
                   onCreateAt: widget.onCreateAt,
                 )
               : _TimeGrid(
-                  days: visibleDays(widget.view, widget.focused),
+                  days: days,
                   today: widget.today ?? DateTime.now(),
-                  events: visibleEvents,
+                  occurrences: occurrences,
+                  colorOf: widget.colorOf,
                   hourHeight: hourHeight,
                   scrollController: timeScroll,
                   onOpenEvent: widget.onOpenEvent,
@@ -426,42 +454,45 @@ class _ViewButton extends StatelessWidget {
   }
 }
 
-/// One timed event placed inside a day column.
+/// One timed occurrence placed inside a day column.
 class _PlacedEvent {
   const _PlacedEvent({
-    required this.event,
+    required this.occurrence,
     required this.start,
     required this.end,
     required this.column,
     required this.columns,
   });
 
-  final LocalCalendarItem event;
+  final EventOccurrence occurrence;
   final DateTime start;
   final DateTime end;
   final int column;
   final int columns;
 }
 
-/// Lays out the timed events of one day side by side where they overlap.
+/// Lays out the timed occurrences of one day side by side where they
+/// overlap.
 List<_PlacedEvent> _placeTimedEvents(
-  List<LocalCalendarItem> events,
+  List<EventOccurrence> occurrences,
   DateTime day,
 ) {
   final dayStart = dateOnly(day);
   final dayEnd = dayStart.add(const Duration(days: 1));
   final clipped =
       [
-        for (final event in events)
-          if (!event.allDay &&
-              event.startsAt.isBefore(dayEnd) &&
-              event.endsAt.isAfter(dayStart))
+        for (final occurrence in occurrences)
+          if (!occurrence.allDay &&
+              occurrence.startsAt.isBefore(dayEnd) &&
+              occurrence.endsAt.isAfter(dayStart))
             (
-              event: event,
-              start: event.startsAt.isBefore(dayStart)
+              occurrence: occurrence,
+              start: occurrence.startsAt.isBefore(dayStart)
                   ? dayStart
-                  : event.startsAt,
-              end: event.endsAt.isAfter(dayEnd) ? dayEnd : event.endsAt,
+                  : occurrence.startsAt,
+              end: occurrence.endsAt.isAfter(dayEnd)
+                  ? dayEnd
+                  : occurrence.endsAt,
             ),
       ]..sort((a, b) {
         final byStart = a.start.compareTo(b.start);
@@ -469,8 +500,8 @@ List<_PlacedEvent> _placeTimedEvents(
       });
 
   final placed = <_PlacedEvent>[];
-  // A cluster is a run of events that transitively overlap; every event in
-  // it shares the cluster's column count.
+  // A cluster is a run of occurrences that transitively overlap; every
+  // member shares the cluster's column count.
   var clusterStart = 0;
   var columnEnds = <DateTime>[];
   var assignments = <int>[];
@@ -481,7 +512,7 @@ List<_PlacedEvent> _placeTimedEvents(
       final item = clipped[index];
       placed.add(
         _PlacedEvent(
-          event: item.event,
+          occurrence: item.occurrence,
           start: item.start,
           end: item.end,
           column: assignments[index - clusterStart],
@@ -515,7 +546,8 @@ class _TimeGrid extends StatelessWidget {
   const _TimeGrid({
     required this.days,
     required this.today,
-    required this.events,
+    required this.occurrences,
+    required this.colorOf,
     required this.hourHeight,
     required this.scrollController,
     required this.onOpenEvent,
@@ -525,10 +557,11 @@ class _TimeGrid extends StatelessWidget {
 
   final List<DateTime> days;
   final DateTime today;
-  final List<LocalCalendarItem> events;
+  final List<EventOccurrence> occurrences;
+  final EventColorResolver colorOf;
   final double hourHeight;
   final ScrollController scrollController;
-  final ValueChanged<LocalCalendarItem> onOpenEvent;
+  final ValueChanged<EventOccurrence> onOpenEvent;
   final void Function(DateTime start, bool allDay) onCreateAt;
   final ValueChanged<DateTime> onSelectDay;
 
@@ -539,11 +572,12 @@ class _TimeGrid extends StatelessWidget {
     final palette = MaicentaPalette.of(context);
     final allDayByDay = {
       for (final day in days)
-        day: events
+        day: occurrences
             .where(
-              (event) =>
-                  (event.allDay || !isSameDay(event.startsAt, event.lastDay)) &&
-                  event.occursOn(day),
+              (occurrence) =>
+                  (occurrence.allDay ||
+                      !isSameDay(occurrence.startsAt, occurrence.lastDay)) &&
+                  occurrence.occursOn(day),
             )
             .toList(growable: false),
     };
@@ -620,11 +654,12 @@ class _TimeGrid extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            for (final event in allDayByDay[day]!)
+                            for (final occurrence in allDayByDay[day]!)
                               _EventChip(
-                                event: event,
+                                occurrence: occurrence,
+                                color: colorOf(occurrence.event),
                                 showTime: false,
-                                onTap: () => onOpenEvent(event),
+                                onTap: () => onOpenEvent(occurrence),
                               ),
                           ],
                         ),
@@ -675,7 +710,8 @@ class _TimeGrid extends StatelessWidget {
                         day: day,
                         isToday: isSameDay(day, today),
                         now: today,
-                        placed: _placeTimedEvents(events, day),
+                        placed: _placeTimedEvents(occurrences, day),
+                        colorOf: colorOf,
                         hourHeight: hourHeight,
                         onOpenEvent: onOpenEvent,
                         onCreateAt: onCreateAt,
@@ -697,6 +733,7 @@ class _DayColumn extends StatelessWidget {
     required this.isToday,
     required this.now,
     required this.placed,
+    required this.colorOf,
     required this.hourHeight,
     required this.onOpenEvent,
     required this.onCreateAt,
@@ -706,8 +743,9 @@ class _DayColumn extends StatelessWidget {
   final bool isToday;
   final DateTime now;
   final List<_PlacedEvent> placed;
+  final EventColorResolver colorOf;
   final double hourHeight;
-  final ValueChanged<LocalCalendarItem> onOpenEvent;
+  final ValueChanged<EventOccurrence> onOpenEvent;
   final void Function(DateTime start, bool allDay) onCreateAt;
 
   double offsetFor(DateTime time) =>
@@ -760,8 +798,9 @@ class _DayColumn extends StatelessWidget {
                             2)
                         .clamp(18, double.infinity),
                 child: _TimedEventBlock(
-                  event: item.event,
-                  onTap: () => onOpenEvent(item.event),
+                  occurrence: item.occurrence,
+                  color: colorOf(item.occurrence.event),
+                  onTap: () => onOpenEvent(item.occurrence),
                 ),
               ),
             if (isToday)
@@ -782,24 +821,30 @@ class _DayColumn extends StatelessWidget {
 }
 
 class _TimedEventBlock extends StatelessWidget {
-  const _TimedEventBlock({required this.event, required this.onTap});
+  const _TimedEventBlock({
+    required this.occurrence,
+    required this.color,
+    required this.onTap,
+  });
 
-  final LocalCalendarItem event;
+  final EventOccurrence occurrence;
+  final Color color;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final palette = MaicentaPalette.of(context);
     return InkWell(
-      key: Key('calendar-event-${event.id}'),
+      key: Key('calendar-event-${occurrence.id}'),
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         decoration: BoxDecoration(
-          color: palette.selectedStrong,
-          border: const Border(
-            left: BorderSide(color: maicentaPrimaryBlue, width: 4),
+          color: Color.alphaBlend(
+            color.withValues(alpha: 0.18),
+            palette.selectedStrong,
           ),
+          border: Border(left: BorderSide(color: color, width: 4)),
           borderRadius: BorderRadius.circular(2),
         ),
         clipBehavior: Clip.hardEdge,
@@ -808,12 +853,15 @@ class _TimedEventBlock extends StatelessWidget {
             // Short blocks only have room for the title on one line.
             final showTime = constraints.maxHeight >= 34;
             final titleLines = constraints.maxHeight >= 50 ? 2 : 1;
+            final location = occurrence.event.location;
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  event.title,
+                  occurrence.event.recurring
+                      ? '↻ ${occurrence.title}'
+                      : occurrence.title,
                   maxLines: titleLines,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -823,9 +871,9 @@ class _TimedEventBlock extends StatelessWidget {
                 ),
                 if (showTime)
                   Text(
-                    event.location == null
-                        ? event.time
-                        : '${event.time} · ${event.location}',
+                    location == null
+                        ? occurrence.time
+                        : '${occurrence.time} · $location',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 10),
@@ -841,38 +889,46 @@ class _TimedEventBlock extends StatelessWidget {
 
 class _EventChip extends StatelessWidget {
   const _EventChip({
-    required this.event,
+    required this.occurrence,
+    required this.color,
     required this.showTime,
     required this.onTap,
   });
 
-  final LocalCalendarItem event;
+  final EventOccurrence occurrence;
+  final Color color;
   final bool showTime;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final palette = MaicentaPalette.of(context);
+    final filled = occurrence.allDay;
     return InkWell(
-      key: Key('calendar-chip-${event.id}'),
+      key: Key('calendar-chip-${occurrence.id}'),
       onTap: onTap,
       child: Container(
         margin: const EdgeInsets.only(bottom: 2),
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
         decoration: BoxDecoration(
-          color: event.allDay ? maicentaPrimaryBlue : palette.selectedStrong,
+          color: filled
+              ? color
+              : Color.alphaBlend(
+                  color.withValues(alpha: 0.18),
+                  palette.selectedStrong,
+                ),
           borderRadius: BorderRadius.circular(2),
         ),
         child: Text(
-          showTime && !event.allDay
-              ? '${formatClock(event.startsAt)} ${event.title}'
-              : event.title,
+          showTime && !occurrence.allDay
+              ? '${formatClock(occurrence.startsAt)} ${occurrence.title}'
+              : occurrence.title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
             fontSize: 10.5,
             fontWeight: FontWeight.w600,
-            color: event.allDay ? Colors.white : null,
+            color: filled ? Colors.white : null,
           ),
         ),
       ),
@@ -885,7 +941,8 @@ class _MonthGrid extends StatelessWidget {
     required this.days,
     required this.focused,
     required this.today,
-    required this.events,
+    required this.occurrences,
+    required this.colorOf,
     required this.onSelectDay,
     required this.onOpenEvent,
     required this.onCreateAt,
@@ -894,9 +951,10 @@ class _MonthGrid extends StatelessWidget {
   final List<DateTime> days;
   final DateTime focused;
   final DateTime today;
-  final List<LocalCalendarItem> events;
+  final List<EventOccurrence> occurrences;
+  final EventColorResolver colorOf;
   final ValueChanged<DateTime> onSelectDay;
-  final ValueChanged<LocalCalendarItem> onOpenEvent;
+  final ValueChanged<EventOccurrence> onOpenEvent;
   final void Function(DateTime start, bool allDay) onCreateAt;
 
   @override
@@ -941,11 +999,13 @@ class _MonthGrid extends StatelessWidget {
                       inMonth: days[row * 7 + column].month == focused.month,
                       isToday: isSameDay(days[row * 7 + column], today),
                       isSelected: isSameDay(days[row * 7 + column], focused),
-                      events: events
+                      occurrences: occurrences
                           .where(
-                            (event) => event.occursOn(days[row * 7 + column]),
+                            (occurrence) =>
+                                occurrence.occursOn(days[row * 7 + column]),
                           )
                           .toList(growable: false),
+                      colorOf: colorOf,
                       onSelect: () => onSelectDay(days[row * 7 + column]),
                       onCreate: () => onCreateAt(days[row * 7 + column], true),
                       onOpenEvent: onOpenEvent,
@@ -965,7 +1025,8 @@ class _MonthCell extends StatelessWidget {
     required this.inMonth,
     required this.isToday,
     required this.isSelected,
-    required this.events,
+    required this.occurrences,
+    required this.colorOf,
     required this.onSelect,
     required this.onCreate,
     required this.onOpenEvent,
@@ -975,10 +1036,11 @@ class _MonthCell extends StatelessWidget {
   final bool inMonth;
   final bool isToday;
   final bool isSelected;
-  final List<LocalCalendarItem> events;
+  final List<EventOccurrence> occurrences;
+  final EventColorResolver colorOf;
   final VoidCallback onSelect;
   final VoidCallback onCreate;
-  final ValueChanged<LocalCalendarItem> onOpenEvent;
+  final ValueChanged<EventOccurrence> onOpenEvent;
 
   static const chipHeight = 20.0;
   static const headerHeight = 24.0;
@@ -1010,8 +1072,8 @@ class _MonthCell extends StatelessWidget {
             final slots = ((constraints.maxHeight - headerHeight) / chipHeight)
                 .floor()
                 .clamp(0, 6);
-            final hidden = events.length > slots
-                ? events.length - (slots - 1).clamp(0, slots)
+            final hidden = occurrences.length > slots
+                ? occurrences.length - (slots - 1).clamp(0, slots)
                 : 0;
             final shown = hidden > 0 ? (slots - 1).clamp(0, slots) : slots;
             return Column(
@@ -1049,13 +1111,14 @@ class _MonthCell extends StatelessWidget {
                     ),
                   ),
                 ),
-                for (final event in events.take(shown))
+                for (final occurrence in occurrences.take(shown))
                   SizedBox(
                     height: chipHeight,
                     child: _EventChip(
-                      event: event,
+                      occurrence: occurrence,
+                      color: colorOf(occurrence.event),
                       showTime: true,
-                      onTap: () => onOpenEvent(event),
+                      onTap: () => onOpenEvent(occurrence),
                     ),
                   ),
                 if (hidden > 0)

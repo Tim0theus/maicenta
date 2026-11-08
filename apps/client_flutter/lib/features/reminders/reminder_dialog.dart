@@ -8,15 +8,24 @@ enum ReminderKind { event, task }
 class ReminderEntry {
   const ReminderEntry({
     required this.id,
+    required this.itemId,
     required this.kind,
     required this.title,
     required this.detail,
     required this.dueAt,
+    this.occurrenceStart,
   });
 
-  /// Identifier of the event or task.
+  /// Unique key of the reminder: the item identifier, with the occurrence
+  /// date appended for recurring events.
   final String id;
+
+  /// Identifier of the event or task.
+  final String itemId;
   final ReminderKind kind;
+
+  /// Start of the occurrence the reminder belongs to (events only).
+  final DateTime? occurrenceStart;
   final String title;
 
   /// Second line, for example the start time or the due date.

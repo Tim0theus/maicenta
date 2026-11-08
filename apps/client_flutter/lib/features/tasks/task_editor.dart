@@ -16,20 +16,28 @@ Future<TaskEditorResult?> showTaskEditor(
   BuildContext context, {
   LocalTaskItem? task,
   String initialTitle = '',
+  List<WorkspaceCollection> lists = const [],
 }) {
   return showDialog<TaskEditorResult>(
     context: context,
     barrierDismissible: false,
     builder: (dialogContext) =>
-        _TaskEditor(task: task, initialTitle: initialTitle),
+        _TaskEditor(task: task, initialTitle: initialTitle, lists: lists),
   );
 }
 
 class _TaskEditor extends StatefulWidget {
-  const _TaskEditor({required this.task, required this.initialTitle});
+  const _TaskEditor({
+    required this.task,
+    required this.initialTitle,
+    required this.lists,
+  });
 
   final LocalTaskItem? task;
   final String initialTitle;
+
+  /// Synchronized task lists the task may be stored in besides the local one.
+  final List<WorkspaceCollection> lists;
 
   @override
   State<_TaskEditor> createState() => _TaskEditorState();
@@ -47,11 +55,17 @@ class _TaskEditorState extends State<_TaskEditor> {
   late TaskPriority priority;
   late bool reminderEnabled;
   String? rangeError;
+  String? collectionId;
 
   @override
   void initState() {
     super.initState();
     final task = widget.task;
+    collectionId = task?.collectionId;
+    if (collectionId != null &&
+        !widget.lists.any((list) => list.id == collectionId)) {
+      collectionId = null;
+    }
     title = TextEditingController(text: task?.title ?? widget.initialTitle);
     description = TextEditingController(text: task?.description ?? '');
     startDate = TextEditingController(
@@ -136,6 +150,7 @@ class _TaskEditorState extends State<_TaskEditor> {
           ? original.reminderDismissed
           : false,
       completedAt: completed ? (original?.completedAt ?? now) : null,
+      collectionId: collectionId,
     );
     Navigator.pop(context, TaskEditorResult(EditorAction.save, task));
   }
@@ -207,6 +222,30 @@ class _TaskEditorState extends State<_TaskEditor> {
                     ? 'Bitte einen Betreff eingeben.'
                     : null,
               ),
+              if (widget.lists.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String?>(
+                  key: const Key('task-list'),
+                  isExpanded: true,
+                  initialValue: collectionId,
+                  decoration: const InputDecoration(
+                    labelText: 'Aufgabenliste',
+                    prefixIcon: Icon(Icons.list_alt_outlined, size: 18),
+                  ),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Meine Aufgaben (lokal)'),
+                    ),
+                    for (final list in widget.lists)
+                      DropdownMenuItem<String?>(
+                        value: list.id,
+                        child: Text(list.name, overflow: TextOverflow.ellipsis),
+                      ),
+                  ],
+                  onChanged: (value) => setState(() => collectionId = value),
+                ),
+              ],
               const SizedBox(height: 12),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,

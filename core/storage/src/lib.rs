@@ -11,20 +11,22 @@ use std::{
 };
 
 use maicenta_application::{
-    ApplicationError, LocalDraftMetadata, LocalDraftStore, MailAccountStore, MailStore,
+    ApplicationError, DavStore, LocalDraftMetadata, LocalDraftStore, MailAccountStore, MailStore,
     MailSyncStore, PendingDraftAction, PendingDraftOperation, PendingMailMutation,
     RemoteMailboxSyncState, RemoteMessageIdentity, RemoteMessageMetadata, SecretStore,
     WorkspaceStore,
 };
 use maicenta_domain::{
-    AccountId, AttachmentId, CalendarEvent, Contact, ContactEmail, ContactLabel, ContactPhone,
-    MailAccount, MailAddress, MailProvider, Mailbox, MailboxId, MailboxRole, MessageAttachment,
-    MessageBody, MessageFlag, MessageId, MessageRecipients, MessageSummary, PostalAddress,
-    TaskItem, TaskPriority, TaskStatus, TransportSecurity, WorkspaceItemId,
+    AccountId, AttachmentId, CalendarEvent, CollectionId, CollectionKind, Contact, ContactEmail,
+    ContactLabel, ContactPhone, DavAccount, DavCollection, MailAccount, MailAddress, MailProvider,
+    Mailbox, MailboxId, MailboxRole, MessageAttachment, MessageBody, MessageFlag, MessageId,
+    MessageRecipients, MessageSummary, PostalAddress, Recurrence, RecurrenceFrequency,
+    RemoteDeletion, SyncMetadata, TaskItem, TaskPriority, TaskStatus, TransportSecurity,
+    WorkspaceItemId,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-const CURRENT_SCHEMA_VERSION: u32 = 17;
+const CURRENT_SCHEMA_VERSION: u32 = 18;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const FAVORITE_MAILBOXES_KEY: &str = "favorite_mailbox_ids";
 const COLLAPSED_MAILBOXES_KEY: &str = "collapsed_mailbox_ids";
@@ -1723,46 +1725,14 @@ impl WorkspaceStore for SqliteMailStore {
     }
 
     fn list_calendar_events(&self) -> Result<Vec<CalendarEvent>, ApplicationError> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT id, title, starts_at_ms, ends_at_ms, all_day, location, description,
-                        reminder_minutes_before, reminder_dismissed
-                 FROM calendar_events
-                 ORDER BY starts_at_ms, id",
-            )
-            .map_err(storage_error)?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok(CalendarEventRow {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    starts_at_ms: row.get(2)?,
-                    ends_at_ms: row.get(3)?,
-                    all_day: row.get(4)?,
-                    location: row.get(5)?,
-                    description: row.get(6)?,
-                    reminder_minutes_before: row.get(7)?,
-                    reminder_dismissed: row.get(8)?,
-                })
-            })
-            .map_err(storage_error)?;
+        self.query_calendar_events(None)
+    }
 
-        rows.map(|row| {
-            let row = row.map_err(storage_error)?;
-            Ok(CalendarEvent {
-                id: WorkspaceItemId::parse(row.id).map_err(invalid_data)?,
-                title: row.title,
-                starts_at_ms: row.starts_at_ms,
-                ends_at_ms: row.ends_at_ms,
-                all_day: row.all_day,
-                location: row.location,
-                description: row.description,
-                reminder_minutes_before: row.reminder_minutes_before,
-                reminder_dismissed: row.reminder_dismissed,
-            })
-        })
-        .collect()
+    fn find_calendar_event(
+        &self,
+        event_id: &WorkspaceItemId,
+    ) -> Result<Option<CalendarEvent>, ApplicationError> {
+        Ok(self.query_calendar_events(Some(event_id))?.pop())
     }
 
     fn save_calendar_event(&mut self, event: &CalendarEvent) -> Result<(), ApplicationError> {
@@ -1771,13 +1741,27 @@ impl WorkspaceStore for SqliteMailStore {
                 "calendar event must end after it starts".into(),
             ));
         }
+        if event
+            .recurrence
+            .as_ref()
+            .is_some_and(|recurrence| recurrence.interval == 0)
+        {
+            return Err(ApplicationError::Storage(
+                "recurrence interval must be at least 1".into(),
+            ));
+        }
+        let recurrence = event.recurrence.as_ref();
         self.connection()?
             .execute(
                 "INSERT INTO calendar_events (
                     id, title, starts_at_ms, ends_at_ms, all_day, location, description,
-                    reminder_minutes_before, reminder_dismissed
+                    reminder_minutes_before, reminder_dismissed_through_ms,
+                    recurrence_frequency, recurrence_interval, recurrence_weekdays,
+                    recurrence_until_ms, recurrence_count, exception_dates,
+                    collection_id, uid, remote_href, etag, dirty
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                         ?16, ?17, ?18, ?19, ?20)
                  ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
                     starts_at_ms = excluded.starts_at_ms,
@@ -1786,7 +1770,18 @@ impl WorkspaceStore for SqliteMailStore {
                     location = excluded.location,
                     description = excluded.description,
                     reminder_minutes_before = excluded.reminder_minutes_before,
-                    reminder_dismissed = excluded.reminder_dismissed",
+                    reminder_dismissed_through_ms = excluded.reminder_dismissed_through_ms,
+                    recurrence_frequency = excluded.recurrence_frequency,
+                    recurrence_interval = excluded.recurrence_interval,
+                    recurrence_weekdays = excluded.recurrence_weekdays,
+                    recurrence_until_ms = excluded.recurrence_until_ms,
+                    recurrence_count = excluded.recurrence_count,
+                    exception_dates = excluded.exception_dates,
+                    collection_id = excluded.collection_id,
+                    uid = excluded.uid,
+                    remote_href = excluded.remote_href,
+                    etag = excluded.etag,
+                    dirty = excluded.dirty",
                 params![
                     event.id.as_str(),
                     event.title,
@@ -1796,7 +1791,25 @@ impl WorkspaceStore for SqliteMailStore {
                     event.location,
                     event.description,
                     event.reminder_minutes_before,
-                    event.reminder_dismissed,
+                    event.reminder_dismissed_through_ms,
+                    recurrence.map(|recurrence| recurrence_frequency_key(recurrence.frequency)),
+                    recurrence.map_or(1, |recurrence| recurrence.interval),
+                    recurrence.map_or_else(String::new, |recurrence| {
+                        recurrence
+                            .weekdays
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    }),
+                    recurrence.and_then(|recurrence| recurrence.until_ms),
+                    recurrence.and_then(|recurrence| recurrence.count),
+                    event.exception_dates.join("\n"),
+                    event.sync.collection_id.as_ref().map(CollectionId::as_str),
+                    event.sync.uid,
+                    event.sync.remote_href,
+                    event.sync.etag,
+                    event.sync.dirty,
                 ],
             )
             .map(|_| ())
@@ -1807,62 +1820,15 @@ impl WorkspaceStore for SqliteMailStore {
         &mut self,
         event_id: &WorkspaceItemId,
     ) -> Result<(), ApplicationError> {
-        let deleted = self
-            .connection()?
-            .execute(
-                "DELETE FROM calendar_events WHERE id = ?1",
-                [event_id.as_str()],
-            )
-            .map_err(storage_error)?;
-        if deleted == 0 {
-            return Err(ApplicationError::NotFound);
-        }
-        Ok(())
+        self.delete_workspace_item("calendar_events", event_id)
     }
 
     fn list_tasks(&self) -> Result<Vec<TaskItem>, ApplicationError> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT id, title, description, starts_at_ms, due_at_ms, status, priority,
-                        reminder_at_ms, reminder_dismissed, completed_at_ms
-                 FROM tasks
-                 ORDER BY status = 'completed', due_at_ms IS NULL, due_at_ms, id",
-            )
-            .map_err(storage_error)?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok(TaskRow {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    description: row.get(2)?,
-                    starts_at_ms: row.get(3)?,
-                    due_at_ms: row.get(4)?,
-                    status: row.get(5)?,
-                    priority: row.get(6)?,
-                    reminder_at_ms: row.get(7)?,
-                    reminder_dismissed: row.get(8)?,
-                    completed_at_ms: row.get(9)?,
-                })
-            })
-            .map_err(storage_error)?;
+        self.query_tasks(None)
+    }
 
-        rows.map(|row| {
-            let row = row.map_err(storage_error)?;
-            Ok(TaskItem {
-                id: WorkspaceItemId::parse(row.id).map_err(invalid_data)?,
-                title: row.title,
-                description: row.description,
-                starts_at_ms: row.starts_at_ms,
-                due_at_ms: row.due_at_ms,
-                status: parse_task_status(&row.status)?,
-                priority: parse_task_priority(&row.priority)?,
-                reminder_at_ms: row.reminder_at_ms,
-                reminder_dismissed: row.reminder_dismissed,
-                completed_at_ms: row.completed_at_ms,
-            })
-        })
-        .collect()
+    fn find_task(&self, task_id: &WorkspaceItemId) -> Result<Option<TaskItem>, ApplicationError> {
+        Ok(self.query_tasks(Some(task_id))?.pop())
     }
 
     fn save_task(&mut self, task: &TaskItem) -> Result<(), ApplicationError> {
@@ -1870,9 +1836,10 @@ impl WorkspaceStore for SqliteMailStore {
             .execute(
                 "INSERT INTO tasks (
                     id, title, description, starts_at_ms, due_at_ms, status, priority,
-                    reminder_at_ms, reminder_dismissed, completed_at_ms
+                    reminder_at_ms, reminder_dismissed, completed_at_ms,
+                    collection_id, uid, remote_href, etag, dirty
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                  ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
                     description = excluded.description,
@@ -1882,7 +1849,12 @@ impl WorkspaceStore for SqliteMailStore {
                     priority = excluded.priority,
                     reminder_at_ms = excluded.reminder_at_ms,
                     reminder_dismissed = excluded.reminder_dismissed,
-                    completed_at_ms = excluded.completed_at_ms",
+                    completed_at_ms = excluded.completed_at_ms,
+                    collection_id = excluded.collection_id,
+                    uid = excluded.uid,
+                    remote_href = excluded.remote_href,
+                    etag = excluded.etag,
+                    dirty = excluded.dirty",
                 params![
                     task.id.as_str(),
                     task.title,
@@ -1894,6 +1866,11 @@ impl WorkspaceStore for SqliteMailStore {
                     task.reminder_at_ms,
                     task.reminder_dismissed,
                     task.completed_at_ms,
+                    task.sync.collection_id.as_ref().map(CollectionId::as_str),
+                    task.sync.uid,
+                    task.sync.remote_href,
+                    task.sync.etag,
+                    task.sync.dirty,
                 ],
             )
             .map(|_| ())
@@ -1901,99 +1878,18 @@ impl WorkspaceStore for SqliteMailStore {
     }
 
     fn delete_task(&mut self, task_id: &WorkspaceItemId) -> Result<(), ApplicationError> {
-        let deleted = self
-            .connection()?
-            .execute("DELETE FROM tasks WHERE id = ?1", [task_id.as_str()])
-            .map_err(storage_error)?;
-        if deleted == 0 {
-            return Err(ApplicationError::NotFound);
-        }
-        Ok(())
+        self.delete_workspace_item("tasks", task_id)
     }
 
     fn list_contacts(&self) -> Result<Vec<Contact>, ApplicationError> {
-        let connection = self.connection()?;
-        let mut emails = load_contact_details(
-            &connection,
-            "SELECT contact_id, label, address
-             FROM contact_emails
-             ORDER BY contact_id, position",
-            |row| {
-                Ok(ContactEmail {
-                    label: parse_contact_label(&row.get::<_, String>(1).map_err(storage_error)?)?,
-                    address: MailAddress::new(
-                        row.get::<_, String>(2).map_err(storage_error)?,
-                        None,
-                    )
-                    .map_err(invalid_data)?,
-                })
-            },
-        )?;
-        let mut phones = load_contact_details(
-            &connection,
-            "SELECT contact_id, label, number
-             FROM contact_phones
-             ORDER BY contact_id, position",
-            |row| {
-                Ok(ContactPhone {
-                    label: parse_contact_label(&row.get::<_, String>(1).map_err(storage_error)?)?,
-                    number: row.get(2).map_err(storage_error)?,
-                })
-            },
-        )?;
-        let mut addresses = load_contact_details(
-            &connection,
-            "SELECT contact_id, label, street, postal_code, city, country
-             FROM contact_addresses
-             ORDER BY contact_id, position",
-            |row| {
-                Ok(PostalAddress {
-                    label: parse_contact_label(&row.get::<_, String>(1).map_err(storage_error)?)?,
-                    street: row.get(2).map_err(storage_error)?,
-                    postal_code: row.get(3).map_err(storage_error)?,
-                    city: row.get(4).map_err(storage_error)?,
-                    country: row.get(5).map_err(storage_error)?,
-                })
-            },
-        )?;
+        self.query_contacts(None)
+    }
 
-        let mut statement = connection
-            .prepare(
-                "SELECT id, display_name, company, job_title, birthday, website, notes
-                 FROM contacts
-                 ORDER BY display_name COLLATE NOCASE, id",
-            )
-            .map_err(storage_error)?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok(ContactRow {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    company: row.get(2)?,
-                    job_title: row.get(3)?,
-                    birthday: row.get(4)?,
-                    website: row.get(5)?,
-                    notes: row.get(6)?,
-                })
-            })
-            .map_err(storage_error)?;
-
-        rows.map(|row| {
-            let row = row.map_err(storage_error)?;
-            Ok(Contact {
-                emails: emails.remove(&row.id).unwrap_or_default(),
-                phones: phones.remove(&row.id).unwrap_or_default(),
-                addresses: addresses.remove(&row.id).unwrap_or_default(),
-                id: WorkspaceItemId::parse(row.id).map_err(invalid_data)?,
-                name: row.name,
-                company: row.company,
-                job_title: row.job_title,
-                birthday: row.birthday,
-                website: row.website,
-                notes: row.notes,
-            })
-        })
-        .collect()
+    fn find_contact(
+        &self,
+        contact_id: &WorkspaceItemId,
+    ) -> Result<Option<Contact>, ApplicationError> {
+        Ok(self.query_contacts(Some(contact_id))?.pop())
     }
 
     fn save_contact(&mut self, contact: &Contact) -> Result<(), ApplicationError> {
@@ -2002,16 +1898,22 @@ impl WorkspaceStore for SqliteMailStore {
         transaction
             .execute(
                 "INSERT INTO contacts (
-                    id, display_name, company, job_title, birthday, website, notes
+                    id, display_name, company, job_title, birthday, website, notes,
+                    collection_id, uid, remote_href, etag, dirty
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT(id) DO UPDATE SET
                     display_name = excluded.display_name,
                     company = excluded.company,
                     job_title = excluded.job_title,
                     birthday = excluded.birthday,
                     website = excluded.website,
-                    notes = excluded.notes",
+                    notes = excluded.notes,
+                    collection_id = excluded.collection_id,
+                    uid = excluded.uid,
+                    remote_href = excluded.remote_href,
+                    etag = excluded.etag,
+                    dirty = excluded.dirty",
                 params![
                     contact.id.as_str(),
                     contact.name,
@@ -2020,6 +1922,15 @@ impl WorkspaceStore for SqliteMailStore {
                     contact.birthday,
                     contact.website,
                     contact.notes,
+                    contact
+                        .sync
+                        .collection_id
+                        .as_ref()
+                        .map(CollectionId::as_str),
+                    contact.sync.uid,
+                    contact.sync.remote_href,
+                    contact.sync.etag,
+                    contact.sync.dirty,
                 ],
             )
             .map_err(storage_error)?;
@@ -2082,14 +1993,553 @@ impl WorkspaceStore for SqliteMailStore {
     }
 
     fn delete_contact(&mut self, contact_id: &WorkspaceItemId) -> Result<(), ApplicationError> {
+        self.delete_workspace_item("contacts", contact_id)
+    }
+}
+
+impl SqliteMailStore {
+    /// Deletes one event, task, or contact. A record with a server copy
+    /// leaves a pending remote deletion behind so the next synchronization
+    /// removes it there as well.
+    fn delete_workspace_item(
+        &mut self,
+        table: &str,
+        item_id: &WorkspaceItemId,
+    ) -> Result<(), ApplicationError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(storage_error)?;
+        let remote: Option<(Option<String>, Option<String>, Option<String>)> = transaction
+            .query_row(
+                &format!("SELECT collection_id, remote_href, etag FROM {table} WHERE id = ?1"),
+                [item_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let Some((collection_id, remote_href, etag)) = remote else {
+            return Err(ApplicationError::NotFound);
+        };
+        if let (Some(collection_id), Some(href)) = (collection_id, remote_href) {
+            transaction
+                .execute(
+                    "INSERT INTO dav_deleted_items (collection_id, href, etag)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(collection_id, href) DO UPDATE SET etag = excluded.etag",
+                    params![collection_id, href, etag],
+                )
+                .map_err(storage_error)?;
+        }
+        transaction
+            .execute(
+                &format!("DELETE FROM {table} WHERE id = ?1"),
+                [item_id.as_str()],
+            )
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)
+    }
+
+    fn query_calendar_events(
+        &self,
+        only: Option<&WorkspaceItemId>,
+    ) -> Result<Vec<CalendarEvent>, ApplicationError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, title, starts_at_ms, ends_at_ms, all_day, location, description,
+                        reminder_minutes_before, reminder_dismissed_through_ms,
+                        recurrence_frequency, recurrence_interval, recurrence_weekdays,
+                        recurrence_until_ms, recurrence_count, exception_dates,
+                        collection_id, uid, remote_href, etag, dirty
+                 FROM calendar_events
+                 WHERE ?1 IS NULL OR id = ?1
+                 ORDER BY starts_at_ms, id",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([only.map(WorkspaceItemId::as_str)], |row| {
+                Ok(CalendarEventRow {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    starts_at_ms: row.get(2)?,
+                    ends_at_ms: row.get(3)?,
+                    all_day: row.get(4)?,
+                    location: row.get(5)?,
+                    description: row.get(6)?,
+                    reminder_minutes_before: row.get(7)?,
+                    reminder_dismissed_through_ms: row.get(8)?,
+                    recurrence_frequency: row.get(9)?,
+                    recurrence_interval: row.get(10)?,
+                    recurrence_weekdays: row.get(11)?,
+                    recurrence_until_ms: row.get(12)?,
+                    recurrence_count: row.get(13)?,
+                    exception_dates: row.get(14)?,
+                    sync: sync_metadata_from_row(row, 15)?,
+                })
+            })
+            .map_err(storage_error)?;
+
+        rows.map(|row| {
+            let row = row.map_err(storage_error)?;
+            let recurrence = match row.recurrence_frequency {
+                Some(frequency) => Some(Recurrence {
+                    frequency: parse_recurrence_frequency(&frequency)?,
+                    interval: row.recurrence_interval,
+                    weekdays: row
+                        .recurrence_weekdays
+                        .split(',')
+                        .filter(|part| !part.is_empty())
+                        .map(|part| part.parse::<u8>().map_err(invalid_data))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    until_ms: row.recurrence_until_ms,
+                    count: row.recurrence_count,
+                }),
+                None => None,
+            };
+            Ok(CalendarEvent {
+                id: WorkspaceItemId::parse(row.id).map_err(invalid_data)?,
+                title: row.title,
+                starts_at_ms: row.starts_at_ms,
+                ends_at_ms: row.ends_at_ms,
+                all_day: row.all_day,
+                location: row.location,
+                description: row.description,
+                reminder_minutes_before: row.reminder_minutes_before,
+                reminder_dismissed_through_ms: row.reminder_dismissed_through_ms,
+                recurrence,
+                exception_dates: row
+                    .exception_dates
+                    .lines()
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+                sync: sync_metadata_from_columns(row.sync)?,
+            })
+        })
+        .collect()
+    }
+
+    fn query_tasks(
+        &self,
+        only: Option<&WorkspaceItemId>,
+    ) -> Result<Vec<TaskItem>, ApplicationError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, title, description, starts_at_ms, due_at_ms, status, priority,
+                        reminder_at_ms, reminder_dismissed, completed_at_ms,
+                        collection_id, uid, remote_href, etag, dirty
+                 FROM tasks
+                 WHERE ?1 IS NULL OR id = ?1
+                 ORDER BY status = 'completed', due_at_ms IS NULL, due_at_ms, id",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([only.map(WorkspaceItemId::as_str)], |row| {
+                Ok(TaskRow {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    description: row.get(2)?,
+                    starts_at_ms: row.get(3)?,
+                    due_at_ms: row.get(4)?,
+                    status: row.get(5)?,
+                    priority: row.get(6)?,
+                    reminder_at_ms: row.get(7)?,
+                    reminder_dismissed: row.get(8)?,
+                    completed_at_ms: row.get(9)?,
+                    sync: sync_metadata_from_row(row, 10)?,
+                })
+            })
+            .map_err(storage_error)?;
+
+        rows.map(|row| {
+            let row = row.map_err(storage_error)?;
+            Ok(TaskItem {
+                id: WorkspaceItemId::parse(row.id).map_err(invalid_data)?,
+                title: row.title,
+                description: row.description,
+                starts_at_ms: row.starts_at_ms,
+                due_at_ms: row.due_at_ms,
+                status: parse_task_status(&row.status)?,
+                priority: parse_task_priority(&row.priority)?,
+                reminder_at_ms: row.reminder_at_ms,
+                reminder_dismissed: row.reminder_dismissed,
+                completed_at_ms: row.completed_at_ms,
+                sync: sync_metadata_from_columns(row.sync)?,
+            })
+        })
+        .collect()
+    }
+
+    fn query_contacts(
+        &self,
+        only: Option<&WorkspaceItemId>,
+    ) -> Result<Vec<Contact>, ApplicationError> {
+        let connection = self.connection()?;
+        let mut emails = load_contact_details(
+            &connection,
+            "SELECT contact_id, label, address
+             FROM contact_emails
+             ORDER BY contact_id, position",
+            |row| {
+                Ok(ContactEmail {
+                    label: parse_contact_label(&row.get::<_, String>(1).map_err(storage_error)?)?,
+                    address: MailAddress::new(
+                        row.get::<_, String>(2).map_err(storage_error)?,
+                        None,
+                    )
+                    .map_err(invalid_data)?,
+                })
+            },
+        )?;
+        let mut phones = load_contact_details(
+            &connection,
+            "SELECT contact_id, label, number
+             FROM contact_phones
+             ORDER BY contact_id, position",
+            |row| {
+                Ok(ContactPhone {
+                    label: parse_contact_label(&row.get::<_, String>(1).map_err(storage_error)?)?,
+                    number: row.get(2).map_err(storage_error)?,
+                })
+            },
+        )?;
+        let mut addresses = load_contact_details(
+            &connection,
+            "SELECT contact_id, label, street, postal_code, city, country
+             FROM contact_addresses
+             ORDER BY contact_id, position",
+            |row| {
+                Ok(PostalAddress {
+                    label: parse_contact_label(&row.get::<_, String>(1).map_err(storage_error)?)?,
+                    street: row.get(2).map_err(storage_error)?,
+                    postal_code: row.get(3).map_err(storage_error)?,
+                    city: row.get(4).map_err(storage_error)?,
+                    country: row.get(5).map_err(storage_error)?,
+                })
+            },
+        )?;
+
+        let mut statement = connection
+            .prepare(
+                "SELECT id, display_name, company, job_title, birthday, website, notes,
+                        collection_id, uid, remote_href, etag, dirty
+                 FROM contacts
+                 WHERE ?1 IS NULL OR id = ?1
+                 ORDER BY display_name COLLATE NOCASE, id",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([only.map(WorkspaceItemId::as_str)], |row| {
+                Ok(ContactRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    company: row.get(2)?,
+                    job_title: row.get(3)?,
+                    birthday: row.get(4)?,
+                    website: row.get(5)?,
+                    notes: row.get(6)?,
+                    sync: sync_metadata_from_row(row, 7)?,
+                })
+            })
+            .map_err(storage_error)?;
+
+        rows.map(|row| {
+            let row = row.map_err(storage_error)?;
+            Ok(Contact {
+                emails: emails.remove(&row.id).unwrap_or_default(),
+                phones: phones.remove(&row.id).unwrap_or_default(),
+                addresses: addresses.remove(&row.id).unwrap_or_default(),
+                id: WorkspaceItemId::parse(row.id).map_err(invalid_data)?,
+                name: row.name,
+                company: row.company,
+                job_title: row.job_title,
+                birthday: row.birthday,
+                website: row.website,
+                notes: row.notes,
+                sync: sync_metadata_from_columns(row.sync)?,
+            })
+        })
+        .collect()
+    }
+}
+
+impl DavStore for SqliteMailStore {
+    fn list_dav_accounts(&self) -> Result<Vec<DavAccount>, ApplicationError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, display_name, server_url, username, last_sync_at_ms
+                 FROM dav_accounts
+                 ORDER BY display_name COLLATE NOCASE, id",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                ))
+            })
+            .map_err(storage_error)?;
+        rows.map(|row| {
+            let (id, display_name, server_url, username, last_sync_at_ms) =
+                row.map_err(storage_error)?;
+            Ok(DavAccount {
+                id: AccountId::parse(id).map_err(invalid_data)?,
+                display_name,
+                server_url,
+                username,
+                last_sync_at_ms,
+            })
+        })
+        .collect()
+    }
+
+    fn save_dav_account(&mut self, account: &DavAccount) -> Result<(), ApplicationError> {
+        self.connection()?
+            .execute(
+                "INSERT INTO dav_accounts (id, display_name, server_url, username, last_sync_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(id) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    server_url = excluded.server_url,
+                    username = excluded.username,
+                    last_sync_at_ms = excluded.last_sync_at_ms",
+                params![
+                    account.id.as_str(),
+                    account.display_name,
+                    account.server_url,
+                    account.username,
+                    account.last_sync_at_ms,
+                ],
+            )
+            .map(|_| ())
+            .map_err(storage_error)
+    }
+
+    fn delete_dav_account(&mut self, account_id: &AccountId) -> Result<(), ApplicationError> {
         let deleted = self
             .connection()?
-            .execute("DELETE FROM contacts WHERE id = ?1", [contact_id.as_str()])
+            .execute(
+                "DELETE FROM dav_accounts WHERE id = ?1",
+                [account_id.as_str()],
+            )
             .map_err(storage_error)?;
         if deleted == 0 {
             return Err(ApplicationError::NotFound);
         }
         Ok(())
+    }
+
+    fn update_dav_account_last_sync(
+        &mut self,
+        account_id: &AccountId,
+        timestamp_ms: i64,
+    ) -> Result<(), ApplicationError> {
+        let updated = self
+            .connection()?
+            .execute(
+                "UPDATE dav_accounts SET last_sync_at_ms = ?2 WHERE id = ?1",
+                params![account_id.as_str(), timestamp_ms],
+            )
+            .map_err(storage_error)?;
+        if updated == 0 {
+            return Err(ApplicationError::NotFound);
+        }
+        Ok(())
+    }
+
+    fn dav_secret(
+        &self,
+        account_id: &AccountId,
+        key: &str,
+    ) -> Result<Option<String>, ApplicationError> {
+        validate_secret_key(key)?;
+        self.connection()?
+            .query_row(
+                "SELECT value FROM dav_account_secrets WHERE account_id = ?1 AND key = ?2",
+                params![account_id.as_str(), key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)
+    }
+
+    fn set_dav_secret(
+        &mut self,
+        account_id: &AccountId,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ApplicationError> {
+        validate_secret_key(key)?;
+        if value.is_empty() {
+            return Err(ApplicationError::Storage(
+                "account secret must not be empty".into(),
+            ));
+        }
+        self.connection()?
+            .execute(
+                "INSERT INTO dav_account_secrets (account_id, key, value)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value",
+                params![account_id.as_str(), key, value],
+            )
+            .map(|_| ())
+            .map_err(storage_error)
+    }
+
+    fn list_dav_collections(&self) -> Result<Vec<DavCollection>, ApplicationError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, account_id, kind, href, display_name, color, ctag, enabled, position
+                 FROM dav_collections
+                 ORDER BY account_id, position, display_name COLLATE NOCASE, id",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(DavCollectionRow {
+                    id: row.get(0)?,
+                    account_id: row.get(1)?,
+                    kind: row.get(2)?,
+                    href: row.get(3)?,
+                    display_name: row.get(4)?,
+                    color: row.get(5)?,
+                    ctag: row.get(6)?,
+                    enabled: row.get(7)?,
+                    position: row.get(8)?,
+                })
+            })
+            .map_err(storage_error)?;
+        rows.map(|row| {
+            let row = row.map_err(storage_error)?;
+            Ok(DavCollection {
+                id: CollectionId::parse(row.id).map_err(invalid_data)?,
+                account_id: AccountId::parse(row.account_id).map_err(invalid_data)?,
+                kind: parse_collection_kind(&row.kind)?,
+                href: row.href,
+                display_name: row.display_name,
+                color: row.color,
+                ctag: row.ctag,
+                enabled: row.enabled,
+                position: row.position,
+            })
+        })
+        .collect()
+    }
+
+    fn save_dav_collection(&mut self, collection: &DavCollection) -> Result<(), ApplicationError> {
+        self.connection()?
+            .execute(
+                "INSERT INTO dav_collections (
+                    id, account_id, kind, href, display_name, color, ctag, enabled, position
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(id) DO UPDATE SET
+                    account_id = excluded.account_id,
+                    kind = excluded.kind,
+                    href = excluded.href,
+                    display_name = excluded.display_name,
+                    color = excluded.color,
+                    ctag = excluded.ctag,
+                    enabled = excluded.enabled,
+                    position = excluded.position",
+                params![
+                    collection.id.as_str(),
+                    collection.account_id.as_str(),
+                    collection_kind_key(collection.kind),
+                    collection.href,
+                    collection.display_name,
+                    collection.color,
+                    collection.ctag,
+                    collection.enabled,
+                    collection.position,
+                ],
+            )
+            .map(|_| ())
+            .map_err(storage_error)
+    }
+
+    fn delete_dav_collection(
+        &mut self,
+        collection_id: &CollectionId,
+    ) -> Result<(), ApplicationError> {
+        let deleted = self
+            .connection()?
+            .execute(
+                "DELETE FROM dav_collections WHERE id = ?1",
+                [collection_id.as_str()],
+            )
+            .map_err(storage_error)?;
+        if deleted == 0 {
+            return Err(ApplicationError::NotFound);
+        }
+        Ok(())
+    }
+
+    fn record_remote_deletion(
+        &mut self,
+        deletion: &RemoteDeletion,
+    ) -> Result<(), ApplicationError> {
+        self.connection()?
+            .execute(
+                "INSERT INTO dav_deleted_items (collection_id, href, etag)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(collection_id, href) DO UPDATE SET etag = excluded.etag",
+                params![
+                    deletion.collection_id.as_str(),
+                    deletion.href,
+                    deletion.etag
+                ],
+            )
+            .map(|_| ())
+            .map_err(storage_error)
+    }
+
+    fn list_remote_deletions(
+        &self,
+        collection_id: &CollectionId,
+    ) -> Result<Vec<RemoteDeletion>, ApplicationError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT href, etag FROM dav_deleted_items
+                 WHERE collection_id = ?1
+                 ORDER BY href",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([collection_id.as_str()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(storage_error)?;
+        rows.map(|row| {
+            let (href, etag) = row.map_err(storage_error)?;
+            Ok(RemoteDeletion {
+                collection_id: collection_id.clone(),
+                href,
+                etag,
+            })
+        })
+        .collect()
+    }
+
+    fn clear_remote_deletion(
+        &mut self,
+        collection_id: &CollectionId,
+        href: &str,
+    ) -> Result<(), ApplicationError> {
+        self.connection()?
+            .execute(
+                "DELETE FROM dav_deleted_items WHERE collection_id = ?1 AND href = ?2",
+                params![collection_id.as_str(), href],
+            )
+            .map(|_| ())
+            .map_err(storage_error)
     }
 }
 
@@ -2111,6 +2561,40 @@ fn load_contact_details<T>(
     Ok(details)
 }
 
+/// Raw synchronization columns of a record, in the order `collection_id`,
+/// `uid`, `remote_href`, `etag`, `dirty`.
+type SyncColumns = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    bool,
+);
+
+fn sync_metadata_from_row(row: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<SyncColumns> {
+    Ok((
+        row.get(first)?,
+        row.get(first + 1)?,
+        row.get(first + 2)?,
+        row.get(first + 3)?,
+        row.get(first + 4)?,
+    ))
+}
+
+fn sync_metadata_from_columns(columns: SyncColumns) -> Result<SyncMetadata, ApplicationError> {
+    let (collection_id, uid, remote_href, etag, dirty) = columns;
+    Ok(SyncMetadata {
+        collection_id: collection_id
+            .map(CollectionId::parse)
+            .transpose()
+            .map_err(invalid_data)?,
+        uid,
+        remote_href,
+        etag,
+        dirty,
+    })
+}
+
 struct CalendarEventRow {
     id: String,
     title: String,
@@ -2120,7 +2604,14 @@ struct CalendarEventRow {
     location: Option<String>,
     description: Option<String>,
     reminder_minutes_before: Option<u32>,
-    reminder_dismissed: bool,
+    reminder_dismissed_through_ms: Option<i64>,
+    recurrence_frequency: Option<String>,
+    recurrence_interval: u32,
+    recurrence_weekdays: String,
+    recurrence_until_ms: Option<i64>,
+    recurrence_count: Option<u32>,
+    exception_dates: String,
+    sync: SyncColumns,
 }
 
 struct TaskRow {
@@ -2134,6 +2625,7 @@ struct TaskRow {
     reminder_at_ms: Option<i64>,
     reminder_dismissed: bool,
     completed_at_ms: Option<i64>,
+    sync: SyncColumns,
 }
 
 struct ContactRow {
@@ -2144,6 +2636,57 @@ struct ContactRow {
     birthday: Option<String>,
     website: Option<String>,
     notes: Option<String>,
+    sync: SyncColumns,
+}
+
+struct DavCollectionRow {
+    id: String,
+    account_id: String,
+    kind: String,
+    href: String,
+    display_name: String,
+    color: Option<String>,
+    ctag: Option<String>,
+    enabled: bool,
+    position: u32,
+}
+
+fn recurrence_frequency_key(frequency: RecurrenceFrequency) -> &'static str {
+    match frequency {
+        RecurrenceFrequency::Daily => "daily",
+        RecurrenceFrequency::Weekly => "weekly",
+        RecurrenceFrequency::Monthly => "monthly",
+        RecurrenceFrequency::Yearly => "yearly",
+    }
+}
+
+fn parse_recurrence_frequency(value: &str) -> Result<RecurrenceFrequency, ApplicationError> {
+    match value {
+        "daily" => Ok(RecurrenceFrequency::Daily),
+        "weekly" => Ok(RecurrenceFrequency::Weekly),
+        "monthly" => Ok(RecurrenceFrequency::Monthly),
+        "yearly" => Ok(RecurrenceFrequency::Yearly),
+        other => Err(invalid_data(format!(
+            "unknown recurrence frequency {other}"
+        ))),
+    }
+}
+
+fn collection_kind_key(kind: CollectionKind) -> &'static str {
+    match kind {
+        CollectionKind::Calendar => "calendar",
+        CollectionKind::TaskList => "task_list",
+        CollectionKind::AddressBook => "address_book",
+    }
+}
+
+fn parse_collection_kind(value: &str) -> Result<CollectionKind, ApplicationError> {
+    match value {
+        "calendar" => Ok(CollectionKind::Calendar),
+        "task_list" => Ok(CollectionKind::TaskList),
+        "address_book" => Ok(CollectionKind::AddressBook),
+        other => Err(invalid_data(format!("unknown collection kind {other}"))),
+    }
 }
 
 fn task_status_key(status: TaskStatus) -> &'static str {
@@ -3134,6 +3677,10 @@ fn migrate(connection: &mut Connection) -> Result<(), ApplicationError> {
 
     if version < 17 {
         apply_migration_v17(connection)?;
+    }
+
+    if version < 18 {
+        apply_migration_v18(connection)?;
     }
 
     Ok(())
@@ -4169,6 +4716,133 @@ fn apply_migration_v17(connection: &mut Connection) -> Result<(), ApplicationErr
     transaction.commit().map_err(storage_error)
 }
 
+/// Adds recurrence to calendar events and prepares every personal record for
+/// CalDAV/CardDAV synchronization: accounts, their collections and secrets,
+/// per-record collection membership with UID, resource path, entity tag and
+/// a dirty flag, and a list of deletions still to be sent to the server. The
+/// boolean "reminder closed" of events becomes "closed through this
+/// occurrence" so recurring events can close one occurrence at a time.
+#[allow(clippy::too_many_lines)]
+fn apply_migration_v18(connection: &mut Connection) -> Result<(), ApplicationError> {
+    let transaction = connection.transaction().map_err(storage_error)?;
+    transaction
+        .execute_batch(
+            "
+                CREATE TABLE dav_accounts (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    display_name TEXT NOT NULL,
+                    server_url TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    last_sync_at_ms INTEGER
+                ) STRICT;
+
+                CREATE TABLE dav_account_secrets (
+                    account_id TEXT NOT NULL
+                        REFERENCES dav_accounts(id) ON DELETE CASCADE,
+                    key TEXT NOT NULL CHECK (length(key) BETWEEN 1 AND 64),
+                    value TEXT NOT NULL CHECK (length(value) > 0),
+                    PRIMARY KEY (account_id, key)
+                ) STRICT;
+
+                CREATE TABLE dav_collections (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    account_id TEXT NOT NULL
+                        REFERENCES dav_accounts(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL
+                        CHECK (kind IN ('calendar', 'task_list', 'address_book')),
+                    href TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    color TEXT,
+                    ctag TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+                    position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0),
+                    UNIQUE (account_id, href)
+                ) STRICT;
+
+                CREATE TABLE dav_deleted_items (
+                    collection_id TEXT NOT NULL
+                        REFERENCES dav_collections(id) ON DELETE CASCADE,
+                    href TEXT NOT NULL,
+                    etag TEXT,
+                    PRIMARY KEY (collection_id, href)
+                ) STRICT;
+
+                CREATE TABLE calendar_events_v18 (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    title TEXT NOT NULL,
+                    starts_at_ms INTEGER NOT NULL,
+                    ends_at_ms INTEGER NOT NULL,
+                    all_day INTEGER NOT NULL DEFAULT 0 CHECK (all_day IN (0, 1)),
+                    location TEXT,
+                    description TEXT,
+                    reminder_minutes_before INTEGER
+                        CHECK (reminder_minutes_before IS NULL
+                            OR reminder_minutes_before >= 0),
+                    reminder_dismissed_through_ms INTEGER,
+                    recurrence_frequency TEXT
+                        CHECK (recurrence_frequency IS NULL
+                            OR recurrence_frequency IN (
+                                'daily', 'weekly', 'monthly', 'yearly'
+                            )),
+                    recurrence_interval INTEGER NOT NULL DEFAULT 1
+                        CHECK (recurrence_interval >= 1),
+                    recurrence_weekdays TEXT NOT NULL DEFAULT '',
+                    recurrence_until_ms INTEGER,
+                    recurrence_count INTEGER
+                        CHECK (recurrence_count IS NULL OR recurrence_count >= 1),
+                    exception_dates TEXT NOT NULL DEFAULT '',
+                    collection_id TEXT
+                        REFERENCES dav_collections(id) ON DELETE CASCADE,
+                    uid TEXT,
+                    remote_href TEXT,
+                    etag TEXT,
+                    dirty INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0, 1)),
+                    CHECK (ends_at_ms > starts_at_ms)
+                ) STRICT;
+
+                INSERT INTO calendar_events_v18 (
+                    id, title, starts_at_ms, ends_at_ms, all_day, location, description,
+                    reminder_minutes_before, reminder_dismissed_through_ms
+                )
+                SELECT id, title, starts_at_ms, ends_at_ms, all_day, location, description,
+                       reminder_minutes_before,
+                       CASE reminder_dismissed WHEN 1 THEN starts_at_ms ELSE NULL END
+                FROM calendar_events;
+
+                DROP TABLE calendar_events;
+                ALTER TABLE calendar_events_v18 RENAME TO calendar_events;
+                CREATE INDEX calendar_events_start
+                    ON calendar_events (starts_at_ms);
+                CREATE INDEX calendar_events_collection
+                    ON calendar_events (collection_id, remote_href);
+
+                ALTER TABLE tasks ADD COLUMN collection_id TEXT
+                    REFERENCES dav_collections(id) ON DELETE CASCADE;
+                ALTER TABLE tasks ADD COLUMN uid TEXT;
+                ALTER TABLE tasks ADD COLUMN remote_href TEXT;
+                ALTER TABLE tasks ADD COLUMN etag TEXT;
+                ALTER TABLE tasks ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0
+                    CHECK (dirty IN (0, 1));
+                CREATE INDEX tasks_collection
+                    ON tasks (collection_id, remote_href);
+
+                ALTER TABLE contacts ADD COLUMN collection_id TEXT
+                    REFERENCES dav_collections(id) ON DELETE CASCADE;
+                ALTER TABLE contacts ADD COLUMN uid TEXT;
+                ALTER TABLE contacts ADD COLUMN remote_href TEXT;
+                ALTER TABLE contacts ADD COLUMN etag TEXT;
+                ALTER TABLE contacts ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0
+                    CHECK (dirty IN (0, 1));
+                CREATE INDEX contacts_collection
+                    ON contacts (collection_id, remote_href);
+
+                PRAGMA user_version = 18;
+                ",
+        )
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)
+}
+
 fn search_expression(
     query: &str,
     include_content: bool,
@@ -4549,15 +5223,17 @@ mod tests {
     };
 
     use maicenta_application::{
-        ApplicationError, LocalDraftMetadata, LocalDraftStore, MailAccountStore, MailStore,
-        MailSyncStore, PendingDraftAction, RemoteMailboxSyncState, RemoteMessageIdentity,
-        RemoteMessageMetadata, SecretStore, WorkspaceStore,
+        ApplicationError, DavStore, LocalDraftMetadata, LocalDraftStore, MailAccountStore,
+        MailStore, MailSyncStore, PendingDraftAction, RemoteMailboxSyncState,
+        RemoteMessageIdentity, RemoteMessageMetadata, SecretStore, WorkspaceStore,
     };
     use maicenta_domain::{
-        AccountId, AttachmentId, CalendarEvent, Contact, ContactEmail, ContactLabel, ContactPhone,
-        MailAccount, MailAddress, MailProvider, Mailbox, MailboxId, MailboxRole, MessageAttachment,
-        MessageBody, MessageFlag, MessageId, MessageRecipients, MessageSummary, PostalAddress,
-        TaskItem, TaskPriority, TaskStatus, TransportSecurity, WorkspaceItemId,
+        AccountId, AttachmentId, CalendarEvent, CollectionId, CollectionKind, Contact,
+        ContactEmail, ContactLabel, ContactPhone, DavAccount, DavCollection, MailAccount,
+        MailAddress, MailProvider, Mailbox, MailboxId, MailboxRole, MessageAttachment, MessageBody,
+        MessageFlag, MessageId, MessageRecipients, MessageSummary, PostalAddress, Recurrence,
+        RecurrenceFrequency, RemoteDeletion, SyncMetadata, TaskItem, TaskPriority, TaskStatus,
+        TransportSecurity, WorkspaceItemId,
     };
 
     use rusqlite::Connection;
@@ -5595,7 +6271,10 @@ mod tests {
                 location: Some("Besprechungsraum".into()),
                 description: None,
                 reminder_minutes_before: None,
-                reminder_dismissed: false,
+                reminder_dismissed_through_ms: None,
+                recurrence: None,
+                exception_dates: Vec::new(),
+                sync: SyncMetadata::local(),
             }]
         );
         let tasks = store.list_tasks().expect("v2 tasks");
@@ -6232,7 +6911,16 @@ mod tests {
             location: Some("Lokal".into()),
             description: Some("Agenda folgt".into()),
             reminder_minutes_before: Some(15),
-            reminder_dismissed: true,
+            reminder_dismissed_through_ms: Some(1_785_830_400_000),
+            recurrence: Some(Recurrence {
+                frequency: RecurrenceFrequency::Weekly,
+                interval: 2,
+                weekdays: vec![1, 3],
+                until_ms: Some(1_800_000_000_000),
+                count: None,
+            }),
+            exception_dates: vec!["2026-08-17".into()],
+            sync: SyncMetadata::local(),
         };
         let task = TaskItem {
             id: WorkspaceItemId::parse("local.task.persisted").expect("task id"),
@@ -6245,6 +6933,7 @@ mod tests {
             reminder_at_ms: Some(1_785_900_000_000),
             reminder_dismissed: false,
             completed_at_ms: Some(1_785_910_000_000),
+            sync: SyncMetadata::local(),
         };
         let contact = Contact {
             id: WorkspaceItemId::parse("local.contact.persisted").expect("contact id"),
@@ -6275,6 +6964,7 @@ mod tests {
             birthday: Some("1980-05-17".into()),
             website: Some("https://example.org".into()),
             notes: Some("Kennt das Projekt".into()),
+            sync: SyncMetadata::local(),
         };
         let account = mail_account();
 
@@ -6372,6 +7062,116 @@ mod tests {
         );
         assert_eq!(
             store.message_body(&account_message_id),
+            Err(ApplicationError::NotFound)
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn keeps_dav_accounts_collections_and_pending_deletions() {
+        let database = TemporaryDatabase::new();
+        let mut store = SqliteMailStore::open(&database.path).expect("open database");
+        let account = DavAccount {
+            id: AccountId::parse("dav.home").expect("account id"),
+            display_name: "Nextcloud".into(),
+            server_url: "https://cloud.example.org/remote.php/dav/".into(),
+            username: "timm".into(),
+            last_sync_at_ms: None,
+        };
+        store.save_dav_account(&account).expect("save account");
+        store
+            .set_dav_secret(&account.id, "password", "secret")
+            .expect("store password");
+        let calendar = DavCollection {
+            id: CollectionId::parse("dav.home.cal1").expect("collection id"),
+            account_id: account.id.clone(),
+            kind: CollectionKind::Calendar,
+            href: "/remote.php/dav/calendars/timm/personal/".into(),
+            display_name: "Privat".into(),
+            color: Some("#0F6CBD".into()),
+            ctag: None,
+            enabled: true,
+            position: 0,
+        };
+        store
+            .save_dav_collection(&calendar)
+            .expect("save collection");
+
+        let event = CalendarEvent {
+            id: WorkspaceItemId::parse("dav.home.cal1.ev1").expect("event id"),
+            title: "Synchronisierter Termin".into(),
+            starts_at_ms: 1_785_830_400_000,
+            ends_at_ms: 1_785_834_000_000,
+            all_day: false,
+            location: None,
+            description: None,
+            reminder_minutes_before: None,
+            reminder_dismissed_through_ms: None,
+            recurrence: None,
+            exception_dates: Vec::new(),
+            sync: SyncMetadata {
+                collection_id: Some(calendar.id.clone()),
+                uid: Some("abc@example.org".into()),
+                remote_href: Some("/remote.php/dav/calendars/timm/personal/abc.ics".into()),
+                etag: Some("\"1\"".into()),
+                dirty: false,
+            },
+        };
+        store.save_calendar_event(&event).expect("save event");
+        assert_eq!(
+            store.find_calendar_event(&event.id).expect("find event"),
+            Some(event.clone())
+        );
+        assert_eq!(
+            store.dav_secret(&account.id, "password"),
+            Ok(Some("secret".into()))
+        );
+        assert_eq!(
+            store.list_dav_collections().expect("collections"),
+            vec![calendar.clone()]
+        );
+
+        // Deleting a synchronized record leaves a pending remote deletion.
+        store
+            .delete_calendar_event(&event.id)
+            .expect("delete event");
+        assert_eq!(
+            store
+                .list_remote_deletions(&calendar.id)
+                .expect("deletions"),
+            vec![RemoteDeletion {
+                collection_id: calendar.id.clone(),
+                href: "/remote.php/dav/calendars/timm/personal/abc.ics".into(),
+                etag: Some("\"1\"".into()),
+            }]
+        );
+        store
+            .clear_remote_deletion(
+                &calendar.id,
+                "/remote.php/dav/calendars/timm/personal/abc.ics",
+            )
+            .expect("clear deletion");
+        assert_eq!(
+            store
+                .list_remote_deletions(&calendar.id)
+                .expect("deletions"),
+            Vec::new()
+        );
+
+        // Removing the account removes its collections, records, and secrets.
+        store.save_calendar_event(&event).expect("save event again");
+        store
+            .delete_dav_account(&account.id)
+            .expect("delete account");
+        assert_eq!(store.list_dav_accounts().expect("accounts"), Vec::new());
+        assert_eq!(
+            store.list_dav_collections().expect("collections"),
+            Vec::new()
+        );
+        assert_eq!(store.find_calendar_event(&event.id), Ok(None));
+        assert_eq!(store.dav_secret(&account.id, "password"), Ok(None));
+        assert_eq!(
+            store.delete_dav_account(&account.id),
             Err(ApplicationError::NotFound)
         );
     }

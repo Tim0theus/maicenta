@@ -24,7 +24,25 @@ section of the tagged version into the GitHub Release notes.
 - Reminders. Due reminders for appointments and tasks open a reminder
   window in the app that lists them with "Später" (postpone by 5 minutes to
   one day) and "Schließen"; closed reminders stay closed across restarts.
-- Profile schema 17 carries existing appointments, tasks, and contacts over;
+- Recurring appointments: daily, weekly (with weekdays), monthly, or yearly,
+  every n days/weeks/months/years, ending never, on a date, or after a
+  number of occurrences. Every occurrence shows in the calendar and has its
+  own reminder; a single occurrence can be removed from a series, and the
+  reminder window can close one occurrence at a time.
+- System notifications for reminders. Due reminders also appear as
+  notifications of the operating system, and upcoming reminders of the next
+  14 days are handed to macOS and Windows ahead of time, so they still show
+  after MAICENTA was closed. Linux shows them while the app runs.
+- CalDAV/CardDAV accounts ("Kalender/Kontakte verbinden" in the account
+  settings). MAICENTA finds the calendars, task lists, and address books of
+  the account, shows them with their colors in the calendar, task, and
+  contact panes, and synchronizes them in both directions: local changes and
+  deletions go to the server, server changes and deletions come back, with
+  entity tags guarding against lost updates. Events, tasks, and contacts
+  can be stored in any synchronized collection; each collection can be
+  switched off. Tested against Radicale; works with Nextcloud, iCloud,
+  Posteo, mailbox.org, Synology, and other standards-based servers.
+- Profile schema 18 carries existing appointments, tasks, and contacts over;
   a contact's single e-mail address becomes the first entry of its list.
 - In-app updates. MAICENTA looks for a new release at startup and then once
   a day, shows its release notes, and on Windows and Linux downloads,

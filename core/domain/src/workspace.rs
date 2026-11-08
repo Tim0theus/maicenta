@@ -1,4 +1,4 @@
-use crate::{AccountId, MailAddress, WorkspaceItemId};
+use crate::{AccountId, CollectionId, MailAddress, WorkspaceItemId};
 
 /// TLS mode used by an incoming or outgoing mail endpoint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,6 +79,58 @@ impl MailAccount {
     }
 }
 
+/// Where a calendar event, task, or contact lives on a server, if anywhere.
+///
+/// Local-only records keep every field empty. Synchronized records remember
+/// their collection, the server's identifier (`uid`), resource location, and
+/// entity tag, plus whether a local change still has to be pushed.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SyncMetadata {
+    /// Calendar, task list, or address book the record belongs to; `None`
+    /// for the local personal collection.
+    pub collection_id: Option<CollectionId>,
+    /// iCalendar or vCard `UID`.
+    pub uid: Option<String>,
+    /// Path of the resource on the server, relative to the server root.
+    pub remote_href: Option<String>,
+    /// Entity tag of the server copy this record was last reconciled with.
+    pub etag: Option<String>,
+    /// Changed locally since the last reconciliation with the server.
+    pub dirty: bool,
+}
+
+impl SyncMetadata {
+    /// Metadata for a record that lives only in the local profile.
+    #[must_use]
+    pub fn local() -> Self {
+        Self::default()
+    }
+}
+
+/// How often a recurring event repeats.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecurrenceFrequency {
+    Daily,
+    Weekly,
+    Monthly,
+    Yearly,
+}
+
+/// Repetition pattern of a calendar event, a subset of the iCalendar RRULE.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Recurrence {
+    pub frequency: RecurrenceFrequency,
+    /// Every `interval` days, weeks, months, or years; at least 1.
+    pub interval: u32,
+    /// ISO weekdays (1 = Monday … 7 = Sunday) on which a weekly event
+    /// repeats; empty means the weekday of the first occurrence.
+    pub weekdays: Vec<u8>,
+    /// Last occurrence may start at or before this Unix timestamp.
+    pub until_ms: Option<i64>,
+    /// Total number of occurrences including the first.
+    pub count: Option<u32>,
+}
+
 /// One local calendar event represented using portable Unix timestamps.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CalendarEvent {
@@ -95,17 +147,32 @@ pub struct CalendarEvent {
     /// Minutes before `starts_at_ms` at which the reminder becomes due.
     /// `None` means the event has no reminder.
     pub reminder_minutes_before: Option<u32>,
-    /// The user closed the reminder. Clients reset the flag when the start
-    /// time or the reminder lead time changes.
-    pub reminder_dismissed: bool,
+    /// Occurrences starting at or before this Unix timestamp had their
+    /// reminder closed by the user. `None` means no reminder was closed.
+    pub reminder_dismissed_through_ms: Option<i64>,
+    /// Repetition pattern; `None` for a single event.
+    pub recurrence: Option<Recurrence>,
+    /// ISO 8601 calendar dates (`YYYY-MM-DD`) of occurrences the user removed
+    /// from a recurring event.
+    pub exception_dates: Vec<String>,
+    pub sync: SyncMetadata,
 }
 
 impl CalendarEvent {
-    /// Unix timestamp at which the reminder becomes due, if one is set.
+    /// Unix timestamp at which the reminder of the first occurrence becomes
+    /// due, if one is set.
     #[must_use]
     pub fn reminder_at_ms(&self) -> Option<i64> {
         self.reminder_minutes_before
             .map(|minutes| self.starts_at_ms - i64::from(minutes) * 60_000)
+    }
+
+    /// Whether the reminder of the occurrence starting at `occurrence_start_ms`
+    /// was closed by the user.
+    #[must_use]
+    pub fn reminder_dismissed_for(&self, occurrence_start_ms: i64) -> bool {
+        self.reminder_dismissed_through_ms
+            .is_some_and(|through| occurrence_start_ms <= through)
     }
 }
 
@@ -145,6 +212,7 @@ pub struct TaskItem {
     /// reminder time changes.
     pub reminder_dismissed: bool,
     pub completed_at_ms: Option<i64>,
+    pub sync: SyncMetadata,
 }
 
 impl TaskItem {
@@ -206,6 +274,7 @@ pub struct Contact {
     pub birthday: Option<String>,
     pub website: Option<String>,
     pub notes: Option<String>,
+    pub sync: SyncMetadata,
 }
 
 impl Contact {
@@ -224,8 +293,8 @@ mod tests {
     use crate::{AccountId, MailAddress, WorkspaceItemId};
 
     use super::{
-        CalendarEvent, Contact, ContactEmail, ContactLabel, MailAccount, MailProvider, TaskItem,
-        TaskPriority, TaskStatus, TransportSecurity,
+        CalendarEvent, Contact, ContactEmail, ContactLabel, MailAccount, MailProvider,
+        SyncMetadata, TaskItem, TaskPriority, TaskStatus, TransportSecurity,
     };
 
     #[test]
@@ -304,9 +373,14 @@ mod tests {
             location: None,
             description: None,
             reminder_minutes_before: Some(15),
-            reminder_dismissed: false,
+            reminder_dismissed_through_ms: Some(3_600_000),
+            recurrence: None,
+            exception_dates: Vec::new(),
+            sync: SyncMetadata::local(),
         };
         assert_eq!(event.reminder_at_ms(), Some(2_700_000));
+        assert!(event.reminder_dismissed_for(3_600_000));
+        assert!(!event.reminder_dismissed_for(90_000_000));
 
         let task = TaskItem {
             id: WorkspaceItemId::parse("local.task.1").expect("task id"),
@@ -319,6 +393,7 @@ mod tests {
             reminder_at_ms: None,
             reminder_dismissed: false,
             completed_at_ms: Some(1),
+            sync: SyncMetadata::local(),
         };
         assert!(task.completed());
 
@@ -336,6 +411,7 @@ mod tests {
             birthday: None,
             website: None,
             notes: None,
+            sync: SyncMetadata::local(),
         };
         let primary = contact.primary_email().expect("primary email");
         assert_eq!(primary.address(), "anna@example.org");

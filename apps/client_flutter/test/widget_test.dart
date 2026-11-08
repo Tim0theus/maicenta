@@ -14,6 +14,7 @@ import 'package:maicenta/features/about/about_dialog.dart';
 import 'package:maicenta/features/mail/account_autodiscovery.dart';
 import 'package:maicenta/features/mail/account_setup_detection.dart';
 import 'package:maicenta/features/mail/mail_data.dart';
+import 'package:maicenta/features/reminders/system_notifications.dart';
 import 'package:maicenta/features/workspace/german_dates.dart';
 import 'package:maicenta/features/mail/oauth_service.dart';
 import 'package:maicenta/features/mail/safe_message_html.dart';
@@ -2319,6 +2320,245 @@ void main() {
     expect(find.text('Lena Fischer'), findsNothing);
   });
 
+  testWidgets('repeats an appointment and removes a single occurrence', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final dataSource = RecordingMailDataSource(configuredCalendarEvents: []);
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.tap(find.byKey(const Key('module-Kalender')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('calendar-view-day')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('new-item-button')));
+    await tester.pumpAndSettle();
+
+    final today = DateTime.now();
+    await tester.enterText(find.byKey(const Key('event-title')), 'Serie');
+    await tester.enterText(
+      find.byKey(const Key('event-start-date')),
+      formatDate(today),
+    );
+    await tester.enterText(find.byKey(const Key('event-start-time')), '10:00');
+    await tester.enterText(
+      find.byKey(const Key('event-end-date')),
+      formatDate(today),
+    );
+    await tester.enterText(find.byKey(const Key('event-end-time')), '10:30');
+    await tester.tap(find.byKey(const Key('event-repeat')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Täglich').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('event-repeat-end')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Nach Anzahl').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('event-repeat-count')), '3');
+    await tester.pump();
+    expect(find.text('Täglich, 3 Termine'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('event-save')));
+    await tester.pumpAndSettle();
+
+    final saved = dataSource.savedEvents.single;
+    expect(saved.recurrence?.frequency, RecurrenceFrequency.daily);
+    expect(saved.recurrence?.count, 3);
+    expect(find.textContaining('Serie'), findsOneWidget);
+
+    // The second day shows the second occurrence; removing it keeps the
+    // third.
+    await tester.tap(find.byKey(const Key('calendar-next')));
+    await tester.pump();
+    expect(find.textContaining('Serie'), findsOneWidget);
+    await tester.tap(find.byKey(Key('calendar-event-${saved.id}')));
+    await tester.pumpAndSettle();
+    expect(find.text('Termin bearbeiten'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('event-delete-occurrence')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('event-delete-occurrence-confirm')));
+    await tester.pumpAndSettle();
+    final secondDay = formatIsoDate(today.add(const Duration(days: 1)));
+    expect(dataSource.savedEvents.last.exceptionDates, [secondDay]);
+    expect(find.textContaining('Serie'), findsNothing);
+    await tester.tap(find.byKey(const Key('calendar-next')));
+    await tester.pump();
+    expect(find.textContaining('Serie'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('calendar-next')));
+    await tester.pump();
+    expect(
+      find.textContaining('Serie'),
+      findsNothing,
+      reason: 'the series ends after three occurrences',
+    );
+  });
+
+  testWidgets('connects a CalDAV account and switches its calendar off', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const calendar = WorkspaceCollection(
+      id: 'dav.cloud.cal',
+      accountId: 'dav.cloud',
+      kind: CollectionKind.calendar,
+      name: 'Privat',
+      color: '#FF8800',
+    );
+    final dataSource = RecordingMailDataSource(
+      configuredCollections: const [calendar],
+      discoveredCollections: const [
+        DiscoveredCollection(
+          kind: CollectionKind.calendar,
+          href: '/dav/calendars/timm/privat/',
+          name: 'Privat',
+        ),
+        DiscoveredCollection(
+          kind: CollectionKind.addressBook,
+          href: '/dav/addressbooks/timm/kontakte/',
+          name: 'Kontakte',
+        ),
+      ],
+    );
+    await tester.pumpWidget(MaicentaApp(mailDataSource: dataSource));
+    await tester.tap(find.byKey(const Key('ribbon-tab-Datei')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('ribbon-action-Kontoeinstellungen')));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('Noch kein Kalender- oder Kontaktkonto'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('dav-account-add')));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byKey(const Key('dav-name')), 'Nextcloud');
+    await tester.enterText(
+      find.byKey(const Key('dav-server')),
+      'https://cloud.example.org/remote.php/dav/',
+    );
+    await tester.enterText(find.byKey(const Key('dav-username')), 'timm');
+    await tester.enterText(find.byKey(const Key('dav-password')), 'falsch');
+    await tester.tap(find.byKey(const Key('dav-test')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('dav-test-error')), findsOneWidget);
+
+    await tester.enterText(find.byKey(const Key('dav-password')), 'geheim');
+    await tester.tap(find.byKey(const Key('dav-test')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('dav-test-result')), findsOneWidget);
+    expect(find.text('Privat · Kalender'), findsOneWidget);
+    expect(find.text('Kontakte · Adressbuch'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('dav-save')));
+    await tester.pumpAndSettle();
+    expect(dataSource.savedDavAccounts.single.displayName, 'Nextcloud');
+    expect(dataSource.savedDavAccounts.single.username, 'timm');
+    expect(dataSource.savedDavPasswords, ['geheim']);
+    expect(dataSource.davSyncCalls, 1, reason: 'saving starts a sync');
+    // Queued snack bars cover the module rail; clear them.
+    ScaffoldMessenger.of(
+      tester.element(find.byKey(const Key('classic-status-bar'))),
+    ).clearSnackBars();
+    await tester.pumpAndSettle();
+
+    // The synchronized calendar appears in the navigation pane.
+    await tester.tap(find.byKey(const Key('module-Kalender')));
+    await tester.pumpAndSettle();
+    expect(find.text('Privat'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('collection-toggle-dav.cloud.cal')));
+    await tester.pumpAndSettle();
+    expect(dataSource.collectionToggles, [('dav.cloud.cal', false)]);
+
+    // A new event can be stored in the synchronized calendar.
+    await tester.tap(find.byKey(const Key('ribbon-tab-Start')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('new-item-button')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('event-title')), 'Cloud');
+    await tester.tap(find.byKey(const Key('event-calendar')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Privat').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('event-save')));
+    await tester.pumpAndSettle();
+    expect(dataSource.savedEvents.single.collectionId, 'dav.cloud.cal');
+
+    // The account can be removed again from the settings.
+    await tester.tap(find.byKey(const Key('ribbon-tab-Datei')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('ribbon-action-Kontoeinstellungen')));
+    await tester.pumpAndSettle();
+    final accountId = dataSource.savedDavAccounts.single.id;
+    await tester.tap(find.byKey(Key('dav-account-delete-$accountId')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-delete')));
+    await tester.pumpAndSettle();
+    expect(dataSource.deletedDavAccountIds, [accountId]);
+  });
+
+  testWidgets('announces due reminders through the system notifier', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final now = DateTime.now();
+    final notifier = RecordingSystemNotifier();
+    final dataSource = RecordingMailDataSource(
+      configuredTasks: [
+        LocalTaskItem(
+          id: 'local.task.due',
+          title: 'Jetzt fällig',
+          reminderAt: now.subtract(const Duration(minutes: 1)),
+        ),
+        LocalTaskItem(
+          id: 'local.task.later',
+          title: 'Später fällig',
+          reminderAt: now.add(const Duration(hours: 2)),
+        ),
+      ],
+      configuredCalendarEvents: [
+        LocalCalendarItem(
+          id: 'local.event.weekly',
+          title: 'Wöchentlich',
+          startsAt: now.add(const Duration(days: 1)),
+          endsAt: now.add(const Duration(days: 1, hours: 1)),
+          reminderMinutesBefore: 30,
+          recurrence: const Recurrence(frequency: RecurrenceFrequency.weekly),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaicentaApp(mailDataSource: dataSource, systemNotifier: notifier),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('reminder-dialog')), findsOneWidget);
+    expect(notifier.shown.map((item) => item.id), ['local.task.due']);
+    // The later task and the next two weekly occurrences are planned ahead.
+    expect(notifier.scheduled.last.map((item) => item.id).toSet(), {
+      'local.task.later',
+      'local.event.weekly#${formatIsoDate(now.add(const Duration(days: 1)))}',
+      'local.event.weekly#${formatIsoDate(now.add(const Duration(days: 8)))}',
+    });
+
+    await tester.tap(find.byKey(const Key('reminder-dismiss-local.task.due')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('reminder-dialog')), findsNothing);
+    expect(
+      notifier.scheduled.last.map((item) => item.id),
+      isNot(contains('local.task.due')),
+    );
+  });
+
   testWidgets('shows due reminders and lets the user close or postpone them', (
     tester,
   ) async {
@@ -3276,6 +3516,9 @@ class RecordingMailDataSource implements MailDataSource {
     List<LocalCalendarItem>? configuredCalendarEvents,
     List<LocalTaskItem>? configuredTasks,
     List<LocalContactItem>? configuredContacts,
+    this.configuredDavAccounts = const [],
+    this.configuredCollections = const [],
+    this.discoveredCollections = const [],
   }) : configuredCalendarEvents =
            configuredCalendarEvents ?? demoCalendarEvents,
        configuredTasks = configuredTasks ?? demoTasks,
@@ -3284,6 +3527,16 @@ class RecordingMailDataSource implements MailDataSource {
   final List<LocalCalendarItem> configuredCalendarEvents;
   final List<LocalTaskItem> configuredTasks;
   final List<LocalContactItem> configuredContacts;
+  final List<DavAccountConfig> configuredDavAccounts;
+  final List<WorkspaceCollection> configuredCollections;
+
+  /// What a DAV connection test reports.
+  final List<DiscoveredCollection> discoveredCollections;
+  final List<DavAccountConfig> savedDavAccounts = [];
+  final List<String> savedDavPasswords = [];
+  final List<String> deletedDavAccountIds = [];
+  final List<(String, bool)> collectionToggles = [];
+  int davSyncCalls = 0;
 
   final List<MailAccountConfig> configuredAccounts;
   final List<MailFolder> configuredFolders;
@@ -3391,6 +3644,12 @@ class RecordingMailDataSource implements MailDataSource {
 
   @override
   List<MailAccountConfig> get mailAccounts => configuredAccounts;
+
+  @override
+  List<DavAccountConfig> get davAccounts => configuredDavAccounts;
+
+  @override
+  List<WorkspaceCollection> get collections => configuredCollections;
 
   @override
   int get pendingMailOperations => pendingOperations;
@@ -3589,6 +3848,55 @@ class RecordingMailDataSource implements MailDataSource {
   }
 
   @override
+  Future<List<DiscoveredCollection>> testDavAccount(
+    DavAccountConfig account,
+    String password,
+  ) async {
+    if (password == 'falsch') {
+      throw Exception('the server rejected the credentials');
+    }
+    return discoveredCollections;
+  }
+
+  @override
+  Future<void> saveDavAccount(DavAccountConfig account, String password) async {
+    savedDavAccounts.add(account);
+    savedDavPasswords.add(password);
+  }
+
+  @override
+  Future<void> deleteDavAccount(String accountId) async {
+    deletedDavAccountIds.add(accountId);
+  }
+
+  @override
+  Future<void> saveCollectionEnabled(String collectionId, bool enabled) async {
+    collectionToggles.add((collectionId, enabled));
+  }
+
+  @override
+  Future<DavSyncOutcome> synchronizeDavAccounts() async {
+    davSyncCalls += 1;
+    return DavSyncOutcome(
+      uploaded: 1,
+      downloaded: 2,
+      removed: 0,
+      snapshot: WorkspaceDataSnapshot(
+        folders: folders,
+        favoriteFolderIds: favoriteFolderIds,
+        messages: messages,
+        calendarEvents: calendarEvents,
+        tasks: tasks,
+        contacts: contacts,
+        mailAccounts: mailAccounts,
+        davAccounts: [...configuredDavAccounts, ...savedDavAccounts],
+        collections: configuredCollections,
+        pendingMailOperations: pendingOperations,
+      ),
+    );
+  }
+
+  @override
   Future<void> testAccount(MailAccountConfig account, String password) async {}
 
   @override
@@ -3705,5 +4013,24 @@ class RecordingMailDataSource implements MailDataSource {
       highImportance: highImportance,
     ));
     return 'recorded';
+  }
+}
+
+/// Records system notifications instead of showing them.
+class RecordingSystemNotifier implements SystemNotifier {
+  final List<PlannedNotification> shown = [];
+  final List<List<PlannedNotification>> scheduled = [];
+
+  @override
+  bool get supported => true;
+
+  @override
+  Future<void> show(PlannedNotification notification) async {
+    shown.add(notification);
+  }
+
+  @override
+  Future<void> schedule(List<PlannedNotification> notifications) async {
+    scheduled.add(notifications);
   }
 }

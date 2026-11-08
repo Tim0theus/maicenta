@@ -293,15 +293,15 @@ class EditorDialog extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            Row(
+            // Leading actions sit left, confirming actions right; when the
+            // row is too narrow the confirming actions wrap to a new line.
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              runSpacing: 8,
               children: [
-                ...leading,
-                const Spacer(),
-                for (final action in actions)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: action,
-                  ),
+                Wrap(spacing: 4, children: leading),
+                Wrap(spacing: 8, children: actions),
               ],
             ),
           ],

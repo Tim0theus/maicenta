@@ -3,9 +3,9 @@
 use std::{error::Error, fmt, future::Future};
 
 use maicenta_domain::{
-    AccountId, AttachmentId, CalendarEvent, Contact, MailAccount, Mailbox, MailboxId,
-    MessageAttachment, MessageBody, MessageFlag, MessageId, MessageRecipients, MessageSummary,
-    TaskItem, WorkspaceItemId,
+    AccountId, AttachmentId, CalendarEvent, CollectionId, Contact, DavAccount, DavCollection,
+    MailAccount, Mailbox, MailboxId, MessageAttachment, MessageBody, MessageFlag, MessageId,
+    MessageRecipients, MessageSummary, RemoteDeletion, TaskItem, WorkspaceItemId,
 };
 
 /// Provider-side identity of one message inside its remote mailbox.
@@ -632,6 +632,16 @@ pub trait WorkspaceStore: Send + Sync {
     /// Returns a storage error when the data cannot be read.
     fn list_calendar_events(&self) -> Result<Vec<CalendarEvent>, ApplicationError>;
 
+    /// Loads one calendar event, or `None` for an unknown identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the data cannot be read.
+    fn find_calendar_event(
+        &self,
+        event_id: &WorkspaceItemId,
+    ) -> Result<Option<CalendarEvent>, ApplicationError>;
+
     /// Creates or updates a local calendar event.
     ///
     /// # Errors
@@ -655,6 +665,13 @@ pub trait WorkspaceStore: Send + Sync {
     /// Returns a storage error when the data cannot be read.
     fn list_tasks(&self) -> Result<Vec<TaskItem>, ApplicationError>;
 
+    /// Loads one task, or `None` for an unknown identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the data cannot be read.
+    fn find_task(&self, task_id: &WorkspaceItemId) -> Result<Option<TaskItem>, ApplicationError>;
+
     /// Creates or updates a local task.
     ///
     /// # Errors
@@ -677,6 +694,16 @@ pub trait WorkspaceStore: Send + Sync {
     /// Returns a storage error when the data cannot be read.
     fn list_contacts(&self) -> Result<Vec<Contact>, ApplicationError>;
 
+    /// Loads one contact, or `None` for an unknown identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the data cannot be read.
+    fn find_contact(
+        &self,
+        contact_id: &WorkspaceItemId,
+    ) -> Result<Option<Contact>, ApplicationError>;
+
     /// Creates or updates a local contact together with its email
     /// addresses, phone numbers, and postal addresses.
     ///
@@ -692,6 +719,126 @@ pub trait WorkspaceStore: Send + Sync {
     /// Returns [`ApplicationError::NotFound`] for an unknown contact, or a
     /// storage error when the change cannot be committed.
     fn delete_contact(&mut self, contact_id: &WorkspaceItemId) -> Result<(), ApplicationError>;
+}
+
+/// Persistence contract for `CalDAV`/`CardDAV` accounts, their collections, and
+/// the bookkeeping the synchronization needs.
+///
+/// Deleting an event, task, or contact that has a server copy records a
+/// [`RemoteDeletion`] so the next synchronization removes it there too.
+pub trait DavStore: Send + Sync {
+    /// Lists configured DAV accounts ordered by display name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the configuration cannot be read.
+    fn list_dav_accounts(&self) -> Result<Vec<DavAccount>, ApplicationError>;
+
+    /// Creates or updates one DAV account.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the configuration cannot be committed.
+    fn save_dav_account(&mut self, account: &DavAccount) -> Result<(), ApplicationError>;
+
+    /// Deletes one DAV account together with its collections, secrets, and
+    /// every synchronized record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationError::NotFound`] when the account is missing, or
+    /// a storage error when the transaction cannot be committed.
+    fn delete_dav_account(&mut self, account_id: &AccountId) -> Result<(), ApplicationError>;
+
+    /// Records the completion time of a successful synchronization.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationError::NotFound`] when the account is missing, or
+    /// a storage error when the timestamp cannot be committed.
+    fn update_dav_account_last_sync(
+        &mut self,
+        account_id: &AccountId,
+        timestamp_ms: i64,
+    ) -> Result<(), ApplicationError>;
+
+    /// Reads a secret of a DAV account.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the encrypted secret cannot be read.
+    fn dav_secret(
+        &self,
+        account_id: &AccountId,
+        key: &str,
+    ) -> Result<Option<String>, ApplicationError>;
+
+    /// Creates or replaces a secret of a DAV account.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the encrypted secret cannot be written.
+    fn set_dav_secret(
+        &mut self,
+        account_id: &AccountId,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ApplicationError>;
+
+    /// Lists collections of every account, ordered by account, position,
+    /// and name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the data cannot be read.
+    fn list_dav_collections(&self) -> Result<Vec<DavCollection>, ApplicationError>;
+
+    /// Creates or updates one collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the change cannot be committed.
+    fn save_dav_collection(&mut self, collection: &DavCollection) -> Result<(), ApplicationError>;
+
+    /// Deletes one collection together with its synchronized records.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplicationError::NotFound`] when the collection is missing,
+    /// or a storage error when the transaction cannot be committed.
+    fn delete_dav_collection(
+        &mut self,
+        collection_id: &CollectionId,
+    ) -> Result<(), ApplicationError>;
+
+    /// Records a server resource that still has to be deleted remotely.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the change cannot be committed.
+    fn record_remote_deletion(&mut self, deletion: &RemoteDeletion)
+    -> Result<(), ApplicationError>;
+
+    /// Lists pending remote deletions of one collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the data cannot be read.
+    fn list_remote_deletions(
+        &self,
+        collection_id: &CollectionId,
+    ) -> Result<Vec<RemoteDeletion>, ApplicationError>;
+
+    /// Forgets a pending remote deletion once the server copy is gone.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the change cannot be committed.
+    fn clear_remote_deletion(
+        &mut self,
+        collection_id: &CollectionId,
+        href: &str,
+    ) -> Result<(), ApplicationError>;
 }
 
 /// Local persistence contract for mail account configuration.
