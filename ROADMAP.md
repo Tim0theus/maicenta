@@ -203,10 +203,15 @@ The first usable release will focus on a stable, local desktop mail client.
 - [x] Full local contacts: several labelled e-mail addresses, phone numbers,
   and postal addresses, company, job title, birthday, website, notes, search,
   and composing to a contact.
-- Add CalDAV synchronization for calendars.
-- Support iCalendar events, recurrence, and time zones.
-- Add VTODO/CalDAV synchronization for tasks.
-- Add vCard and CardDAV support for contacts.
+- [x] Recurring events (daily, weekly, monthly, yearly rules with interval,
+  weekdays, end date or count, and removed occurrences).
+- [x] System notifications for reminders, scheduled ahead on macOS and
+  Windows.
+- [x] CalDAV synchronization for calendars and task lists (iCalendar
+  VEVENT/VTODO with time zones, alarms, RRULE, EXDATE).
+- [x] CardDAV synchronization for address books (vCard 3.0/4.0).
+- Recurrence exceptions with changed details (RECURRENCE-ID) and
+  server-side sync-collection reports for large calendars.
 - Provide a combined daily overview.
 - Create tasks and calendar events from email.
 

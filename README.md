@@ -47,9 +47,9 @@ require a server or self-hosted gateway.
 | Module | Purpose | Planned phase |
 | --- | --- | --- |
 | Mail | IMAP/SMTP accounts, offline cache, search, and identities | MVP |
-| Calendar | Local calendars now; iCalendar and CalDAV later | Phase 2 |
-| Tasks | Local tasks now; VTODO and CalDAV later | Phase 2 |
-| Contacts | Local contacts now; vCard and CardDAV later | Phase 2 |
+| Calendar | Local and CalDAV calendars, recurring events, reminders | Phase 2 |
+| Tasks | Local and CalDAV (VTODO) task lists with reminders | Phase 2 |
+| Contacts | Local and CardDAV address books | Phase 2 |
 | Notes | Personal notes within the workspace | Later |
 | Vault | Encrypted profile export, import, backup, and future sync | MVP foundation |
 | Assistant | Optional local or external AI providers | Later |
@@ -278,10 +278,14 @@ Current account limitations are important:
   `BODYSTRUCTURE` metadata is visible in the reading pane and an individual
   file can be fetched with `BODY.PEEK` after an explicit click, subject to a
   100 MiB decoded-size limit and fresh mailbox UIDVALIDITY/UID checks.
-- Calendar, tasks, and contacts are durable local records with full editors
-  and in-app reminders; CalDAV, CardDAV, iCalendar, VTODO, and vCard
-  synchronization are not implemented yet, and reminders only appear while
-  MAICENTA is running.
+- Calendar, tasks, and contacts are durable local records with full editors,
+  recurring events, and reminders. CalDAV/CardDAV accounts synchronize
+  calendars, task lists, and address books in both directions (iCalendar
+  VEVENT/VTODO, vCard). Reminders appear in the app and as system
+  notifications; on macOS and Windows upcoming reminders are scheduled with
+  the system so they also show after the app was closed, on Linux only while
+  it runs. Recurrence exceptions that change a single occurrence
+  (RECURRENCE-ID) are kept on the server but not edited in MAICENTA.
 - Safe inline `cid:` PNG, JPEG, and GIF resources are resolved fully offline;
   sender-provided data URLs remain blocked. Display-part synchronization is
   bounded and reports an explicit warning when a declared section is missing,

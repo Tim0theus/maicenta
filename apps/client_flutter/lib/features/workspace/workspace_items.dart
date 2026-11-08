@@ -71,6 +71,137 @@ enum ContactLabel {
   static const addressLabels = [work, home, other];
 }
 
+/// How often a recurring event repeats.
+enum RecurrenceFrequency {
+  daily('daily', 'Täglich'),
+  weekly('weekly', 'Wöchentlich'),
+  monthly('monthly', 'Monatlich'),
+  yearly('yearly', 'Jährlich');
+
+  const RecurrenceFrequency(this.key, this.label);
+
+  final String key;
+  final String label;
+
+  static RecurrenceFrequency fromKey(String key) => values.firstWhere(
+    (value) => value.key == key,
+    orElse: () => RecurrenceFrequency.weekly,
+  );
+}
+
+/// Repetition pattern of an event.
+class Recurrence {
+  const Recurrence({
+    required this.frequency,
+    this.interval = 1,
+    this.weekdays = const [],
+    this.until,
+    this.count,
+  });
+
+  final RecurrenceFrequency frequency;
+
+  /// Every `interval` days, weeks, months, or years.
+  final int interval;
+
+  /// ISO weekdays (1 = Monday … 7 = Sunday) for weekly rules; empty means
+  /// the weekday of the first occurrence.
+  final List<int> weekdays;
+
+  /// The last occurrence may start at or before this moment.
+  final DateTime? until;
+
+  /// Total number of occurrences including the first.
+  final int? count;
+}
+
+/// What a synchronized collection holds.
+enum CollectionKind {
+  calendar('calendar', 'Kalender'),
+  taskList('task_list', 'Aufgabenliste'),
+  addressBook('address_book', 'Adressbuch');
+
+  const CollectionKind(this.key, this.label);
+
+  final String key;
+  final String label;
+
+  static CollectionKind fromKey(String key) => values.firstWhere(
+    (value) => value.key == key,
+    orElse: () => CollectionKind.calendar,
+  );
+}
+
+/// One calendar, task list, or address book of a CalDAV/CardDAV account.
+class WorkspaceCollection {
+  const WorkspaceCollection({
+    required this.id,
+    required this.accountId,
+    required this.kind,
+    required this.name,
+    this.color,
+    this.enabled = true,
+  });
+
+  final String id;
+  final String accountId;
+  final CollectionKind kind;
+  final String name;
+
+  /// CSS-style color such as `#0F6CBD`, when the server supplies one.
+  final String? color;
+  final bool enabled;
+
+  /// Whether events can be stored here.
+  bool get holdsEvents => kind == CollectionKind.calendar;
+
+  /// Whether tasks can be stored here (calendars accept VTODO too).
+  bool get holdsTasks =>
+      kind == CollectionKind.calendar || kind == CollectionKind.taskList;
+
+  bool get holdsContacts => kind == CollectionKind.addressBook;
+
+  WorkspaceCollection copyWith({bool? enabled}) => WorkspaceCollection(
+    id: id,
+    accountId: accountId,
+    kind: kind,
+    name: name,
+    color: color,
+    enabled: enabled ?? this.enabled,
+  );
+}
+
+/// Configuration of one CalDAV/CardDAV account; the password stays in the
+/// encrypted profile.
+class DavAccountConfig {
+  const DavAccountConfig({
+    required this.id,
+    required this.displayName,
+    required this.serverUrl,
+    required this.username,
+    this.lastSyncAt,
+  });
+
+  final String id;
+  final String displayName;
+  final String serverUrl;
+  final String username;
+  final DateTime? lastSyncAt;
+}
+
+/// One collection a connection test found on a server.
+class DiscoveredCollection {
+  const DiscoveredCollection({
+    required this.kind,
+    required this.href,
+    required this.name,
+  });
+
+  final CollectionKind kind;
+  final String href;
+  final String name;
+}
+
 /// Reminder lead times offered for calendar events, in minutes.
 const eventReminderChoices = <int>[0, 5, 10, 15, 30, 60, 120, 1440, 2880];
 
@@ -100,7 +231,10 @@ class LocalCalendarItem {
     this.location,
     this.description,
     this.reminderMinutesBefore,
-    this.reminderDismissed = false,
+    this.reminderDismissedThrough,
+    this.recurrence,
+    this.exceptionDates = const [],
+    this.collectionId,
   });
 
   final String id;
@@ -120,8 +254,26 @@ class LocalCalendarItem {
   /// Minutes before the start at which the reminder is due; null disables it.
   final int? reminderMinutesBefore;
 
-  /// The reminder was closed by the user.
-  final bool reminderDismissed;
+  /// Occurrences starting at or before this moment had their reminder
+  /// closed by the user.
+  final DateTime? reminderDismissedThrough;
+
+  /// Repetition pattern; null for a single event.
+  final Recurrence? recurrence;
+
+  /// ISO dates (`YYYY-MM-DD`) of occurrences removed from a recurring event.
+  final List<String> exceptionDates;
+
+  /// Calendar the event is synchronized with; null for the local calendar.
+  final String? collectionId;
+
+  bool get recurring => recurrence != null;
+
+  /// Whether the reminder of the first occurrence was closed.
+  bool get reminderDismissed {
+    final through = reminderDismissedThrough;
+    return through != null && !startsAt.isAfter(through);
+  }
 
   int get day => startsAt.day;
 
@@ -169,7 +321,13 @@ class LocalCalendarItem {
     String? description,
     int? reminderMinutesBefore,
     bool clearReminder = false,
-    bool? reminderDismissed,
+    DateTime? reminderDismissedThrough,
+    bool clearReminderDismissed = false,
+    Recurrence? recurrence,
+    bool clearRecurrence = false,
+    List<String>? exceptionDates,
+    String? collectionId,
+    bool clearCollection = false,
   }) {
     return LocalCalendarItem(
       id: id,
@@ -182,7 +340,12 @@ class LocalCalendarItem {
       reminderMinutesBefore: clearReminder
           ? null
           : reminderMinutesBefore ?? this.reminderMinutesBefore,
-      reminderDismissed: reminderDismissed ?? this.reminderDismissed,
+      reminderDismissedThrough: clearReminderDismissed
+          ? null
+          : reminderDismissedThrough ?? this.reminderDismissedThrough,
+      recurrence: clearRecurrence ? null : recurrence ?? this.recurrence,
+      exceptionDates: exceptionDates ?? this.exceptionDates,
+      collectionId: clearCollection ? null : collectionId ?? this.collectionId,
     );
   }
 }
@@ -199,6 +362,7 @@ class LocalTaskItem {
     this.reminderAt,
     this.reminderDismissed = false,
     this.completedAt,
+    this.collectionId,
   });
 
   final String id;
@@ -211,6 +375,9 @@ class LocalTaskItem {
   final DateTime? reminderAt;
   final bool reminderDismissed;
   final DateTime? completedAt;
+
+  /// Task list the task is synchronized with; null for the local list.
+  final String? collectionId;
 
   bool get done => status == TaskStatus.completed;
 
@@ -243,6 +410,8 @@ class LocalTaskItem {
     bool? reminderDismissed,
     DateTime? completedAt,
     bool clearCompletedAt = false,
+    String? collectionId,
+    bool clearCollection = false,
   }) {
     return LocalTaskItem(
       id: id,
@@ -255,6 +424,7 @@ class LocalTaskItem {
       reminderAt: clearReminder ? null : reminderAt ?? this.reminderAt,
       reminderDismissed: reminderDismissed ?? this.reminderDismissed,
       completedAt: clearCompletedAt ? null : completedAt ?? this.completedAt,
+      collectionId: clearCollection ? null : collectionId ?? this.collectionId,
     );
   }
 
@@ -324,6 +494,7 @@ class LocalContactItem {
     this.birthday,
     this.website,
     this.notes,
+    this.collectionId,
   });
 
   final String id;
@@ -338,6 +509,9 @@ class LocalContactItem {
   final DateTime? birthday;
   final String? website;
   final String? notes;
+
+  /// Address book the contact is synchronized with; null for the local one.
+  final String? collectionId;
 
   /// The first email address, or an empty string.
   String get email => emails.isEmpty ? '' : emails.first.address;

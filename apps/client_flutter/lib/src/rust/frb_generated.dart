@@ -67,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 59163550;
+  int get rustContentHash => -1507915494;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -94,6 +94,11 @@ abstract class RustLibApi extends BaseApi {
     required String databasePath,
     required String mailboxId,
     required String displayName,
+  });
+
+  Future<void> crateApiWorkspaceDeleteDavAccount({
+    required String databasePath,
+    required String accountId,
   });
 
   Future<void> crateApiWorkspaceDeleteLocalCalendarEvent({
@@ -171,9 +176,21 @@ abstract class RustLibApi extends BaseApi {
     required List<String> mailboxIds,
   });
 
+  Future<void> crateApiWorkspaceSaveCollectionEnabled({
+    required String databasePath,
+    required String collectionId,
+    required bool enabled,
+  });
+
   Future<void> crateApiWorkspaceSaveDarkMode({
     required String databasePath,
     required bool enabled,
+  });
+
+  Future<void> crateApiWorkspaceSaveDavAccount({
+    required String databasePath,
+    required DavAccountInput input,
+    required String password,
   });
 
   Future<void> crateApiWorkspaceSaveFavoriteMailboxes({
@@ -236,6 +253,10 @@ abstract class RustLibApi extends BaseApi {
     required OutgoingMessageInput input,
   });
 
+  Future<DavSyncDto> crateApiWorkspaceSynchronizeDavAccounts({
+    required String databasePath,
+  });
+
   Future<DraftSyncDto> crateApiWorkspaceSynchronizeMailAccountDrafts({
     required String databasePath,
     required String accountId,
@@ -243,6 +264,12 @@ abstract class RustLibApi extends BaseApi {
 
   Future<WorkspaceSnapshot> crateApiWorkspaceSynchronizeMailAccounts({
     required String databasePath,
+  });
+
+  Future<List<DiscoveredCollectionDto>>
+  crateApiWorkspaceTestDavAccountConnection({
+    required DavAccountInput input,
+    required String password,
   });
 
   Future<void> crateApiWorkspaceTestMailAccountConnection({
@@ -431,6 +458,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiWorkspaceDeleteDavAccount({
+    required String databasePath,
+    required String accountId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(databasePath, serializer);
+          sse_encode_String(accountId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWorkspaceDeleteDavAccountConstMeta,
+        argValues: [databasePath, accountId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWorkspaceDeleteDavAccountConstMeta =>
+      const TaskConstMeta(
+        debugName: "delete_dav_account",
+        argNames: ["databasePath", "accountId"],
+      );
+
+  @override
   Future<void> crateApiWorkspaceDeleteLocalCalendarEvent({
     required String databasePath,
     required String eventId,
@@ -444,7 +506,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 7,
             port: port_,
           );
         },
@@ -479,7 +541,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 8,
             port: port_,
           );
         },
@@ -516,7 +578,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 9,
             port: port_,
           );
         },
@@ -551,7 +613,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 10,
             port: port_,
           );
         },
@@ -586,7 +648,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 11,
             port: port_,
           );
         },
@@ -619,7 +681,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 11,
+              funcId: 12,
               port: port_,
             );
           },
@@ -658,7 +720,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 13,
             port: port_,
           );
         },
@@ -695,7 +757,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 14,
             port: port_,
           );
         },
@@ -732,7 +794,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 15,
             port: port_,
           );
         },
@@ -762,7 +824,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 16,
             port: port_,
           );
         },
@@ -798,7 +860,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 17,
             port: port_,
           );
         },
@@ -833,7 +895,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 18,
             port: port_,
           );
         },
@@ -866,7 +928,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 19,
             port: port_,
           );
         },
@@ -903,7 +965,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 20,
             port: port_,
           );
         },
@@ -938,7 +1000,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 21,
             port: port_,
           );
         },
@@ -960,6 +1022,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiWorkspaceSaveCollectionEnabled({
+    required String databasePath,
+    required String collectionId,
+    required bool enabled,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(databasePath, serializer);
+          sse_encode_String(collectionId, serializer);
+          sse_encode_bool(enabled, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 22,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWorkspaceSaveCollectionEnabledConstMeta,
+        argValues: [databasePath, collectionId, enabled],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWorkspaceSaveCollectionEnabledConstMeta =>
+      const TaskConstMeta(
+        debugName: "save_collection_enabled",
+        argNames: ["databasePath", "collectionId", "enabled"],
+      );
+
+  @override
   Future<void> crateApiWorkspaceSaveDarkMode({
     required String databasePath,
     required bool enabled,
@@ -973,7 +1072,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 23,
             port: port_,
           );
         },
@@ -995,6 +1094,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiWorkspaceSaveDavAccount({
+    required String databasePath,
+    required DavAccountInput input,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(databasePath, serializer);
+          sse_encode_box_autoadd_dav_account_input(input, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 24,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWorkspaceSaveDavAccountConstMeta,
+        argValues: [databasePath, input, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWorkspaceSaveDavAccountConstMeta =>
+      const TaskConstMeta(
+        debugName: "save_dav_account",
+        argNames: ["databasePath", "input", "password"],
+      );
+
+  @override
   Future<void> crateApiWorkspaceSaveFavoriteMailboxes({
     required String databasePath,
     required List<String> mailboxIds,
@@ -1008,7 +1144,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1043,7 +1179,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1078,7 +1214,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 27,
             port: port_,
           );
         },
@@ -1113,7 +1249,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1148,7 +1284,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 29,
             port: port_,
           );
         },
@@ -1185,7 +1321,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1222,7 +1358,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1257,7 +1393,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 32,
             port: port_,
           );
         },
@@ -1294,7 +1430,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 33,
             port: port_,
           );
         },
@@ -1333,7 +1469,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 34,
             port: port_,
           );
         },
@@ -1368,7 +1504,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 32,
+            funcId: 35,
             port: port_,
           );
         },
@@ -1390,6 +1526,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<DavSyncDto> crateApiWorkspaceSynchronizeDavAccounts({
+    required String databasePath,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(databasePath, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 36,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_dav_sync_dto,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWorkspaceSynchronizeDavAccountsConstMeta,
+        argValues: [databasePath],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWorkspaceSynchronizeDavAccountsConstMeta =>
+      const TaskConstMeta(
+        debugName: "synchronize_dav_accounts",
+        argNames: ["databasePath"],
+      );
+
+  @override
   Future<DraftSyncDto> crateApiWorkspaceSynchronizeMailAccountDrafts({
     required String databasePath,
     required String accountId,
@@ -1403,7 +1572,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 37,
             port: port_,
           );
         },
@@ -1436,7 +1605,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 34,
+            funcId: 38,
             port: port_,
           );
         },
@@ -1458,6 +1627,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<List<DiscoveredCollectionDto>>
+  crateApiWorkspaceTestDavAccountConnection({
+    required DavAccountInput input,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_box_autoadd_dav_account_input(input, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 39,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_discovered_collection_dto,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWorkspaceTestDavAccountConnectionConstMeta,
+        argValues: [input, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWorkspaceTestDavAccountConnectionConstMeta =>
+      const TaskConstMeta(
+        debugName: "test_dav_account_connection",
+        argNames: ["input", "password"],
+      );
+
+  @override
   Future<void> crateApiWorkspaceTestMailAccountConnection({
     required MailAccountInput input,
     required String password,
@@ -1471,7 +1676,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 35,
+            funcId: 40,
             port: port_,
           );
         },
@@ -1506,7 +1711,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 36,
+            funcId: 41,
             port: port_,
           );
         },
@@ -1547,7 +1752,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 37,
+            funcId: 42,
             port: port_,
           );
         },
@@ -1590,7 +1795,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 38,
+            funcId: 43,
             port: port_,
           );
         },
@@ -1658,6 +1863,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  DavAccountInput dco_decode_box_autoadd_dav_account_input(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_dav_account_input(raw);
+  }
+
+  @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_i_64(raw);
@@ -1716,6 +1927,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RecurrenceDto dco_decode_box_autoadd_recurrence_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_recurrence_dto(raw);
+  }
+
+  @protected
   ReleaseNoticeDto dco_decode_box_autoadd_release_notice_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_release_notice_dto(raw);
@@ -1731,8 +1948,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   CalendarEventDto dco_decode_calendar_event_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 9)
-      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
+    if (arr.length != 12)
+      throw Exception('unexpected arr length: expect 12 but see ${arr.length}');
     return CalendarEventDto(
       id: dco_decode_String(arr[0]),
       title: dco_decode_String(arr[1]),
@@ -1742,7 +1959,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       location: dco_decode_opt_String(arr[5]),
       description: dco_decode_opt_String(arr[6]),
       reminderMinutesBefore: dco_decode_opt_box_autoadd_u_32(arr[7]),
-      reminderDismissed: dco_decode_bool(arr[8]),
+      reminderDismissedThroughMs: dco_decode_opt_box_autoadd_i_64(arr[8]),
+      recurrence: dco_decode_opt_box_autoadd_recurrence_dto(arr[9]),
+      exceptionDates: dco_decode_list_String(arr[10]),
+      collectionId: dco_decode_opt_String(arr[11]),
+    );
+  }
+
+  @protected
+  CollectionDto dco_decode_collection_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    return CollectionDto(
+      id: dco_decode_String(arr[0]),
+      accountId: dco_decode_String(arr[1]),
+      kind: dco_decode_String(arr[2]),
+      displayName: dco_decode_String(arr[3]),
+      color: dco_decode_opt_String(arr[4]),
+      enabled: dco_decode_bool(arr[5]),
     );
   }
 
@@ -1765,8 +2001,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ContactDto dco_decode_contact_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 10)
-      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    if (arr.length != 11)
+      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
     return ContactDto(
       id: dco_decode_String(arr[0]),
       name: dco_decode_String(arr[1]),
@@ -1778,6 +2014,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       birthday: dco_decode_opt_String(arr[7]),
       website: dco_decode_opt_String(arr[8]),
       notes: dco_decode_opt_String(arr[9]),
+      collectionId: dco_decode_opt_String(arr[10]),
     );
   }
 
@@ -1802,6 +2039,63 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return ContactPhoneDto(
       label: dco_decode_String(arr[0]),
       number: dco_decode_String(arr[1]),
+    );
+  }
+
+  @protected
+  DavAccountDto dco_decode_dav_account_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return DavAccountDto(
+      id: dco_decode_String(arr[0]),
+      displayName: dco_decode_String(arr[1]),
+      serverUrl: dco_decode_String(arr[2]),
+      username: dco_decode_String(arr[3]),
+      lastSyncAtMs: dco_decode_opt_box_autoadd_i_64(arr[4]),
+    );
+  }
+
+  @protected
+  DavAccountInput dco_decode_dav_account_input(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return DavAccountInput(
+      id: dco_decode_String(arr[0]),
+      displayName: dco_decode_String(arr[1]),
+      serverUrl: dco_decode_String(arr[2]),
+      username: dco_decode_String(arr[3]),
+    );
+  }
+
+  @protected
+  DavSyncDto dco_decode_dav_sync_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return DavSyncDto(
+      uploaded: dco_decode_u_32(arr[0]),
+      downloaded: dco_decode_u_32(arr[1]),
+      removed: dco_decode_u_32(arr[2]),
+      warnings: dco_decode_list_String(arr[3]),
+      snapshot: dco_decode_workspace_snapshot(arr[4]),
+    );
+  }
+
+  @protected
+  DiscoveredCollectionDto dco_decode_discovered_collection_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return DiscoveredCollectionDto(
+      kind: dco_decode_String(arr[0]),
+      href: dco_decode_String(arr[1]),
+      displayName: dco_decode_String(arr[2]),
     );
   }
 
@@ -1843,6 +2137,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<CollectionDto> dco_decode_list_collection_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_collection_dto).toList();
+  }
+
+  @protected
   List<ContactAddressDto> dco_decode_list_contact_address_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_contact_address_dto).toList();
@@ -1864,6 +2164,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<ContactPhoneDto> dco_decode_list_contact_phone_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_contact_phone_dto).toList();
+  }
+
+  @protected
+  List<DavAccountDto> dco_decode_list_dav_account_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_dav_account_dto).toList();
+  }
+
+  @protected
+  List<DiscoveredCollectionDto> dco_decode_list_discovered_collection_dto(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>)
+        .map(dco_decode_discovered_collection_dto)
+        .toList();
   }
 
   @protected
@@ -1916,8 +2232,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalCalendarEventInput dco_decode_local_calendar_event_input(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 9)
-      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
+    if (arr.length != 12)
+      throw Exception('unexpected arr length: expect 12 but see ${arr.length}');
     return LocalCalendarEventInput(
       id: dco_decode_String(arr[0]),
       title: dco_decode_String(arr[1]),
@@ -1927,7 +2243,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       location: dco_decode_opt_String(arr[5]),
       description: dco_decode_opt_String(arr[6]),
       reminderMinutesBefore: dco_decode_opt_box_autoadd_u_32(arr[7]),
-      reminderDismissed: dco_decode_bool(arr[8]),
+      reminderDismissedThroughMs: dco_decode_opt_box_autoadd_i_64(arr[8]),
+      recurrence: dco_decode_opt_box_autoadd_recurrence_dto(arr[9]),
+      exceptionDates: dco_decode_list_String(arr[10]),
+      collectionId: dco_decode_opt_String(arr[11]),
     );
   }
 
@@ -1935,8 +2254,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalContactInput dco_decode_local_contact_input(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 10)
-      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    if (arr.length != 11)
+      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
     return LocalContactInput(
       id: dco_decode_String(arr[0]),
       name: dco_decode_String(arr[1]),
@@ -1948,6 +2267,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       birthday: dco_decode_opt_String(arr[7]),
       website: dco_decode_opt_String(arr[8]),
       notes: dco_decode_opt_String(arr[9]),
+      collectionId: dco_decode_opt_String(arr[10]),
     );
   }
 
@@ -1985,8 +2305,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalTaskInput dco_decode_local_task_input(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 10)
-      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    if (arr.length != 11)
+      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
     return LocalTaskInput(
       id: dco_decode_String(arr[0]),
       title: dco_decode_String(arr[1]),
@@ -1998,6 +2318,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       reminderAtMs: dco_decode_opt_box_autoadd_i_64(arr[7]),
       reminderDismissed: dco_decode_bool(arr[8]),
       completedAtMs: dco_decode_opt_box_autoadd_i_64(arr[9]),
+      collectionId: dco_decode_opt_String(arr[10]),
     );
   }
 
@@ -2173,6 +2494,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RecurrenceDto? dco_decode_opt_box_autoadd_recurrence_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_recurrence_dto(raw);
+  }
+
+  @protected
   ReleaseNoticeDto? dco_decode_opt_box_autoadd_release_notice_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_release_notice_dto(raw);
@@ -2202,6 +2529,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       attachmentPaths: dco_decode_list_String(arr[8]),
       storedAttachmentIds: dco_decode_list_String(arr[9]),
       highImportance: dco_decode_bool(arr[10]),
+    );
+  }
+
+  @protected
+  RecurrenceDto dco_decode_recurrence_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return RecurrenceDto(
+      frequency: dco_decode_String(arr[0]),
+      interval: dco_decode_u_32(arr[1]),
+      weekdays: dco_decode_list_prim_u_8_strict(arr[2]),
+      untilMs: dco_decode_opt_box_autoadd_i_64(arr[3]),
+      count: dco_decode_opt_box_autoadd_u_32(arr[4]),
     );
   }
 
@@ -2237,8 +2579,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskDto dco_decode_task_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 10)
-      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    if (arr.length != 11)
+      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
     return TaskDto(
       id: dco_decode_String(arr[0]),
       title: dco_decode_String(arr[1]),
@@ -2250,6 +2592,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       reminderAtMs: dco_decode_opt_box_autoadd_i_64(arr[7]),
       reminderDismissed: dco_decode_bool(arr[8]),
       completedAtMs: dco_decode_opt_box_autoadd_i_64(arr[9]),
+      collectionId: dco_decode_opt_String(arr[10]),
     );
   }
 
@@ -2287,8 +2630,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   WorkspaceSnapshot dco_decode_workspace_snapshot(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 16)
-      throw Exception('unexpected arr length: expect 16 but see ${arr.length}');
+    if (arr.length != 18)
+      throw Exception('unexpected arr length: expect 18 but see ${arr.length}');
     return WorkspaceSnapshot(
       mailboxes: dco_decode_list_mailbox_dto(arr[0]),
       favoriteMailboxIds: dco_decode_list_String(arr[1]),
@@ -2300,12 +2643,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       tasks: dco_decode_list_task_dto(arr[7]),
       contacts: dco_decode_list_contact_dto(arr[8]),
       mailAccounts: dco_decode_list_mail_account_dto(arr[9]),
-      syncWarnings: dco_decode_list_String(arr[10]),
-      catalogMessagesRemaining: dco_decode_u_32(arr[11]),
-      deltaMailboxesSynchronized: dco_decode_u_32(arr[12]),
-      fullMailboxesReconciled: dco_decode_u_32(arr[13]),
-      qresyncMailboxesSynchronized: dco_decode_u_32(arr[14]),
-      pendingMailOperations: dco_decode_u_32(arr[15]),
+      davAccounts: dco_decode_list_dav_account_dto(arr[10]),
+      collections: dco_decode_list_collection_dto(arr[11]),
+      syncWarnings: dco_decode_list_String(arr[12]),
+      catalogMessagesRemaining: dco_decode_u_32(arr[13]),
+      deltaMailboxesSynchronized: dco_decode_u_32(arr[14]),
+      fullMailboxesReconciled: dco_decode_u_32(arr[15]),
+      qresyncMailboxesSynchronized: dco_decode_u_32(arr[16]),
+      pendingMailOperations: dco_decode_u_32(arr[17]),
     );
   }
 
@@ -2360,6 +2705,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_available_app_update_dto(deserializer));
+  }
+
+  @protected
+  DavAccountInput sse_decode_box_autoadd_dav_account_input(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_dav_account_input(deserializer));
   }
 
   @protected
@@ -2431,6 +2784,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RecurrenceDto sse_decode_box_autoadd_recurrence_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_recurrence_dto(deserializer));
+  }
+
+  @protected
   ReleaseNoticeDto sse_decode_box_autoadd_release_notice_dto(
     SseDeserializer deserializer,
   ) {
@@ -2457,7 +2818,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_reminderMinutesBefore = sse_decode_opt_box_autoadd_u_32(
       deserializer,
     );
-    var var_reminderDismissed = sse_decode_bool(deserializer);
+    var var_reminderDismissedThroughMs = sse_decode_opt_box_autoadd_i_64(
+      deserializer,
+    );
+    var var_recurrence = sse_decode_opt_box_autoadd_recurrence_dto(
+      deserializer,
+    );
+    var var_exceptionDates = sse_decode_list_String(deserializer);
+    var var_collectionId = sse_decode_opt_String(deserializer);
     return CalendarEventDto(
       id: var_id,
       title: var_title,
@@ -2467,7 +2835,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       location: var_location,
       description: var_description,
       reminderMinutesBefore: var_reminderMinutesBefore,
-      reminderDismissed: var_reminderDismissed,
+      reminderDismissedThroughMs: var_reminderDismissedThroughMs,
+      recurrence: var_recurrence,
+      exceptionDates: var_exceptionDates,
+      collectionId: var_collectionId,
+    );
+  }
+
+  @protected
+  CollectionDto sse_decode_collection_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_accountId = sse_decode_String(deserializer);
+    var var_kind = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_String(deserializer);
+    var var_color = sse_decode_opt_String(deserializer);
+    var var_enabled = sse_decode_bool(deserializer);
+    return CollectionDto(
+      id: var_id,
+      accountId: var_accountId,
+      kind: var_kind,
+      displayName: var_displayName,
+      color: var_color,
+      enabled: var_enabled,
     );
   }
 
@@ -2503,6 +2893,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_birthday = sse_decode_opt_String(deserializer);
     var var_website = sse_decode_opt_String(deserializer);
     var var_notes = sse_decode_opt_String(deserializer);
+    var var_collectionId = sse_decode_opt_String(deserializer);
     return ContactDto(
       id: var_id,
       name: var_name,
@@ -2514,6 +2905,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       birthday: var_birthday,
       website: var_website,
       notes: var_notes,
+      collectionId: var_collectionId,
     );
   }
 
@@ -2531,6 +2923,70 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_label = sse_decode_String(deserializer);
     var var_number = sse_decode_String(deserializer);
     return ContactPhoneDto(label: var_label, number: var_number);
+  }
+
+  @protected
+  DavAccountDto sse_decode_dav_account_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_String(deserializer);
+    var var_serverUrl = sse_decode_String(deserializer);
+    var var_username = sse_decode_String(deserializer);
+    var var_lastSyncAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    return DavAccountDto(
+      id: var_id,
+      displayName: var_displayName,
+      serverUrl: var_serverUrl,
+      username: var_username,
+      lastSyncAtMs: var_lastSyncAtMs,
+    );
+  }
+
+  @protected
+  DavAccountInput sse_decode_dav_account_input(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_String(deserializer);
+    var var_serverUrl = sse_decode_String(deserializer);
+    var var_username = sse_decode_String(deserializer);
+    return DavAccountInput(
+      id: var_id,
+      displayName: var_displayName,
+      serverUrl: var_serverUrl,
+      username: var_username,
+    );
+  }
+
+  @protected
+  DavSyncDto sse_decode_dav_sync_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_uploaded = sse_decode_u_32(deserializer);
+    var var_downloaded = sse_decode_u_32(deserializer);
+    var var_removed = sse_decode_u_32(deserializer);
+    var var_warnings = sse_decode_list_String(deserializer);
+    var var_snapshot = sse_decode_workspace_snapshot(deserializer);
+    return DavSyncDto(
+      uploaded: var_uploaded,
+      downloaded: var_downloaded,
+      removed: var_removed,
+      warnings: var_warnings,
+      snapshot: var_snapshot,
+    );
+  }
+
+  @protected
+  DiscoveredCollectionDto sse_decode_discovered_collection_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_kind = sse_decode_String(deserializer);
+    var var_href = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_String(deserializer);
+    return DiscoveredCollectionDto(
+      kind: var_kind,
+      href: var_href,
+      displayName: var_displayName,
+    );
   }
 
   @protected
@@ -2585,6 +3041,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<CollectionDto> sse_decode_list_collection_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <CollectionDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_collection_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<ContactAddressDto> sse_decode_list_contact_address_dto(
     SseDeserializer deserializer,
   ) {
@@ -2634,6 +3104,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <ContactPhoneDto>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_contact_phone_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<DavAccountDto> sse_decode_list_dav_account_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <DavAccountDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_dav_account_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<DiscoveredCollectionDto> sse_decode_list_discovered_collection_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <DiscoveredCollectionDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_discovered_collection_dto(deserializer));
     }
     return ans_;
   }
@@ -2738,7 +3236,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_reminderMinutesBefore = sse_decode_opt_box_autoadd_u_32(
       deserializer,
     );
-    var var_reminderDismissed = sse_decode_bool(deserializer);
+    var var_reminderDismissedThroughMs = sse_decode_opt_box_autoadd_i_64(
+      deserializer,
+    );
+    var var_recurrence = sse_decode_opt_box_autoadd_recurrence_dto(
+      deserializer,
+    );
+    var var_exceptionDates = sse_decode_list_String(deserializer);
+    var var_collectionId = sse_decode_opt_String(deserializer);
     return LocalCalendarEventInput(
       id: var_id,
       title: var_title,
@@ -2748,7 +3253,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       location: var_location,
       description: var_description,
       reminderMinutesBefore: var_reminderMinutesBefore,
-      reminderDismissed: var_reminderDismissed,
+      reminderDismissedThroughMs: var_reminderDismissedThroughMs,
+      recurrence: var_recurrence,
+      exceptionDates: var_exceptionDates,
+      collectionId: var_collectionId,
     );
   }
 
@@ -2767,6 +3275,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_birthday = sse_decode_opt_String(deserializer);
     var var_website = sse_decode_opt_String(deserializer);
     var var_notes = sse_decode_opt_String(deserializer);
+    var var_collectionId = sse_decode_opt_String(deserializer);
     return LocalContactInput(
       id: var_id,
       name: var_name,
@@ -2778,6 +3287,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       birthday: var_birthday,
       website: var_website,
       notes: var_notes,
+      collectionId: var_collectionId,
     );
   }
 
@@ -2843,6 +3353,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_reminderAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     var var_reminderDismissed = sse_decode_bool(deserializer);
     var var_completedAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_collectionId = sse_decode_opt_String(deserializer);
     return LocalTaskInput(
       id: var_id,
       title: var_title,
@@ -2854,6 +3365,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       reminderAtMs: var_reminderAtMs,
       reminderDismissed: var_reminderDismissed,
       completedAtMs: var_completedAtMs,
+      collectionId: var_collectionId,
     );
   }
 
@@ -3103,6 +3615,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RecurrenceDto? sse_decode_opt_box_autoadd_recurrence_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_recurrence_dto(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   ReleaseNoticeDto? sse_decode_opt_box_autoadd_release_notice_dto(
     SseDeserializer deserializer,
   ) {
@@ -3158,6 +3683,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RecurrenceDto sse_decode_recurrence_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_frequency = sse_decode_String(deserializer);
+    var var_interval = sse_decode_u_32(deserializer);
+    var var_weekdays = sse_decode_list_prim_u_8_strict(deserializer);
+    var var_untilMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_count = sse_decode_opt_box_autoadd_u_32(deserializer);
+    return RecurrenceDto(
+      frequency: var_frequency,
+      interval: var_interval,
+      weekdays: var_weekdays,
+      untilMs: var_untilMs,
+      count: var_count,
+    );
+  }
+
+  @protected
   ReleaseNoticeDto sse_decode_release_notice_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_version = sse_decode_String(deserializer);
@@ -3197,6 +3739,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_reminderAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     var var_reminderDismissed = sse_decode_bool(deserializer);
     var var_completedAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_collectionId = sse_decode_opt_String(deserializer);
     return TaskDto(
       id: var_id,
       title: var_title,
@@ -3208,6 +3751,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       reminderAtMs: var_reminderAtMs,
       reminderDismissed: var_reminderDismissed,
       completedAtMs: var_completedAtMs,
+      collectionId: var_collectionId,
     );
   }
 
@@ -3255,6 +3799,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_tasks = sse_decode_list_task_dto(deserializer);
     var var_contacts = sse_decode_list_contact_dto(deserializer);
     var var_mailAccounts = sse_decode_list_mail_account_dto(deserializer);
+    var var_davAccounts = sse_decode_list_dav_account_dto(deserializer);
+    var var_collections = sse_decode_list_collection_dto(deserializer);
     var var_syncWarnings = sse_decode_list_String(deserializer);
     var var_catalogMessagesRemaining = sse_decode_u_32(deserializer);
     var var_deltaMailboxesSynchronized = sse_decode_u_32(deserializer);
@@ -3272,6 +3818,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       tasks: var_tasks,
       contacts: var_contacts,
       mailAccounts: var_mailAccounts,
+      davAccounts: var_davAccounts,
+      collections: var_collections,
       syncWarnings: var_syncWarnings,
       catalogMessagesRemaining: var_catalogMessagesRemaining,
       deltaMailboxesSynchronized: var_deltaMailboxesSynchronized,
@@ -3338,6 +3886,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_available_app_update_dto(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_dav_account_input(
+    DavAccountInput self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_dav_account_input(self, serializer);
   }
 
   @protected
@@ -3422,6 +3979,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_recurrence_dto(
+    RecurrenceDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_recurrence_dto(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_release_notice_dto(
     ReleaseNoticeDto self,
     SseSerializer serializer,
@@ -3450,7 +4016,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.location, serializer);
     sse_encode_opt_String(self.description, serializer);
     sse_encode_opt_box_autoadd_u_32(self.reminderMinutesBefore, serializer);
-    sse_encode_bool(self.reminderDismissed, serializer);
+    sse_encode_opt_box_autoadd_i_64(
+      self.reminderDismissedThroughMs,
+      serializer,
+    );
+    sse_encode_opt_box_autoadd_recurrence_dto(self.recurrence, serializer);
+    sse_encode_list_String(self.exceptionDates, serializer);
+    sse_encode_opt_String(self.collectionId, serializer);
+  }
+
+  @protected
+  void sse_encode_collection_dto(CollectionDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.accountId, serializer);
+    sse_encode_String(self.kind, serializer);
+    sse_encode_String(self.displayName, serializer);
+    sse_encode_opt_String(self.color, serializer);
+    sse_encode_bool(self.enabled, serializer);
   }
 
   @protected
@@ -3479,6 +4062,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.birthday, serializer);
     sse_encode_opt_String(self.website, serializer);
     sse_encode_opt_String(self.notes, serializer);
+    sse_encode_opt_String(self.collectionId, serializer);
   }
 
   @protected
@@ -3499,6 +4083,52 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.label, serializer);
     sse_encode_String(self.number, serializer);
+  }
+
+  @protected
+  void sse_encode_dav_account_dto(
+    DavAccountDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.displayName, serializer);
+    sse_encode_String(self.serverUrl, serializer);
+    sse_encode_String(self.username, serializer);
+    sse_encode_opt_box_autoadd_i_64(self.lastSyncAtMs, serializer);
+  }
+
+  @protected
+  void sse_encode_dav_account_input(
+    DavAccountInput self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.displayName, serializer);
+    sse_encode_String(self.serverUrl, serializer);
+    sse_encode_String(self.username, serializer);
+  }
+
+  @protected
+  void sse_encode_dav_sync_dto(DavSyncDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_32(self.uploaded, serializer);
+    sse_encode_u_32(self.downloaded, serializer);
+    sse_encode_u_32(self.removed, serializer);
+    sse_encode_list_String(self.warnings, serializer);
+    sse_encode_workspace_snapshot(self.snapshot, serializer);
+  }
+
+  @protected
+  void sse_encode_discovered_collection_dto(
+    DiscoveredCollectionDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.kind, serializer);
+    sse_encode_String(self.href, serializer);
+    sse_encode_String(self.displayName, serializer);
   }
 
   @protected
@@ -3539,6 +4169,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_calendar_event_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_collection_dto(
+    List<CollectionDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_collection_dto(item, serializer);
     }
   }
 
@@ -3587,6 +4229,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_contact_phone_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_dav_account_dto(
+    List<DavAccountDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_dav_account_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_discovered_collection_dto(
+    List<DiscoveredCollectionDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_discovered_collection_dto(item, serializer);
     }
   }
 
@@ -3683,7 +4349,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.location, serializer);
     sse_encode_opt_String(self.description, serializer);
     sse_encode_opt_box_autoadd_u_32(self.reminderMinutesBefore, serializer);
-    sse_encode_bool(self.reminderDismissed, serializer);
+    sse_encode_opt_box_autoadd_i_64(
+      self.reminderDismissedThroughMs,
+      serializer,
+    );
+    sse_encode_opt_box_autoadd_recurrence_dto(self.recurrence, serializer);
+    sse_encode_list_String(self.exceptionDates, serializer);
+    sse_encode_opt_String(self.collectionId, serializer);
   }
 
   @protected
@@ -3702,6 +4374,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.birthday, serializer);
     sse_encode_opt_String(self.website, serializer);
     sse_encode_opt_String(self.notes, serializer);
+    sse_encode_opt_String(self.collectionId, serializer);
   }
 
   @protected
@@ -3748,6 +4421,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_box_autoadd_i_64(self.reminderAtMs, serializer);
     sse_encode_bool(self.reminderDismissed, serializer);
     sse_encode_opt_box_autoadd_i_64(self.completedAtMs, serializer);
+    sse_encode_opt_String(self.collectionId, serializer);
   }
 
   @protected
@@ -3923,6 +4597,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_recurrence_dto(
+    RecurrenceDto? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_recurrence_dto(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_box_autoadd_release_notice_dto(
     ReleaseNoticeDto? self,
     SseSerializer serializer,
@@ -3965,6 +4652,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_recurrence_dto(RecurrenceDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.frequency, serializer);
+    sse_encode_u_32(self.interval, serializer);
+    sse_encode_list_prim_u_8_strict(self.weekdays, serializer);
+    sse_encode_opt_box_autoadd_i_64(self.untilMs, serializer);
+    sse_encode_opt_box_autoadd_u_32(self.count, serializer);
+  }
+
+  @protected
   void sse_encode_release_notice_dto(
     ReleaseNoticeDto self,
     SseSerializer serializer,
@@ -4001,6 +4698,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_box_autoadd_i_64(self.reminderAtMs, serializer);
     sse_encode_bool(self.reminderDismissed, serializer);
     sse_encode_opt_box_autoadd_i_64(self.completedAtMs, serializer);
+    sse_encode_opt_String(self.collectionId, serializer);
   }
 
   @protected
@@ -4048,6 +4746,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_list_task_dto(self.tasks, serializer);
     sse_encode_list_contact_dto(self.contacts, serializer);
     sse_encode_list_mail_account_dto(self.mailAccounts, serializer);
+    sse_encode_list_dav_account_dto(self.davAccounts, serializer);
+    sse_encode_list_collection_dto(self.collections, serializer);
     sse_encode_list_String(self.syncWarnings, serializer);
     sse_encode_u_32(self.catalogMessagesRemaining, serializer);
     sse_encode_u_32(self.deltaMailboxesSynchronized, serializer);

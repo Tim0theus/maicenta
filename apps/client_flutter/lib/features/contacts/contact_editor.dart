@@ -15,11 +15,13 @@ class ContactEditorResult {
 Future<ContactEditorResult?> showContactEditor(
   BuildContext context, {
   LocalContactItem? contact,
+  List<WorkspaceCollection> addressBooks = const [],
 }) {
   return showDialog<ContactEditorResult>(
     context: context,
     barrierDismissible: false,
-    builder: (dialogContext) => _ContactEditor(contact: contact),
+    builder: (dialogContext) =>
+        _ContactEditor(contact: contact, addressBooks: addressBooks),
   );
 }
 
@@ -62,9 +64,12 @@ class _AddressFields {
 }
 
 class _ContactEditor extends StatefulWidget {
-  const _ContactEditor({required this.contact});
+  const _ContactEditor({required this.contact, required this.addressBooks});
 
   final LocalContactItem? contact;
+
+  /// Synchronized address books the contact may be stored in.
+  final List<WorkspaceCollection> addressBooks;
 
   @override
   State<_ContactEditor> createState() => _ContactEditorState();
@@ -81,11 +86,17 @@ class _ContactEditorState extends State<_ContactEditor> {
   late final List<_LabeledField> emails;
   late final List<_LabeledField> phones;
   late final List<_AddressFields> addresses;
+  String? collectionId;
 
   @override
   void initState() {
     super.initState();
     final contact = widget.contact;
+    collectionId = contact?.collectionId;
+    if (collectionId != null &&
+        !widget.addressBooks.any((book) => book.id == collectionId)) {
+      collectionId = null;
+    }
     name = TextEditingController(text: contact?.name ?? '');
     company = TextEditingController(text: contact?.company ?? '');
     jobTitle = TextEditingController(text: contact?.jobTitle ?? '');
@@ -167,6 +178,7 @@ class _ContactEditorState extends State<_ContactEditor> {
       birthday: parseGermanDate(birthday.text),
       website: optional(website),
       notes: optional(notes),
+      collectionId: collectionId,
     );
     Navigator.pop(context, ContactEditorResult(EditorAction.save, contact));
   }
@@ -259,6 +271,30 @@ class _ContactEditorState extends State<_ContactEditor> {
                   ),
                 ],
               ),
+              if (widget.addressBooks.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String?>(
+                  key: const Key('contact-address-book'),
+                  isExpanded: true,
+                  initialValue: collectionId,
+                  decoration: const InputDecoration(
+                    labelText: 'Adressbuch',
+                    prefixIcon: Icon(Icons.menu_book_outlined, size: 18),
+                  ),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Meine Kontakte (lokal)'),
+                    ),
+                    for (final book in widget.addressBooks)
+                      DropdownMenuItem<String?>(
+                        value: book.id,
+                        child: Text(book.name, overflow: TextOverflow.ellipsis),
+                      ),
+                  ],
+                  onChanged: (value) => setState(() => collectionId = value),
+                ),
+              ],
               _groupTitle(context, 'E-Mail-Adressen'),
               for (var index = 0; index < emails.length; index++)
                 _labeledRow(

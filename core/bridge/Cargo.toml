@@ -11,6 +11,7 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 flutter_rust_bridge = "=2.13.0"
 maicenta-application = { path = "../application" }
+maicenta-dav-connector = { path = "../../connectors/dav" }
 maicenta-domain = { path = "../domain" }
 maicenta-graph-connector = { path = "../../connectors/microsoft_graph" }
 maicenta-mail-connector = { path = "../../connectors/mail" }

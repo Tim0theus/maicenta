@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `attachment_content_type`, `attachment_object_path`, `bounded_line`, `cache_remote_message`, `calendar_event_dto`, `cleanup_import_backups`, `compact_preview`, `connector_credential`, `contact_dto`, `contact_label_key`, `copy_local_attachment`, `current_timestamp_ms`, `draft_recipient_list`, `imap_identities`, `import_backup_path`, `install_staged_profile`, `is_iso_calendar_date`, `load_account_credential`, `load_outgoing_attachments`, `load_snapshot`, `load_stored_outgoing_attachments`, `local_mailbox`, `mail_account_dto`, `mail_account_from_input`, `mail_provider_name`, `mailbox_dto`, `mailbox_role_name`, `message_dto`, `message_dtos`, `migrate_legacy_credentials`, `oauth_access_token`, `open_profile_store`, `optional_text`, `parse_contact_label`, `parse_mail_provider`, `parse_task_priority`, `parse_task_status`, `parse_transport_security`, `persist_attachment_objects`, `plain_text_as_html`, `profile_object_root`, `profile_vault`, `remote_mailbox_id`, `remote_message_id`, `remove_attachment_objects`, `remove_oauth_secrets`, `replace_cached_vault`, `required_secret`, `rollback_imported_profile`, `seed_local_area`, `sender_aliases_from_input`, `synchronize_account`, `synchronize_graph_account`, `synchronize_imap_account`, `synchronize_pending_drafts`, `synchronized_draft_ids`, `task_dto`, `task_priority_key`, `task_status_key`, `transport_security_name`, `validate_combined_outgoing_attachments`, `validate_draft_metadata`, `validate_oauth_provider_for_account`, `validate_oauth_token_endpoint`, `validate_oauth_token_input`, `validate_outgoing_attachment_set`, `validated_display_name`, `validated_server_name`, `validated_text`, `welcome_message`, `write_exported_attachment`
+// These functions are ignored because they are not marked as `pub`: `attachment_content_type`, `attachment_object_path`, `bounded_line`, `cache_remote_message`, `calendar_event_dto`, `cleanup_import_backups`, `collection_dto`, `compact_preview`, `connector_credential`, `contact_dto`, `contact_label_key`, `copy_local_attachment`, `current_timestamp_ms`, `dav_account_dto`, `dav_account_from_input`, `discovered_collection_dto`, `draft_recipient_list`, `imap_identities`, `import_backup_path`, `install_staged_profile`, `is_iso_calendar_date`, `load_account_credential`, `load_outgoing_attachments`, `load_snapshot`, `load_stored_outgoing_attachments`, `local_mailbox`, `mail_account_dto`, `mail_account_from_input`, `mail_provider_name`, `mailbox_dto`, `mailbox_role_name`, `message_dto`, `message_dtos`, `migrate_legacy_credentials`, `next_sync_metadata`, `oauth_access_token`, `open_profile_store`, `optional_text`, `parse_contact_label`, `parse_mail_provider`, `parse_task_priority`, `parse_task_status`, `parse_transport_security`, `persist_attachment_objects`, `plain_text_as_html`, `profile_object_root`, `profile_vault`, `recurrence_dto`, `recurrence_from_dto`, `remote_mailbox_id`, `remote_message_id`, `remove_attachment_objects`, `remove_oauth_secrets`, `replace_cached_vault`, `required_secret`, `rollback_imported_profile`, `seed_local_area`, `sender_aliases_from_input`, `synchronize_account`, `synchronize_graph_account`, `synchronize_imap_account`, `synchronize_pending_drafts`, `synchronized_draft_ids`, `task_dto`, `task_priority_key`, `task_status_key`, `transport_security_name`, `validate_combined_outgoing_attachments`, `validate_draft_metadata`, `validate_oauth_provider_for_account`, `validate_oauth_token_endpoint`, `validate_oauth_token_input`, `validate_outgoing_attachment_set`, `validated_display_name`, `validated_server_name`, `validated_text`, `welcome_message`, `write_exported_attachment`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AccountSyncReport`, `CachedRemoteInput`, `PendingDraftUpload`, `RemoteAttachmentDescriptor`, `StoredMailCredential`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `from`, `from`
 
@@ -387,6 +387,80 @@ Future<void> deleteLocalContact({
   contactId: contactId,
 );
 
+/// Connects to a CalDAV/CardDAV server and lists the calendars and address
+/// books the credentials can reach, without storing anything.
+///
+/// # Errors
+///
+/// Returns a validation, connection, or authentication error.
+Future<List<DiscoveredCollectionDto>> testDavAccountConnection({
+  required DavAccountInput input,
+  required String password,
+}) => RustLib.instance.api.crateApiWorkspaceTestDavAccountConnection(
+  input: input,
+  password: password,
+);
+
+/// Saves a CalDAV/CardDAV account, stores its password in the encrypted
+/// profile, and records the collections found on the server so they show
+/// up immediately. An empty password keeps the stored one when editing.
+///
+/// # Errors
+///
+/// Returns a validation, connection, authentication, or storage error.
+Future<void> saveDavAccount({
+  required String databasePath,
+  required DavAccountInput input,
+  required String password,
+}) => RustLib.instance.api.crateApiWorkspaceSaveDavAccount(
+  databasePath: databasePath,
+  input: input,
+  password: password,
+);
+
+/// Removes a CalDAV/CardDAV account together with its collections, their
+/// synchronized records, and the stored password. The server is not
+/// touched.
+///
+/// # Errors
+///
+/// Returns an error when the account is unknown or cannot be removed.
+Future<void> deleteDavAccount({
+  required String databasePath,
+  required String accountId,
+}) => RustLib.instance.api.crateApiWorkspaceDeleteDavAccount(
+  databasePath: databasePath,
+  accountId: accountId,
+);
+
+/// Switches one calendar, task list, or address book on or off. A switched
+/// off collection keeps its records but is neither shown nor synchronized.
+///
+/// # Errors
+///
+/// Returns an error when the collection is unknown or cannot be updated.
+Future<void> saveCollectionEnabled({
+  required String databasePath,
+  required String collectionId,
+  required bool enabled,
+}) => RustLib.instance.api.crateApiWorkspaceSaveCollectionEnabled(
+  databasePath: databasePath,
+  collectionId: collectionId,
+  enabled: enabled,
+);
+
+/// Synchronizes every CalDAV/CardDAV account in both directions and
+/// returns the refreshed workspace. Problems with single accounts or
+/// records become warnings; the pass continues with the next account.
+///
+/// # Errors
+///
+/// Returns an error when the profile cannot be opened.
+Future<DavSyncDto> synchronizeDavAccounts({required String databasePath}) =>
+    RustLib.instance.api.crateApiWorkspaceSynchronizeDavAccounts(
+      databasePath: databasePath,
+    );
+
 /// Saves account configuration and places its password inside the encrypted
 /// profile vault.
 ///
@@ -521,8 +595,10 @@ Future<String> sendAccountMessage({
   input: input,
 );
 
-/// One local calendar event. `all_day` events carry local midnight
-/// boundaries; `reminder_minutes_before` is `None` without a reminder.
+/// One calendar event. `all_day` events carry local midnight boundaries;
+/// `reminder_minutes_before` is `None` without a reminder. Occurrences
+/// starting at or before `reminder_dismissed_through_ms` had their reminder
+/// closed. `collection_id` is `None` for the local personal calendar.
 class CalendarEventDto {
   final String id;
   final String title;
@@ -532,7 +608,10 @@ class CalendarEventDto {
   final String? location;
   final String? description;
   final int? reminderMinutesBefore;
-  final bool reminderDismissed;
+  final PlatformInt64? reminderDismissedThroughMs;
+  final RecurrenceDto? recurrence;
+  final List<String> exceptionDates;
+  final String? collectionId;
 
   const CalendarEventDto({
     required this.id,
@@ -543,7 +622,10 @@ class CalendarEventDto {
     this.location,
     this.description,
     this.reminderMinutesBefore,
-    required this.reminderDismissed,
+    this.reminderDismissedThroughMs,
+    this.recurrence,
+    required this.exceptionDates,
+    this.collectionId,
   });
 
   @override
@@ -556,7 +638,10 @@ class CalendarEventDto {
       location.hashCode ^
       description.hashCode ^
       reminderMinutesBefore.hashCode ^
-      reminderDismissed.hashCode;
+      reminderDismissedThroughMs.hashCode ^
+      recurrence.hashCode ^
+      exceptionDates.hashCode ^
+      collectionId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -571,7 +656,51 @@ class CalendarEventDto {
           location == other.location &&
           description == other.description &&
           reminderMinutesBefore == other.reminderMinutesBefore &&
-          reminderDismissed == other.reminderDismissed;
+          reminderDismissedThroughMs == other.reminderDismissedThroughMs &&
+          recurrence == other.recurrence &&
+          exceptionDates == other.exceptionDates &&
+          collectionId == other.collectionId;
+}
+
+/// One calendar, task list, or address book of a DAV account. `kind` is
+/// `calendar`, `task_list`, or `address_book`.
+class CollectionDto {
+  final String id;
+  final String accountId;
+  final String kind;
+  final String displayName;
+  final String? color;
+  final bool enabled;
+
+  const CollectionDto({
+    required this.id,
+    required this.accountId,
+    required this.kind,
+    required this.displayName,
+    this.color,
+    required this.enabled,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      accountId.hashCode ^
+      kind.hashCode ^
+      displayName.hashCode ^
+      color.hashCode ^
+      enabled.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CollectionDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          accountId == other.accountId &&
+          kind == other.kind &&
+          displayName == other.displayName &&
+          color == other.color &&
+          enabled == other.enabled;
 }
 
 /// One labelled postal address; labels as in [`ContactEmailDto`]. Lines may
@@ -624,6 +753,7 @@ class ContactDto {
   final String? birthday;
   final String? website;
   final String? notes;
+  final String? collectionId;
 
   const ContactDto({
     required this.id,
@@ -636,6 +766,7 @@ class ContactDto {
     this.birthday,
     this.website,
     this.notes,
+    this.collectionId,
   });
 
   @override
@@ -649,7 +780,8 @@ class ContactDto {
       addresses.hashCode ^
       birthday.hashCode ^
       website.hashCode ^
-      notes.hashCode;
+      notes.hashCode ^
+      collectionId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -665,7 +797,8 @@ class ContactDto {
           addresses == other.addresses &&
           birthday == other.birthday &&
           website == other.website &&
-          notes == other.notes;
+          notes == other.notes &&
+          collectionId == other.collectionId;
 }
 
 /// One labelled contact email address. `label` is one of `work`, `home`,
@@ -707,6 +840,136 @@ class ContactPhoneDto {
           number == other.number;
 }
 
+/// One configured CalDAV/CardDAV account; the password stays in the vault.
+class DavAccountDto {
+  final String id;
+  final String displayName;
+  final String serverUrl;
+  final String username;
+  final PlatformInt64? lastSyncAtMs;
+
+  const DavAccountDto({
+    required this.id,
+    required this.displayName,
+    required this.serverUrl,
+    required this.username,
+    this.lastSyncAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      displayName.hashCode ^
+      serverUrl.hashCode ^
+      username.hashCode ^
+      lastSyncAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DavAccountDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          displayName == other.displayName &&
+          serverUrl == other.serverUrl &&
+          username == other.username &&
+          lastSyncAtMs == other.lastSyncAtMs;
+}
+
+/// User-supplied CalDAV/CardDAV account configuration. The password is
+/// passed separately and stored in the encrypted profile.
+class DavAccountInput {
+  final String id;
+  final String displayName;
+  final String serverUrl;
+  final String username;
+
+  const DavAccountInput({
+    required this.id,
+    required this.displayName,
+    required this.serverUrl,
+    required this.username,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      displayName.hashCode ^
+      serverUrl.hashCode ^
+      username.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DavAccountInput &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          displayName == other.displayName &&
+          serverUrl == other.serverUrl &&
+          username == other.username;
+}
+
+/// Result of synchronizing every DAV account.
+class DavSyncDto {
+  final int uploaded;
+  final int downloaded;
+  final int removed;
+  final List<String> warnings;
+  final WorkspaceSnapshot snapshot;
+
+  const DavSyncDto({
+    required this.uploaded,
+    required this.downloaded,
+    required this.removed,
+    required this.warnings,
+    required this.snapshot,
+  });
+
+  @override
+  int get hashCode =>
+      uploaded.hashCode ^
+      downloaded.hashCode ^
+      removed.hashCode ^
+      warnings.hashCode ^
+      snapshot.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DavSyncDto &&
+          runtimeType == other.runtimeType &&
+          uploaded == other.uploaded &&
+          downloaded == other.downloaded &&
+          removed == other.removed &&
+          warnings == other.warnings &&
+          snapshot == other.snapshot;
+}
+
+/// One collection found on a server during a connection test.
+class DiscoveredCollectionDto {
+  final String kind;
+  final String href;
+  final String displayName;
+
+  const DiscoveredCollectionDto({
+    required this.kind,
+    required this.href,
+    required this.displayName,
+  });
+
+  @override
+  int get hashCode => kind.hashCode ^ href.hashCode ^ displayName.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DiscoveredCollectionDto &&
+          runtimeType == other.runtimeType &&
+          kind == other.kind &&
+          href == other.href &&
+          displayName == other.displayName;
+}
+
 /// Result of pushing the durable draft queue for one account.
 class DraftSyncDto {
   final int synchronized;
@@ -743,7 +1006,10 @@ class LocalCalendarEventInput {
   final String? location;
   final String? description;
   final int? reminderMinutesBefore;
-  final bool reminderDismissed;
+  final PlatformInt64? reminderDismissedThroughMs;
+  final RecurrenceDto? recurrence;
+  final List<String> exceptionDates;
+  final String? collectionId;
 
   const LocalCalendarEventInput({
     required this.id,
@@ -754,7 +1020,10 @@ class LocalCalendarEventInput {
     this.location,
     this.description,
     this.reminderMinutesBefore,
-    required this.reminderDismissed,
+    this.reminderDismissedThroughMs,
+    this.recurrence,
+    required this.exceptionDates,
+    this.collectionId,
   });
 
   @override
@@ -767,7 +1036,10 @@ class LocalCalendarEventInput {
       location.hashCode ^
       description.hashCode ^
       reminderMinutesBefore.hashCode ^
-      reminderDismissed.hashCode;
+      reminderDismissedThroughMs.hashCode ^
+      recurrence.hashCode ^
+      exceptionDates.hashCode ^
+      collectionId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -782,7 +1054,10 @@ class LocalCalendarEventInput {
           location == other.location &&
           description == other.description &&
           reminderMinutesBefore == other.reminderMinutesBefore &&
-          reminderDismissed == other.reminderDismissed;
+          reminderDismissedThroughMs == other.reminderDismissedThroughMs &&
+          recurrence == other.recurrence &&
+          exceptionDates == other.exceptionDates &&
+          collectionId == other.collectionId;
 }
 
 /// User-supplied contact; fields as in [`ContactDto`]. Blank optional
@@ -798,6 +1073,7 @@ class LocalContactInput {
   final String? birthday;
   final String? website;
   final String? notes;
+  final String? collectionId;
 
   const LocalContactInput({
     required this.id,
@@ -810,6 +1086,7 @@ class LocalContactInput {
     this.birthday,
     this.website,
     this.notes,
+    this.collectionId,
   });
 
   @override
@@ -823,7 +1100,8 @@ class LocalContactInput {
       addresses.hashCode ^
       birthday.hashCode ^
       website.hashCode ^
-      notes.hashCode;
+      notes.hashCode ^
+      collectionId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -839,7 +1117,8 @@ class LocalContactInput {
           addresses == other.addresses &&
           birthday == other.birthday &&
           website == other.website &&
-          notes == other.notes;
+          notes == other.notes &&
+          collectionId == other.collectionId;
 }
 
 /// User-created local message passed from the composition workflow.
@@ -950,6 +1229,7 @@ class LocalTaskInput {
   final PlatformInt64? reminderAtMs;
   final bool reminderDismissed;
   final PlatformInt64? completedAtMs;
+  final String? collectionId;
 
   const LocalTaskInput({
     required this.id,
@@ -962,6 +1242,7 @@ class LocalTaskInput {
     this.reminderAtMs,
     required this.reminderDismissed,
     this.completedAtMs,
+    this.collectionId,
   });
 
   @override
@@ -975,7 +1256,8 @@ class LocalTaskInput {
       priority.hashCode ^
       reminderAtMs.hashCode ^
       reminderDismissed.hashCode ^
-      completedAtMs.hashCode;
+      completedAtMs.hashCode ^
+      collectionId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -991,7 +1273,8 @@ class LocalTaskInput {
           priority == other.priority &&
           reminderAtMs == other.reminderAtMs &&
           reminderDismissed == other.reminderDismissed &&
-          completedAtMs == other.completedAtMs;
+          completedAtMs == other.completedAtMs &&
+          collectionId == other.collectionId;
 }
 
 class MailAccountDto {
@@ -1470,6 +1753,44 @@ class OutgoingMessageInput {
           highImportance == other.highImportance;
 }
 
+/// Repetition pattern of an event. `frequency` is one of `daily`, `weekly`,
+/// `monthly`, `yearly`; `weekdays` are ISO weekdays (1 = Monday) for weekly
+/// rules.
+class RecurrenceDto {
+  final String frequency;
+  final int interval;
+  final Uint8List weekdays;
+  final PlatformInt64? untilMs;
+  final int? count;
+
+  const RecurrenceDto({
+    required this.frequency,
+    required this.interval,
+    required this.weekdays,
+    this.untilMs,
+    this.count,
+  });
+
+  @override
+  int get hashCode =>
+      frequency.hashCode ^
+      interval.hashCode ^
+      weekdays.hashCode ^
+      untilMs.hashCode ^
+      count.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RecurrenceDto &&
+          runtimeType == other.runtimeType &&
+          frequency == other.frequency &&
+          interval == other.interval &&
+          weekdays == other.weekdays &&
+          untilMs == other.untilMs &&
+          count == other.count;
+}
+
 /// One additional sender address of an account. Used in snapshots and in
 /// account input. `display_name` falls back to the account name when absent.
 class SenderAliasDto {
@@ -1504,6 +1825,7 @@ class TaskDto {
   final PlatformInt64? reminderAtMs;
   final bool reminderDismissed;
   final PlatformInt64? completedAtMs;
+  final String? collectionId;
 
   const TaskDto({
     required this.id,
@@ -1516,6 +1838,7 @@ class TaskDto {
     this.reminderAtMs,
     required this.reminderDismissed,
     this.completedAtMs,
+    this.collectionId,
   });
 
   @override
@@ -1529,7 +1852,8 @@ class TaskDto {
       priority.hashCode ^
       reminderAtMs.hashCode ^
       reminderDismissed.hashCode ^
-      completedAtMs.hashCode;
+      completedAtMs.hashCode ^
+      collectionId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1545,7 +1869,8 @@ class TaskDto {
           priority == other.priority &&
           reminderAtMs == other.reminderAtMs &&
           reminderDismissed == other.reminderDismissed &&
-          completedAtMs == other.completedAtMs;
+          completedAtMs == other.completedAtMs &&
+          collectionId == other.collectionId;
 }
 
 /// Complete initial state required by the mail workspace.
@@ -1564,6 +1889,12 @@ class WorkspaceSnapshot {
   final List<TaskDto> tasks;
   final List<ContactDto> contacts;
   final List<MailAccountDto> mailAccounts;
+
+  /// Configured CalDAV/CardDAV accounts.
+  final List<DavAccountDto> davAccounts;
+
+  /// Calendars, task lists, and address books of every DAV account.
+  final List<CollectionDto> collections;
   final List<String> syncWarnings;
 
   /// Compact IMAP catalogue entries still scheduled for automatic
@@ -1585,6 +1916,8 @@ class WorkspaceSnapshot {
     required this.tasks,
     required this.contacts,
     required this.mailAccounts,
+    required this.davAccounts,
+    required this.collections,
     required this.syncWarnings,
     required this.catalogMessagesRemaining,
     required this.deltaMailboxesSynchronized,
@@ -1605,6 +1938,8 @@ class WorkspaceSnapshot {
       tasks.hashCode ^
       contacts.hashCode ^
       mailAccounts.hashCode ^
+      davAccounts.hashCode ^
+      collections.hashCode ^
       syncWarnings.hashCode ^
       catalogMessagesRemaining.hashCode ^
       deltaMailboxesSynchronized.hashCode ^
@@ -1627,6 +1962,8 @@ class WorkspaceSnapshot {
           tasks == other.tasks &&
           contacts == other.contacts &&
           mailAccounts == other.mailAccounts &&
+          davAccounts == other.davAccounts &&
+          collections == other.collections &&
           syncWarnings == other.syncWarnings &&
           catalogMessagesRemaining == other.catalogMessagesRemaining &&
           deltaMailboxesSynchronized == other.deltaMailboxesSynchronized &&

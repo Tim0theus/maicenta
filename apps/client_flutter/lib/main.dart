@@ -14,9 +14,11 @@ import 'build_version.dart';
 import 'features/about/about_dialog.dart';
 import 'features/calendar/calendar_workspace.dart';
 import 'features/calendar/event_editor.dart';
+import 'features/calendar/recurrence.dart';
 import 'features/compose/compose_window.dart';
 import 'features/contacts/contact_editor.dart';
 import 'features/contacts/contacts_workspace.dart';
+import 'features/dav/dav_account_dialog.dart';
 import 'features/mail/account_autodiscovery.dart';
 import 'features/mail/account_setup_detection.dart';
 import 'features/mail/folder_tree.dart';
@@ -27,6 +29,7 @@ import 'features/mail/oauth_service.dart';
 import 'features/mail/safe_message_html.dart';
 import 'features/mail/sender_aliases_dialog.dart';
 import 'features/reminders/reminder_dialog.dart';
+import 'features/reminders/system_notifications.dart';
 import 'features/tasks/task_editor.dart';
 import 'features/tasks/tasks_workspace.dart';
 import 'features/updates/app_updates.dart';
@@ -60,11 +63,25 @@ Future<void> main() async {
         File('${supportDirectory.path}/update_preferences.json'),
       ),
     );
+    // Taps on system notifications bring the reminder window up. The
+    // notifier initializes after the first frame: on macOS that may show a
+    // permission prompt, which must not delay the window.
+    final notificationTaps = ValueNotifier<int>(0);
+    final systemNotifier = DeferredSystemNotifier();
     runApp(
       MaicentaApp(
         mailDataSource: dataSource,
         locale: null,
         appUpdates: appUpdates,
+        systemNotifier: systemNotifier,
+        notificationTaps: notificationTaps,
+      ),
+    );
+    unawaited(
+      systemNotifier.attach(
+        LocalSystemNotifier.open(
+          onSelected: (_) => notificationTaps.value += 1,
+        ),
       ),
     );
   } on Object catch (error) {
@@ -134,6 +151,8 @@ class MaicentaApp extends StatefulWidget {
     this.locale = const Locale('de'),
     this.loadBuildInfo,
     this.appUpdates,
+    this.systemNotifier = const NoSystemNotifier(),
+    this.notificationTaps,
   });
 
   final MailDataSource mailDataSource;
@@ -141,6 +160,12 @@ class MaicentaApp extends StatefulWidget {
 
   /// In-app updates; null disables update checks entirely.
   final AppUpdateService? appUpdates;
+
+  /// Operating-system notifications for reminders.
+  final SystemNotifier systemNotifier;
+
+  /// Fires whenever the user taps a system notification.
+  final Listenable? notificationTaps;
 
   /// Overrides how the about dialog reads version and platform, for tests.
   final Future<MaicentaBuildInfo> Function()? loadBuildInfo;
@@ -203,6 +228,8 @@ class _MaicentaAppState extends State<MaicentaApp> {
         onDarkModeChanged: setDarkMode,
         loadBuildInfo: widget.loadBuildInfo,
         appUpdates: widget.appUpdates,
+        systemNotifier: widget.systemNotifier,
+        notificationTaps: widget.notificationTaps,
       ),
     );
   }
@@ -286,6 +313,8 @@ class WorkspaceShell extends StatefulWidget {
     this.onDarkModeChanged,
     this.loadBuildInfo,
     this.appUpdates,
+    this.systemNotifier = const NoSystemNotifier(),
+    this.notificationTaps,
   });
 
   final MailDataSource mailDataSource;
@@ -293,6 +322,8 @@ class WorkspaceShell extends StatefulWidget {
   final Future<void> Function(bool enabled)? onDarkModeChanged;
   final Future<MaicentaBuildInfo> Function()? loadBuildInfo;
   final AppUpdateService? appUpdates;
+  final SystemNotifier systemNotifier;
+  final Listenable? notificationTaps;
 
   @override
   State<WorkspaceShell> createState() => _WorkspaceShellState();
@@ -350,9 +381,14 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   String contactQuery = '';
   Timer? reminderTimer;
 
-  /// Reminders the user postponed, by item identifier, until the given time.
+  /// Reminders the user postponed, by reminder key, until the given time.
   final Map<String, DateTime> snoozedReminders = {};
+
+  /// Reminder keys already announced through a system notification.
+  final Set<String> notifiedReminderIds = {};
   bool reminderDialogOpen = false;
+  late List<DavAccountConfig> davAccounts;
+  late List<WorkspaceCollection> collections;
   double readingZoom = 1;
   late List<LocalCalendarItem> calendarItems;
   late List<LocalTaskItem> tasks;
@@ -374,14 +410,19 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     tasks = widget.mailDataSource.tasks.toList();
     contacts = widget.mailDataSource.contacts.toList();
     mailAccounts = widget.mailDataSource.mailAccounts.toList();
-    offlineMode = mailAccounts.isEmpty;
+    davAccounts = widget.mailDataSource.davAccounts.toList();
+    collections = widget.mailDataSource.collections.toList();
+    offlineMode = mailAccounts.isEmpty && davAccounts.isEmpty;
     pendingMailOperations = widget.mailDataSource.pendingMailOperations;
     reminderTimer = Timer.periodic(
       const Duration(seconds: 30),
       (_) => unawaited(checkReminders()),
     );
+    widget.notificationTaps?.addListener(onNotificationTap);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(checkReminders());
+      if (!mounted) return;
+      planSystemNotifications();
+      unawaited(checkReminders());
     });
     if (widget.appUpdates?.supported ?? false) {
       // Hourly ticks; the service decides whether a daily check is due.
@@ -414,6 +455,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     automaticSyncTimer?.cancel();
     updateCheckTimer?.cancel();
     reminderTimer?.cancel();
+    widget.notificationTaps?.removeListener(onNotificationTap);
     super.dispose();
   }
 
@@ -1465,9 +1507,9 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       }
       return;
     }
-    if (mailAccounts.isEmpty) {
+    if (mailAccounts.isEmpty && davAccounts.isEmpty) {
       if (!automatic) {
-        showNotice('Bitte zuerst ein E-Mail-Konto einrichten.');
+        showNotice('Bitte zuerst ein Konto einrichten.');
         await showAccountSettings();
       }
       return;
@@ -1476,8 +1518,12 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     if (!automatic) showNotice('Synchronisierung läuft …');
     final warnings = <String>{};
     int? previousRemaining;
+    String? davSummary;
     try {
-      while (mounted && !offlineMode && !stopSynchronizationRequested) {
+      while (mailAccounts.isNotEmpty &&
+          mounted &&
+          !offlineMode &&
+          !stopSynchronizationRequested) {
         final snapshot = await widget.mailDataSource.synchronizeAccounts();
         if (!mounted) return;
         warnings.addAll(snapshot.syncWarnings);
@@ -1499,6 +1545,15 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         }
         await Future<void>.delayed(const Duration(milliseconds: 100));
       }
+      if (davAccounts.isNotEmpty && mounted && !offlineMode) {
+        final outcome = await widget.mailDataSource.synchronizeDavAccounts();
+        if (!mounted) return;
+        warnings.addAll(outcome.warnings);
+        replaceWorkspace(outcome.snapshot);
+        davSummary =
+            'Kalender und Kontakte: ${outcome.uploaded} gesendet, '
+            '${outcome.downloaded} empfangen, ${outcome.removed} entfernt.';
+      }
       if (!mounted) return;
       if (!automatic && warnings.isEmpty && catalogMessagesRemaining == 0) {
         final catalogued = folders.fold<int>(
@@ -1506,10 +1561,14 @@ class _WorkspaceShellState extends State<WorkspaceShell>
           (count, folder) => count + folder.totalCount,
         );
         showNotice(
-          '$catalogued Nachrichten sind lokal katalogisiert '
-          '($deltaMailboxesSynchronized Delta-, '
-          '$fullMailboxesReconciled Vollabgleich, '
-          '$qresyncMailboxesSynchronized QRESYNC).',
+          [
+            if (mailAccounts.isNotEmpty)
+              '$catalogued Nachrichten sind lokal katalogisiert '
+                  '($deltaMailboxesSynchronized Delta-, '
+                  '$fullMailboxesReconciled Vollabgleich, '
+                  '$qresyncMailboxesSynchronized QRESYNC).',
+            ?davSummary,
+          ].join(' '),
         );
       } else if (!automatic && warnings.isNotEmpty) {
         showInformation(
@@ -1698,16 +1757,83 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     );
   }
 
+  /// Synchronized calendars that may hold events.
+  List<WorkspaceCollection> get eventCalendars =>
+      collections.where((collection) => collection.holdsEvents).toList();
+
+  /// Synchronized lists that may hold tasks.
+  List<WorkspaceCollection> get taskLists =>
+      collections.where((collection) => collection.holdsTasks).toList();
+
+  /// Synchronized address books.
+  List<WorkspaceCollection> get addressBooks =>
+      collections.where((collection) => collection.holdsContacts).toList();
+
+  bool collectionEnabled(String? collectionId) {
+    if (collectionId == null) return true;
+    return collections.any(
+      (collection) => collection.id == collectionId && collection.enabled,
+    );
+  }
+
+  /// Events of the personal calendar and every switched-on calendar.
+  List<LocalCalendarItem> get visibleCalendarEvents => calendarItems
+      .where(
+        (event) => event.collectionId == null
+            ? calendarEnabled
+            : collectionEnabled(event.collectionId),
+      )
+      .toList();
+
+  List<LocalTaskItem> get visibleTasks =>
+      tasks.where((task) => collectionEnabled(task.collectionId)).toList();
+
+  List<LocalContactItem> get visibleContacts => contacts
+      .where((contact) => collectionEnabled(contact.collectionId))
+      .toList();
+
+  Color colorForEvent(LocalCalendarItem event) {
+    final id = event.collectionId;
+    if (id == null) return MaicentaApp.primaryBlue;
+    final collection = collections.cast<WorkspaceCollection?>().firstWhere(
+      (item) => item!.id == id,
+      orElse: () => null,
+    );
+    return parseCssColor(collection?.color) ?? MaicentaApp.primaryBlue;
+  }
+
+  Future<void> toggleCollection(
+    WorkspaceCollection collection,
+    bool enabled,
+  ) async {
+    try {
+      await widget.mailDataSource.saveCollectionEnabled(collection.id, enabled);
+    } on Object catch (error) {
+      showPersistenceError(error);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      final index = collections.indexWhere((item) => item.id == collection.id);
+      if (index >= 0) {
+        collections[index] = collection.copyWith(enabled: enabled);
+      }
+    });
+  }
+
   Future<void> openEvent(
     LocalCalendarItem? event, {
     DateTime? initialStart,
     bool initialAllDay = false,
+    DateTime? occurrenceDate,
   }) async {
     final result = await showEventEditor(
       context,
       event: event,
       initialStart: initialStart,
       initialAllDay: initialAllDay,
+      occurrenceDate: occurrenceDate,
+      calendars: eventCalendars,
     );
     if (result == null || !mounted) return;
     switch (result.action) {
@@ -1728,15 +1854,19 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     if (!mounted) return;
     setState(() {
       final index = calendarItems.indexWhere((item) => item.id == event.id);
+      final previousStart = index < 0 ? null : calendarItems[index].startsAt;
       if (index < 0) {
         calendarItems.add(event);
       } else {
         calendarItems[index] = event;
       }
       calendarItems.sort((a, b) => a.startsAt.compareTo(b.startsAt));
-      calendarFocus = event.startsAt;
-      snoozedReminders.remove(event.id);
+      // Jump to a new or moved event; keep the view when only details
+      // (or a single occurrence of a series) changed.
+      if (previousStart != event.startsAt) calendarFocus = event.startsAt;
+      snoozedReminders.removeWhere((key, _) => key.startsWith(event.id));
     });
+    planSystemNotifications();
     showNotice('Der Termin wurde gespeichert.');
   }
 
@@ -1750,8 +1880,9 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     if (!mounted) return;
     setState(() {
       calendarItems.removeWhere((item) => item.id == event.id);
-      snoozedReminders.remove(event.id);
+      snoozedReminders.removeWhere((key, _) => key.startsWith(event.id));
     });
+    planSystemNotifications();
     showNotice('Der Termin wurde gelöscht.');
   }
 
@@ -1763,6 +1894,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       context,
       task: task,
       initialTitle: initialTitle,
+      lists: taskLists,
     );
     if (result == null || !mounted) return;
     switch (result.action) {
@@ -1791,6 +1923,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       selectedTaskId = task.id;
       snoozedReminders.remove(task.id);
     });
+    planSystemNotifications();
   }
 
   Future<void> quickAddTask(String title) async {
@@ -1822,6 +1955,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       if (selectedTaskId == task.id) selectedTaskId = null;
       snoozedReminders.remove(task.id);
     });
+    planSystemNotifications();
     showNotice('Die Aufgabe wurde gelöscht.');
   }
 
@@ -1837,7 +1971,11 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   // Contacts
 
   Future<void> openContact(LocalContactItem? contact) async {
-    final result = await showContactEditor(context, contact: contact);
+    final result = await showContactEditor(
+      context,
+      contact: contact,
+      addressBooks: addressBooks,
+    );
     if (result == null || !mounted) return;
     switch (result.action) {
       case EditorAction.save:
@@ -1928,6 +2066,32 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   // Reminders
 
   /// Reminders that are due now and neither closed nor postponed.
+  /// How far back an unanswered reminder is still shown; older ones are
+  /// considered stale (for example events downloaded from a shared calendar).
+  static const reminderLookback = Duration(days: 7);
+
+  /// How far ahead reminders are handed to the operating system.
+  static const reminderHorizon = Duration(days: 14);
+
+  static String reminderKey(
+    LocalCalendarItem event,
+    EventOccurrence occurrence,
+  ) => event.recurring ? '${event.id}#${occurrence.isoDate}' : event.id;
+
+  String eventReminderDetail(EventOccurrence occurrence) => [
+    if (occurrence.allDay)
+      'Ganztägig am ${formatDate(occurrence.startsAt)}'
+    else
+      'Beginn: ${formatDateTime(occurrence.startsAt)}',
+    if (occurrence.event.location case final location? when location.isNotEmpty)
+      location,
+  ].join(' · ');
+
+  String taskReminderDetail(LocalTaskItem task) => task.dueAt == null
+      ? 'Aufgabe ohne Fälligkeitsdatum'
+      : 'Fällig am ${formatDate(task.dueAt!)}';
+
+  /// Reminders that are due now and neither closed nor postponed.
   List<ReminderEntry> dueReminders(DateTime now) {
     bool postponed(String id) {
       final until = snoozedReminders[id];
@@ -1935,30 +2099,33 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     }
 
     final entries = <ReminderEntry>[];
+    final windowStart = now.subtract(reminderLookback);
+    final windowEnd = now.add(const Duration(days: 3));
     for (final event in calendarItems) {
-      final at = event.reminderAt;
-      if (at == null ||
-          event.reminderDismissed ||
-          at.isAfter(now) ||
-          postponed(event.id)) {
-        continue;
+      if (event.reminderMinutesBefore == null) continue;
+      for (final occurrence in occurrencesBetween(
+        event,
+        windowStart,
+        windowEnd,
+      )) {
+        final at = occurrence.reminderAt;
+        if (at == null || at.isAfter(now) || occurrence.reminderDismissed) {
+          continue;
+        }
+        final key = reminderKey(event, occurrence);
+        if (postponed(key)) continue;
+        entries.add(
+          ReminderEntry(
+            id: key,
+            itemId: event.id,
+            kind: ReminderKind.event,
+            title: event.title,
+            detail: eventReminderDetail(occurrence),
+            dueAt: occurrence.startsAt,
+            occurrenceStart: occurrence.startsAt,
+          ),
+        );
       }
-      entries.add(
-        ReminderEntry(
-          id: event.id,
-          kind: ReminderKind.event,
-          title: event.title,
-          detail: [
-            if (event.allDay)
-              'Ganztägig am ${formatDate(event.startsAt)}'
-            else
-              'Beginn: ${formatDateTime(event.startsAt)}',
-            if (event.location case final location? when location.isNotEmpty)
-              location,
-          ].join(' · '),
-          dueAt: event.startsAt,
-        ),
-      );
     }
     for (final task in tasks) {
       final at = task.reminderAt;
@@ -1972,11 +2139,10 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       entries.add(
         ReminderEntry(
           id: task.id,
+          itemId: task.id,
           kind: ReminderKind.task,
           title: task.title,
-          detail: task.dueAt == null
-              ? 'Aufgabe ohne Fälligkeitsdatum'
-              : 'Fällig am ${formatDate(task.dueAt!)}',
+          detail: taskReminderDetail(task),
           dueAt: at,
         ),
       );
@@ -1985,18 +2151,91 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     return entries;
   }
 
+  /// Reminders that will become due within [reminderHorizon], including
+  /// postponed ones at their new time.
+  List<PlannedNotification> upcomingReminders(DateTime now) {
+    final horizon = now.add(reminderHorizon);
+    final planned = <PlannedNotification>[];
+    for (final event in calendarItems) {
+      if (event.reminderMinutesBefore == null) continue;
+      for (final occurrence in occurrencesBetween(
+        event,
+        now,
+        horizon.add(const Duration(days: 3)),
+      )) {
+        final at = occurrence.reminderAt;
+        if (at == null || occurrence.reminderDismissed) continue;
+        final key = reminderKey(event, occurrence);
+        final due = snoozedReminders[key] ?? at;
+        if (!due.isAfter(now) || due.isAfter(horizon)) continue;
+        planned.add(
+          PlannedNotification(
+            id: key,
+            title: event.title,
+            body: eventReminderDetail(occurrence),
+            at: due,
+          ),
+        );
+      }
+    }
+    for (final task in tasks) {
+      final at = task.reminderAt;
+      if (at == null || task.done || task.reminderDismissed) continue;
+      final due = snoozedReminders[task.id] ?? at;
+      if (!due.isAfter(now) || due.isAfter(horizon)) continue;
+      planned.add(
+        PlannedNotification(
+          id: task.id,
+          title: task.title,
+          body: taskReminderDetail(task),
+          at: due,
+        ),
+      );
+    }
+    return planned;
+  }
+
+  /// Hands the upcoming reminders to the operating system.
+  void planSystemNotifications() {
+    unawaited(
+      widget.systemNotifier.schedule(upcomingReminders(DateTime.now())),
+    );
+  }
+
+  void onNotificationTap() {
+    if (!mounted) return;
+    unawaited(checkReminders());
+  }
+
   Future<void> checkReminders() async {
     if (!mounted || reminderDialogOpen) return;
     final entries = dueReminders(DateTime.now());
     if (entries.isEmpty) return;
+    for (final entry in entries) {
+      if (notifiedReminderIds.add(entry.id)) {
+        unawaited(
+          widget.systemNotifier.show(
+            PlannedNotification(
+              id: entry.id,
+              title: entry.title,
+              body: entry.detail,
+              at: entry.dueAt,
+            ),
+          ),
+        );
+      }
+    }
     reminderDialogOpen = true;
     try {
       await showReminderDialog(
         context,
         entries: entries,
         onDismiss: dismissReminder,
-        onSnooze: (entry, delay) =>
-            snoozedReminders[entry.id] = DateTime.now().add(delay),
+        onSnooze: (entry, delay) {
+          snoozedReminders[entry.id] = DateTime.now().add(delay);
+          notifiedReminderIds.remove(entry.id);
+          planSystemNotifications();
+        },
         onOpen: openReminder,
       );
     } finally {
@@ -2007,9 +2246,17 @@ class _WorkspaceShellState extends State<WorkspaceShell>
   Future<void> dismissReminder(ReminderEntry entry) async {
     switch (entry.kind) {
       case ReminderKind.event:
-        final index = calendarItems.indexWhere((item) => item.id == entry.id);
+        final index = calendarItems.indexWhere(
+          (item) => item.id == entry.itemId,
+        );
         if (index < 0) return;
-        final updated = calendarItems[index].copyWith(reminderDismissed: true);
+        final through = entry.occurrenceStart ?? calendarItems[index].startsAt;
+        final current = calendarItems[index].reminderDismissedThrough;
+        final updated = calendarItems[index].copyWith(
+          reminderDismissedThrough: current != null && current.isAfter(through)
+              ? current
+              : through,
+        );
         try {
           await widget.mailDataSource.saveCalendarEvent(updated);
         } on Object catch (error) {
@@ -2018,7 +2265,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         }
         if (mounted) setState(() => calendarItems[index] = updated);
       case ReminderKind.task:
-        final index = tasks.indexWhere((item) => item.id == entry.id);
+        final index = tasks.indexWhere((item) => item.id == entry.itemId);
         if (index < 0) return;
         final updated = tasks[index].copyWith(reminderDismissed: true);
         try {
@@ -2029,24 +2276,26 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         }
         if (mounted) setState(() => tasks[index] = updated);
     }
+    snoozedReminders.remove(entry.id);
+    planSystemNotifications();
   }
 
   void openReminder(ReminderEntry entry) {
     switch (entry.kind) {
       case ReminderKind.event:
         final event = calendarItems.cast<LocalCalendarItem?>().firstWhere(
-          (item) => item!.id == entry.id,
+          (item) => item!.id == entry.itemId,
           orElse: () => null,
         );
         if (event == null) return;
         setState(() {
           module = WorkspaceModule.calendar;
-          calendarFocus = event.startsAt;
+          calendarFocus = entry.occurrenceStart ?? event.startsAt;
         });
-        unawaited(openEvent(event));
+        unawaited(openEvent(event, occurrenceDate: entry.occurrenceStart));
       case ReminderKind.task:
         final task = tasks.cast<LocalTaskItem?>().firstWhere(
-          (item) => item!.id == entry.id,
+          (item) => item!.id == entry.itemId,
           orElse: () => null,
         );
         if (task == null) return;
@@ -2062,11 +2311,24 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     final action = await showDialog<AccountManagementAction>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => AccountManagerDialog(accounts: mailAccounts),
+      builder: (dialogContext) => AccountManagerDialog(
+        accounts: mailAccounts,
+        davAccounts: davAccounts,
+        collections: collections,
+      ),
     );
     if (action == null || !mounted) return;
     if (action.type == AccountManagementActionType.aliases) {
       await editSenderAliases(action.account!);
+      return;
+    }
+    if (action.type == AccountManagementActionType.addDav ||
+        action.type == AccountManagementActionType.editDav) {
+      await setupDavAccount(action.davAccount);
+      return;
+    }
+    if (action.type == AccountManagementActionType.deleteDav) {
+      await removeDavAccount(action.davAccount!);
       return;
     }
     if (action.type == AccountManagementActionType.delete) {
@@ -2145,6 +2407,78 @@ class _WorkspaceShellState extends State<WorkspaceShell>
     });
     showNotice('Konto gespeichert. Die erste Synchronisierung startet.');
     await synchronize();
+  }
+
+  Future<void> setupDavAccount(DavAccountConfig? existing) async {
+    final result = await showDavAccountDialog(
+      context,
+      existing: existing,
+      onTest: widget.mailDataSource.testDavAccount,
+    );
+    if (result == null || !mounted) return;
+    try {
+      await widget.mailDataSource.saveDavAccount(
+        result.account,
+        result.password,
+      );
+    } on Object catch (error) {
+      if (!mounted) return;
+      showInformation(
+        'Konto nicht gespeichert',
+        'Der Server konnte nicht erreicht werden oder das verschlüsselte '
+            'Profil hat die Änderung nicht übernommen.\n\n$error',
+      );
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      final index = davAccounts.indexWhere(
+        (account) => account.id == result.account.id,
+      );
+      if (index < 0) {
+        davAccounts.add(result.account);
+      } else {
+        davAccounts[index] = result.account;
+      }
+      offlineMode = false;
+      offlineModeChosen = false;
+    });
+    showNotice('Konto gespeichert. Kalender und Kontakte werden abgeglichen.');
+    await synchronize();
+  }
+
+  Future<void> removeDavAccount(DavAccountConfig account) async {
+    final confirmed = await confirmDeletion(
+      'Konto entfernen?',
+      '„${account.displayName}“ wird mit allen lokal gespeicherten Kalendern, '
+          'Aufgabenlisten und Adressbüchern dieses Kontos entfernt. Auf dem '
+          'Server bleibt alles unverändert.',
+    );
+    if (!confirmed || !mounted) return;
+    try {
+      await widget.mailDataSource.deleteDavAccount(account.id);
+    } on Object catch (error) {
+      if (!mounted) return;
+      showPersistenceError(error);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      davAccounts.removeWhere((item) => item.id == account.id);
+      final removed = collections
+          .where((collection) => collection.accountId == account.id)
+          .map((collection) => collection.id)
+          .toSet();
+      collections.removeWhere((collection) => removed.contains(collection.id));
+      calendarItems.removeWhere(
+        (event) => removed.contains(event.collectionId),
+      );
+      tasks.removeWhere((task) => removed.contains(task.collectionId));
+      contacts.removeWhere((contact) => removed.contains(contact.collectionId));
+      if (mailAccounts.isEmpty && davAccounts.isEmpty) offlineMode = true;
+    });
+    planSystemNotifications();
+    showNotice('Das Konto wurde entfernt.');
   }
 
   Future<void> editSenderAliases(MailAccountConfig account) async {
@@ -2273,6 +2607,8 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       tasks = snapshot.tasks.toList();
       contacts = snapshot.contacts.toList();
       mailAccounts = snapshot.mailAccounts.toList();
+      davAccounts = snapshot.davAccounts.toList();
+      collections = snapshot.collections.toList();
       pendingMailOperations = snapshot.pendingMailOperations;
       catalogMessagesRemaining = snapshot.catalogMessagesRemaining;
       deltaMailboxesSynchronized = snapshot.deltaMailboxesSynchronized;
@@ -2900,7 +3236,7 @@ class _WorkspaceShellState extends State<WorkspaceShell>
             children: [
               MiniCalendar(
                 focused: calendarFocus,
-                events: calendarItems,
+                events: visibleCalendarEvents,
                 onSelected: (day) => setState(() {
                   calendarFocus = day;
                   if (calendarView == CalendarView.month &&
@@ -2918,33 +3254,49 @@ class _WorkspaceShellState extends State<WorkspaceShell>
                   color: MaicentaPalette.of(context).mutedText,
                 ),
               ),
-              Material(
-                color: Colors.transparent,
-                child: CheckboxListTile(
-                  key: const Key('calendar-personal-toggle'),
-                  value: calendarEnabled,
+              CollectionToggle(
+                key: const Key('calendar-personal-toggle'),
+                label: 'Persönlicher Kalender',
+                color: MaicentaApp.primaryBlue,
+                enabled: calendarEnabled,
+                onChanged: (value) => setState(() => calendarEnabled = value),
+              ),
+              for (final calendar in eventCalendars)
+                CollectionToggle(
+                  key: Key('collection-toggle-${calendar.id}'),
+                  label: calendar.name,
+                  color:
+                      parseCssColor(calendar.color) ?? MaicentaApp.primaryBlue,
+                  enabled: calendar.enabled,
                   onChanged: (value) =>
-                      setState(() => calendarEnabled = value ?? true),
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  title: const Text(
-                    'Persönlicher Kalender',
-                    style: TextStyle(fontSize: 12),
+                      unawaited(toggleCollection(calendar, value)),
+                ),
+              if (davAccounts.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: TextButton.icon(
+                    key: const Key('calendar-add-account'),
+                    onPressed: () => unawaited(setupDavAccount(null)),
+                    icon: const Icon(Icons.cloud_sync_outlined, size: 16),
+                    label: const Text(
+                      'Kalenderkonto verbinden',
+                      style: TextStyle(fontSize: 12),
+                    ),
                   ),
                 ),
-              ),
             ],
           ),
         ),
         child: CalendarWorkspace(
-          events: calendarItems,
-          enabled: calendarEnabled,
+          events: visibleCalendarEvents,
           focused: calendarFocus,
           view: calendarView,
+          colorOf: colorForEvent,
           onFocusedChanged: (day) => setState(() => calendarFocus = day),
           onViewChanged: (view) => setState(() => calendarView = view),
-          onOpenEvent: (event) => unawaited(openEvent(event)),
+          onOpenEvent: (occurrence) => unawaited(
+            openEvent(occurrence.event, occurrenceDate: occurrence.date),
+          ),
           onCreateAt: (start, allDay) => unawaited(
             openEvent(null, initialStart: start, initialAllDay: allDay),
           ),
@@ -2954,13 +3306,43 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         module: module,
         onModuleSelected: selectModule,
         onMoreApps: showMoreApps,
-        sidebar: TaskFilterList(
-          tasks: tasks,
-          selected: taskFilter,
-          onSelected: (filter) => setState(() => taskFilter = filter),
+        sidebar: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TaskFilterList(
+              tasks: visibleTasks,
+              selected: taskFilter,
+              onSelected: (filter) => setState(() => taskFilter = filter),
+            ),
+            if (taskLists.isNotEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(13, 16, 10, 2),
+                child: Text(
+                  'AUFGABENLISTEN',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: MaicentaPalette.of(context).mutedText,
+                  ),
+                ),
+              ),
+              for (final list in taskLists)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: CollectionToggle(
+                    key: Key('collection-toggle-${list.id}'),
+                    label: list.name,
+                    color: parseCssColor(list.color) ?? MaicentaApp.primaryBlue,
+                    enabled: list.enabled,
+                    onChanged: (value) =>
+                        unawaited(toggleCollection(list, value)),
+                  ),
+                ),
+            ],
+          ],
         ),
         child: TasksWorkspace(
-          tasks: tasks,
+          tasks: visibleTasks,
           filter: taskFilter,
           selectedId: selectedTaskId,
           onSelected: (task) => setState(() => selectedTaskId = task.id),
@@ -2974,8 +3356,43 @@ class _WorkspaceShellState extends State<WorkspaceShell>
         module: module,
         onModuleSelected: selectModule,
         onMoreApps: showMoreApps,
+        sidebar: addressBooks.isEmpty
+            ? null
+            : Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'ADRESSBÜCHER',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: MaicentaPalette.of(context).mutedText,
+                      ),
+                    ),
+                    CollectionToggle(
+                      label: 'Meine Kontakte',
+                      color: MaicentaApp.primaryBlue,
+                      enabled: true,
+                      onChanged: null,
+                    ),
+                    for (final book in addressBooks)
+                      CollectionToggle(
+                        key: Key('collection-toggle-${book.id}'),
+                        label: book.name,
+                        color:
+                            parseCssColor(book.color) ??
+                            MaicentaApp.primaryBlue,
+                        enabled: book.enabled,
+                        onChanged: (value) =>
+                            unawaited(toggleCollection(book, value)),
+                      ),
+                  ],
+                ),
+              ),
         child: ContactsWorkspace(
-          contacts: contacts,
+          contacts: visibleContacts,
           query: contactQuery,
           onQueryChanged: (value) => setState(() => contactQuery = value),
           selectedId: selectedContactId,
@@ -2997,10 +3414,13 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       case WorkspaceModule.mail:
         return '';
       case WorkspaceModule.calendar:
-        final todayCount = calendarItems
-            .where((event) => event.occursOn(today))
-            .length;
-        return '${calendarItems.length} Termine · $todayCount heute';
+        final events = visibleCalendarEvents;
+        final todayCount = expandEvents(
+          events,
+          today,
+          today.add(const Duration(days: 1)),
+        ).length;
+        return '${events.length} Termine · $todayCount heute';
       case WorkspaceModule.tasks:
         final open = tasks.where((task) => !task.done).length;
         final overdue = tasks.where((task) => task.overdue).length;
@@ -3033,108 +3453,250 @@ class AccountSetupResult {
   final MailOAuthTokens? oauthTokens;
 }
 
-enum AccountManagementActionType { add, edit, aliases, delete }
+enum AccountManagementActionType {
+  add,
+  edit,
+  aliases,
+  delete,
+  addDav,
+  editDav,
+  deleteDav,
+}
 
 class AccountManagementAction {
-  const AccountManagementAction(this.type, [this.account]);
+  const AccountManagementAction(this.type, [this.account, this.davAccount]);
 
   final AccountManagementActionType type;
   final MailAccountConfig? account;
+  final DavAccountConfig? davAccount;
 }
 
-class AccountManagerDialog extends StatelessWidget {
-  const AccountManagerDialog({super.key, required this.accounts});
+/// Checkbox row with a color swatch for a calendar, list, or address book.
+class CollectionToggle extends StatelessWidget {
+  const CollectionToggle({
+    super.key,
+    required this.label,
+    required this.color,
+    required this.enabled,
+    required this.onChanged,
+  });
 
-  final List<MailAccountConfig> accounts;
+  final String label;
+  final Color color;
+  final bool enabled;
+  final ValueChanged<bool>? onChanged;
 
   @override
   Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: CheckboxListTile(
+        value: enabled,
+        onChanged: onChanged == null
+            ? null
+            : (value) => onChanged!(value ?? true),
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        controlAffinity: ListTileControlAffinity.leading,
+        activeColor: color,
+        title: Row(
+          children: [
+            Container(
+              width: 10,
+              height: 10,
+              margin: const EdgeInsets.only(right: 6),
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+            Expanded(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class AccountManagerDialog extends StatelessWidget {
+  const AccountManagerDialog({
+    super.key,
+    required this.accounts,
+    this.davAccounts = const [],
+    this.collections = const [],
+  });
+
+  final List<MailAccountConfig> accounts;
+  final List<DavAccountConfig> davAccounts;
+  final List<WorkspaceCollection> collections;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = MaicentaPalette.of(context);
+    Widget sectionTitle(String title) => Padding(
+      padding: const EdgeInsets.fromLTRB(0, 12, 0, 4),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: palette.mutedText,
+        ),
+      ),
+    );
     return AlertDialog(
       title: const Text('Kontoeinstellungen'),
       content: SizedBox(
-        width: 640,
-        child: accounts.isEmpty
-            ? const Padding(
-                padding: EdgeInsets.symmetric(vertical: 24),
-                child: Text(
-                  'Noch kein echtes Mailkonto eingerichtet. Füge ein '
-                  'IMAP-/SMTP-Konto hinzu, um Nachrichten zu synchronisieren.',
+        width: 680,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 460),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              sectionTitle('E-MAIL-KONTEN'),
+              if (accounts.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                    'Noch kein echtes Mailkonto eingerichtet. Füge ein '
+                    'IMAP-/SMTP-Konto hinzu, um Nachrichten zu synchronisieren.',
+                  ),
                 ),
-              )
-            : ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 360),
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: accounts.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final account = accounts[index];
-                    final syncLabel = account.lastSyncAt == null
-                        ? 'Noch nicht synchronisiert'
-                        : 'Zuletzt synchronisiert: '
-                              '${account.lastSyncAt!.toLocal()}';
-                    return ListTile(
-                      key: Key('account-row-${account.id}'),
-                      leading: const CircleAvatar(
-                        child: Icon(Icons.alternate_email),
-                      ),
-                      title: Text(account.displayName),
-                      subtitle: Text(
-                        '${account.email}'
-                        '${account.aliases.isEmpty ? '' : ' · ${account.aliases.length == 1 ? '1 Alias' : '${account.aliases.length} Aliase'}'}'
-                        '\n${account.imapHost} · $syncLabel',
-                      ),
-                      isThreeLine: true,
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            key: Key('account-edit-${account.id}'),
-                            tooltip: 'Bearbeiten',
-                            onPressed: () => Navigator.pop(
-                              context,
-                              AccountManagementAction(
-                                AccountManagementActionType.edit,
-                                account,
-                              ),
-                            ),
-                            icon: const Icon(Icons.edit_outlined),
+              for (final account in accounts) ...[
+                ListTile(
+                  key: Key('account-row-${account.id}'),
+                  leading: const CircleAvatar(
+                    child: Icon(Icons.alternate_email),
+                  ),
+                  title: Text(account.displayName),
+                  subtitle: Text(
+                    '${account.email}'
+                    '${account.aliases.isEmpty ? '' : ' · ${account.aliases.length == 1 ? '1 Alias' : '${account.aliases.length} Aliase'}'}'
+                    '\n${account.imapHost} · '
+                    '${account.lastSyncAt == null ? 'Noch nicht synchronisiert' : 'Zuletzt synchronisiert: ${formatDateTime(account.lastSyncAt!.toLocal())}'}',
+                  ),
+                  isThreeLine: true,
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        key: Key('account-edit-${account.id}'),
+                        tooltip: 'Bearbeiten',
+                        onPressed: () => Navigator.pop(
+                          context,
+                          AccountManagementAction(
+                            AccountManagementActionType.edit,
+                            account,
                           ),
-                          IconButton(
-                            key: Key('account-aliases-${account.id}'),
-                            tooltip: 'Absenderadressen',
-                            onPressed: () => Navigator.pop(
-                              context,
-                              AccountManagementAction(
-                                AccountManagementActionType.aliases,
-                                account,
-                              ),
-                            ),
-                            icon: const Icon(Icons.alternate_email),
-                          ),
-                          IconButton(
-                            key: Key('account-delete-${account.id}'),
-                            tooltip: 'Entfernen',
-                            onPressed: () => Navigator.pop(
-                              context,
-                              AccountManagementAction(
-                                AccountManagementActionType.delete,
-                                account,
-                              ),
-                            ),
-                            icon: const Icon(Icons.delete_outline),
-                          ),
-                        ],
+                        ),
+                        icon: const Icon(Icons.edit_outlined),
                       ),
-                    );
-                  },
+                      IconButton(
+                        key: Key('account-aliases-${account.id}'),
+                        tooltip: 'Absenderadressen',
+                        onPressed: () => Navigator.pop(
+                          context,
+                          AccountManagementAction(
+                            AccountManagementActionType.aliases,
+                            account,
+                          ),
+                        ),
+                        icon: const Icon(Icons.alternate_email),
+                      ),
+                      IconButton(
+                        key: Key('account-delete-${account.id}'),
+                        tooltip: 'Entfernen',
+                        onPressed: () => Navigator.pop(
+                          context,
+                          AccountManagementAction(
+                            AccountManagementActionType.delete,
+                            account,
+                          ),
+                        ),
+                        icon: const Icon(Icons.delete_outline),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+                const Divider(height: 1),
+              ],
+              sectionTitle('KALENDER- UND KONTAKTKONTEN (CALDAV/CARDDAV)'),
+              if (davAccounts.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                    'Noch kein Kalender- oder Kontaktkonto verbunden. Ein '
+                    'CalDAV/CardDAV-Konto gleicht Kalender, Aufgabenlisten und '
+                    'Adressbücher in beide Richtungen ab.',
+                  ),
+                ),
+              for (final account in davAccounts) ...[
+                ListTile(
+                  key: Key('dav-account-row-${account.id}'),
+                  leading: const CircleAvatar(
+                    child: Icon(Icons.cloud_sync_outlined),
+                  ),
+                  title: Text(account.displayName),
+                  subtitle: Text(
+                    '${account.username} · ${account.serverUrl}\n'
+                    '${collections.where((collection) => collection.accountId == account.id).map((collection) => collection.name).join(', ')}'
+                    '${account.lastSyncAt == null ? '' : ' · Zuletzt: ${formatDateTime(account.lastSyncAt!.toLocal())}'}',
+                  ),
+                  isThreeLine: true,
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        key: Key('dav-account-edit-${account.id}'),
+                        tooltip: 'Bearbeiten',
+                        onPressed: () => Navigator.pop(
+                          context,
+                          AccountManagementAction(
+                            AccountManagementActionType.editDav,
+                            null,
+                            account,
+                          ),
+                        ),
+                        icon: const Icon(Icons.edit_outlined),
+                      ),
+                      IconButton(
+                        key: Key('dav-account-delete-${account.id}'),
+                        tooltip: 'Entfernen',
+                        onPressed: () => Navigator.pop(
+                          context,
+                          AccountManagementAction(
+                            AccountManagementActionType.deleteDav,
+                            null,
+                            account,
+                          ),
+                        ),
+                        icon: const Icon(Icons.delete_outline),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+              ],
+            ],
+          ),
+        ),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('Schließen'),
+        ),
+        OutlinedButton.icon(
+          key: const Key('dav-account-add'),
+          onPressed: () => Navigator.pop(
+            context,
+            const AccountManagementAction(AccountManagementActionType.addDav),
+          ),
+          icon: const Icon(Icons.cloud_sync_outlined),
+          label: const Text('Kalender/Kontakte verbinden'),
         ),
         FilledButton.icon(
           key: const Key('account-add'),
@@ -3143,7 +3705,7 @@ class AccountManagerDialog extends StatelessWidget {
             const AccountManagementAction(AccountManagementActionType.add),
           ),
           icon: const Icon(Icons.add),
-          label: const Text('Konto hinzufügen'),
+          label: const Text('E-Mail-Konto hinzufügen'),
         ),
       ],
     );

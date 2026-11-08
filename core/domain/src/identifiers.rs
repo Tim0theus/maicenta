@@ -61,6 +61,10 @@ identifier!(
     WorkspaceItemId,
     "Stable identifier for a calendar event, task, or contact."
 );
+identifier!(
+    CollectionId,
+    "Stable identifier for a synchronized calendar, task list, or address book."
+);
 
 /// Errors raised while validating domain values.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../../src/rust/api/workspace.dart' as rust;
 import '../workspace/german_dates.dart';
 import '../workspace/workspace_items.dart';
@@ -282,6 +284,8 @@ class WorkspaceDataSnapshot {
     required this.tasks,
     required this.contacts,
     required this.mailAccounts,
+    this.davAccounts = const [],
+    this.collections = const [],
     required this.pendingMailOperations,
     this.syncWarnings = const [],
     this.catalogMessagesRemaining = 0,
@@ -304,6 +308,12 @@ class WorkspaceDataSnapshot {
   final List<LocalTaskItem> tasks;
   final List<LocalContactItem> contacts;
   final List<MailAccountConfig> mailAccounts;
+
+  /// Configured CalDAV/CardDAV accounts.
+  final List<DavAccountConfig> davAccounts;
+
+  /// Calendars, task lists, and address books of every DAV account.
+  final List<WorkspaceCollection> collections;
   final int pendingMailOperations;
   final List<String> syncWarnings;
   final int catalogMessagesRemaining;
@@ -322,6 +332,23 @@ class DraftSyncOutcome {
   final int synchronized;
   final int pending;
   final List<String> warnings;
+}
+
+/// Result of synchronizing every CalDAV/CardDAV account.
+class DavSyncOutcome {
+  const DavSyncOutcome({
+    required this.uploaded,
+    required this.downloaded,
+    required this.removed,
+    this.warnings = const [],
+    required this.snapshot,
+  });
+
+  final int uploaded;
+  final int downloaded;
+  final int removed;
+  final List<String> warnings;
+  final WorkspaceDataSnapshot snapshot;
 }
 
 class MailboxIdleOutcome {
@@ -348,6 +375,8 @@ abstract interface class MailDataSource {
   List<LocalTaskItem> get tasks;
   List<LocalContactItem> get contacts;
   List<MailAccountConfig> get mailAccounts;
+  List<DavAccountConfig> get davAccounts;
+  List<WorkspaceCollection> get collections;
   int get pendingMailOperations;
   bool get isPersistent;
   bool get automaticSynchronizationEnabled;
@@ -403,6 +432,20 @@ abstract interface class MailDataSource {
   Future<void> deleteTask(String taskId);
   Future<void> saveContact(LocalContactItem contact);
   Future<void> deleteContact(String contactId);
+
+  /// Lists the collections a CalDAV/CardDAV server offers for the account
+  /// without storing anything.
+  Future<List<DiscoveredCollection>> testDavAccount(
+    DavAccountConfig account,
+    String password,
+  );
+
+  /// Stores a CalDAV/CardDAV account and its password; an empty password
+  /// keeps the stored one when editing.
+  Future<void> saveDavAccount(DavAccountConfig account, String password);
+  Future<void> deleteDavAccount(String accountId);
+  Future<void> saveCollectionEnabled(String collectionId, bool enabled);
+  Future<DavSyncOutcome> synchronizeDavAccounts();
   Future<void> testAccount(MailAccountConfig account, String password);
   Future<void> saveAccount(MailAccountConfig account, String password);
   Future<void> testOAuthAccount(
@@ -476,6 +519,12 @@ class DemoMailDataSource implements MailDataSource {
 
   @override
   List<MailAccountConfig> get mailAccounts => const [];
+
+  @override
+  List<DavAccountConfig> get davAccounts => const [];
+
+  @override
+  List<WorkspaceCollection> get collections => const [];
 
   @override
   int get pendingMailOperations => 0;
@@ -619,6 +668,41 @@ class DemoMailDataSource implements MailDataSource {
   Future<void> deleteContact(String contactId) async {}
 
   @override
+  Future<List<DiscoveredCollection>> testDavAccount(
+    DavAccountConfig account,
+    String password,
+  ) async => const [];
+
+  @override
+  Future<void> saveDavAccount(
+    DavAccountConfig account,
+    String password,
+  ) async {}
+
+  @override
+  Future<void> deleteDavAccount(String accountId) async {}
+
+  @override
+  Future<void> saveCollectionEnabled(String collectionId, bool enabled) async {}
+
+  @override
+  Future<DavSyncOutcome> synchronizeDavAccounts() async => DavSyncOutcome(
+    uploaded: 0,
+    downloaded: 0,
+    removed: 0,
+    snapshot: WorkspaceDataSnapshot(
+      folders: folders,
+      favoriteFolderIds: favoriteFolderIds,
+      messages: messages,
+      calendarEvents: calendarEvents,
+      tasks: tasks,
+      contacts: contacts,
+      mailAccounts: mailAccounts,
+      pendingMailOperations: 0,
+    ),
+  );
+
+  @override
   Future<void> testAccount(MailAccountConfig account, String password) async {}
 
   @override
@@ -706,6 +790,8 @@ class RustMailDataSource implements MailDataSource {
     required this.tasks,
     required this.contacts,
     required this.mailAccounts,
+    required this.davAccounts,
+    required this.collections,
     required this.pendingMailOperations,
   });
 
@@ -724,6 +810,8 @@ class RustMailDataSource implements MailDataSource {
       tasks: data.tasks,
       contacts: data.contacts,
       mailAccounts: data.mailAccounts,
+      davAccounts: data.davAccounts,
+      collections: data.collections,
       pendingMailOperations: data.pendingMailOperations,
     );
   }
@@ -757,6 +845,12 @@ class RustMailDataSource implements MailDataSource {
 
   @override
   final List<MailAccountConfig> mailAccounts;
+
+  @override
+  final List<DavAccountConfig> davAccounts;
+
+  @override
+  final List<WorkspaceCollection> collections;
 
   @override
   final int pendingMailOperations;
@@ -975,7 +1069,19 @@ class RustMailDataSource implements MailDataSource {
         location: event.location,
         description: event.description,
         reminderMinutesBefore: event.reminderMinutesBefore,
-        reminderDismissed: event.reminderDismissed,
+        reminderDismissedThroughMs:
+            event.reminderDismissedThrough?.millisecondsSinceEpoch,
+        recurrence: event.recurrence == null
+            ? null
+            : rust.RecurrenceDto(
+                frequency: event.recurrence!.frequency.key,
+                interval: event.recurrence!.interval,
+                weekdays: Uint8List.fromList(event.recurrence!.weekdays),
+                untilMs: event.recurrence!.until?.millisecondsSinceEpoch,
+                count: event.recurrence!.count,
+              ),
+        exceptionDates: event.exceptionDates,
+        collectionId: event.collectionId,
       ),
     );
   }
@@ -1003,6 +1109,7 @@ class RustMailDataSource implements MailDataSource {
         reminderAtMs: task.reminderAt?.millisecondsSinceEpoch,
         reminderDismissed: task.reminderDismissed,
         completedAtMs: task.completedAt?.millisecondsSinceEpoch,
+        collectionId: task.collectionId,
       ),
     );
   }
@@ -1047,6 +1154,7 @@ class RustMailDataSource implements MailDataSource {
             : formatIsoDate(contact.birthday!),
         website: contact.website,
         notes: contact.notes,
+        collectionId: contact.collectionId,
       ),
     );
   }
@@ -1056,6 +1164,74 @@ class RustMailDataSource implements MailDataSource {
     return rust.deleteLocalContact(
       databasePath: databasePath,
       contactId: contactId,
+    );
+  }
+
+  rust.DavAccountInput _davAccountInput(DavAccountConfig account) =>
+      rust.DavAccountInput(
+        id: account.id,
+        displayName: account.displayName,
+        serverUrl: account.serverUrl,
+        username: account.username,
+      );
+
+  @override
+  Future<List<DiscoveredCollection>> testDavAccount(
+    DavAccountConfig account,
+    String password,
+  ) async {
+    final found = await rust.testDavAccountConnection(
+      input: _davAccountInput(account),
+      password: password,
+    );
+    return found
+        .map(
+          (collection) => DiscoveredCollection(
+            kind: CollectionKind.fromKey(collection.kind),
+            href: collection.href,
+            name: collection.displayName,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  @override
+  Future<void> saveDavAccount(DavAccountConfig account, String password) {
+    return rust.saveDavAccount(
+      databasePath: databasePath,
+      input: _davAccountInput(account),
+      password: password,
+    );
+  }
+
+  @override
+  Future<void> deleteDavAccount(String accountId) {
+    return rust.deleteDavAccount(
+      databasePath: databasePath,
+      accountId: accountId,
+    );
+  }
+
+  @override
+  Future<void> saveCollectionEnabled(String collectionId, bool enabled) {
+    return rust.saveCollectionEnabled(
+      databasePath: databasePath,
+      collectionId: collectionId,
+      enabled: enabled,
+    );
+  }
+
+  @override
+  Future<DavSyncOutcome> synchronizeDavAccounts() async {
+    final result = await rust.synchronizeDavAccounts(
+      databasePath: databasePath,
+    );
+    return DavSyncOutcome(
+      uploaded: result.uploaded,
+      downloaded: result.downloaded,
+      removed: result.removed,
+      warnings: result.warnings,
+      snapshot: _workspaceData(result.snapshot),
     );
   }
 
@@ -1227,7 +1403,22 @@ WorkspaceDataSnapshot _workspaceData(rust.WorkspaceSnapshot snapshot) {
             location: event.location,
             description: event.description,
             reminderMinutesBefore: event.reminderMinutesBefore,
-            reminderDismissed: event.reminderDismissed,
+            reminderDismissedThrough: _optionalLocalTime(
+              event.reminderDismissedThroughMs,
+            ),
+            recurrence: event.recurrence == null
+                ? null
+                : Recurrence(
+                    frequency: RecurrenceFrequency.fromKey(
+                      event.recurrence!.frequency,
+                    ),
+                    interval: event.recurrence!.interval,
+                    weekdays: event.recurrence!.weekdays.toList(),
+                    until: _optionalLocalTime(event.recurrence!.untilMs),
+                    count: event.recurrence!.count,
+                  ),
+            exceptionDates: event.exceptionDates,
+            collectionId: event.collectionId,
           ),
         )
         .toList(growable: false),
@@ -1244,6 +1435,7 @@ WorkspaceDataSnapshot _workspaceData(rust.WorkspaceSnapshot snapshot) {
             reminderAt: _optionalLocalTime(task.reminderAtMs),
             reminderDismissed: task.reminderDismissed,
             completedAt: _optionalLocalTime(task.completedAtMs),
+            collectionId: task.collectionId,
           ),
         )
         .toList(growable: false),
@@ -1281,6 +1473,30 @@ WorkspaceDataSnapshot _workspaceData(rust.WorkspaceSnapshot snapshot) {
             birthday: parseIsoDate(contact.birthday),
             website: contact.website,
             notes: contact.notes,
+            collectionId: contact.collectionId,
+          ),
+        )
+        .toList(growable: false),
+    davAccounts: snapshot.davAccounts
+        .map(
+          (account) => DavAccountConfig(
+            id: account.id,
+            displayName: account.displayName,
+            serverUrl: account.serverUrl,
+            username: account.username,
+            lastSyncAt: _optionalLocalTime(account.lastSyncAtMs),
+          ),
+        )
+        .toList(growable: false),
+    collections: snapshot.collections
+        .map(
+          (collection) => WorkspaceCollection(
+            id: collection.id,
+            accountId: collection.accountId,
+            kind: CollectionKind.fromKey(collection.kind),
+            name: collection.displayName,
+            color: collection.color,
+            enabled: collection.enabled,
           ),
         )
         .toList(growable: false),

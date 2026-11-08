@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "connectors/dav",
     "connectors/mail",
     "connectors/microsoft_graph",
     "core/application",

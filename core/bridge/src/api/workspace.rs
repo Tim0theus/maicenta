@@ -8,15 +8,18 @@ use std::{
 };
 
 use maicenta_application::{
-    LocalDraftMetadata, LocalDraftStore, MailAccountStore, MailStore, MailSyncStore,
+    DavStore, LocalDraftMetadata, LocalDraftStore, MailAccountStore, MailStore, MailSyncStore,
     PendingDraftAction, RemoteMailboxSyncState, RemoteMessageIdentity, RemoteMessageMetadata,
     SecretStore, WorkspaceStore,
 };
+use maicenta_dav_connector::{DavClient, DiscoveredCollection, sync as dav_sync};
 use maicenta_domain::{
-    AccountId, AttachmentId, CalendarEvent, Contact, ContactEmail, ContactLabel, ContactPhone,
-    MailAccount, MailAddress, MailProvider, Mailbox, MailboxId, MailboxRole, MessageAttachment,
-    MessageBody, MessageFlag, MessageId, MessageRecipients, MessageSummary, PostalAddress,
-    TaskItem, TaskPriority, TaskStatus, TransportSecurity, WorkspaceItemId,
+    AccountId, AttachmentId, CalendarEvent, CollectionId, CollectionKind, Contact, ContactEmail,
+    ContactLabel, ContactPhone, DavAccount, DavCollection, MailAccount, MailAddress, MailProvider,
+    Mailbox, MailboxId, MailboxRole, MessageAttachment, MessageBody, MessageFlag, MessageId,
+    MessageRecipients, MessageSummary, PostalAddress, Recurrence, RecurrenceFrequency,
+    RemoteDeletion, SyncMetadata, TaskItem, TaskPriority, TaskStatus, TransportSecurity,
+    WorkspaceItemId,
 };
 use maicenta_graph_connector::{
     GraphDraftIdentity, GraphDraftOperation, GraphMailboxCheckpoint, GraphMessage, GraphMutation,
@@ -432,6 +435,10 @@ pub struct WorkspaceSnapshot {
     pub tasks: Vec<TaskDto>,
     pub contacts: Vec<ContactDto>,
     pub mail_accounts: Vec<MailAccountDto>,
+    /// Configured CalDAV/CardDAV accounts.
+    pub dav_accounts: Vec<DavAccountDto>,
+    /// Calendars, task lists, and address books of every DAV account.
+    pub collections: Vec<CollectionDto>,
     pub sync_warnings: Vec<String>,
     /// Compact IMAP catalogue entries still scheduled for automatic
     /// continuation after the current synchronization pass.
@@ -455,8 +462,21 @@ pub struct MailboxIdleDto {
     pub changed: bool,
 }
 
-/// One local calendar event. `all_day` events carry local midnight
-/// boundaries; `reminder_minutes_before` is `None` without a reminder.
+/// Repetition pattern of an event. `frequency` is one of `daily`, `weekly`,
+/// `monthly`, `yearly`; `weekdays` are ISO weekdays (1 = Monday) for weekly
+/// rules.
+pub struct RecurrenceDto {
+    pub frequency: String,
+    pub interval: u32,
+    pub weekdays: Vec<u8>,
+    pub until_ms: Option<i64>,
+    pub count: Option<u32>,
+}
+
+/// One calendar event. `all_day` events carry local midnight boundaries;
+/// `reminder_minutes_before` is `None` without a reminder. Occurrences
+/// starting at or before `reminder_dismissed_through_ms` had their reminder
+/// closed. `collection_id` is `None` for the local personal calendar.
 pub struct CalendarEventDto {
     pub id: String,
     pub title: String,
@@ -466,7 +486,55 @@ pub struct CalendarEventDto {
     pub location: Option<String>,
     pub description: Option<String>,
     pub reminder_minutes_before: Option<u32>,
-    pub reminder_dismissed: bool,
+    pub reminder_dismissed_through_ms: Option<i64>,
+    pub recurrence: Option<RecurrenceDto>,
+    pub exception_dates: Vec<String>,
+    pub collection_id: Option<String>,
+}
+
+/// One configured CalDAV/CardDAV account; the password stays in the vault.
+pub struct DavAccountDto {
+    pub id: String,
+    pub display_name: String,
+    pub server_url: String,
+    pub username: String,
+    pub last_sync_at_ms: Option<i64>,
+}
+
+/// One calendar, task list, or address book of a DAV account. `kind` is
+/// `calendar`, `task_list`, or `address_book`.
+pub struct CollectionDto {
+    pub id: String,
+    pub account_id: String,
+    pub kind: String,
+    pub display_name: String,
+    pub color: Option<String>,
+    pub enabled: bool,
+}
+
+/// User-supplied CalDAV/CardDAV account configuration. The password is
+/// passed separately and stored in the encrypted profile.
+pub struct DavAccountInput {
+    pub id: String,
+    pub display_name: String,
+    pub server_url: String,
+    pub username: String,
+}
+
+/// One collection found on a server during a connection test.
+pub struct DiscoveredCollectionDto {
+    pub kind: String,
+    pub href: String,
+    pub display_name: String,
+}
+
+/// Result of synchronizing every DAV account.
+pub struct DavSyncDto {
+    pub uploaded: u32,
+    pub downloaded: u32,
+    pub removed: u32,
+    pub warnings: Vec<String>,
+    pub snapshot: WorkspaceSnapshot,
 }
 
 /// One local task. `status` is one of `not_started`, `in_progress`,
@@ -483,6 +551,7 @@ pub struct TaskDto {
     pub reminder_at_ms: Option<i64>,
     pub reminder_dismissed: bool,
     pub completed_at_ms: Option<i64>,
+    pub collection_id: Option<String>,
 }
 
 /// One labelled contact email address. `label` is one of `work`, `home`,
@@ -521,6 +590,7 @@ pub struct ContactDto {
     pub birthday: Option<String>,
     pub website: Option<String>,
     pub notes: Option<String>,
+    pub collection_id: Option<String>,
 }
 
 /// One additional sender address of an account. Used in snapshots and in
@@ -585,7 +655,10 @@ pub struct LocalCalendarEventInput {
     pub location: Option<String>,
     pub description: Option<String>,
     pub reminder_minutes_before: Option<u32>,
-    pub reminder_dismissed: bool,
+    pub reminder_dismissed_through_ms: Option<i64>,
+    pub recurrence: Option<RecurrenceDto>,
+    pub exception_dates: Vec<String>,
+    pub collection_id: Option<String>,
 }
 
 /// User-supplied task; fields as in [`TaskDto`].
@@ -600,6 +673,7 @@ pub struct LocalTaskInput {
     pub reminder_at_ms: Option<i64>,
     pub reminder_dismissed: bool,
     pub completed_at_ms: Option<i64>,
+    pub collection_id: Option<String>,
 }
 
 /// User-supplied contact; fields as in [`ContactDto`]. Blank optional
@@ -615,6 +689,7 @@ pub struct LocalContactInput {
     pub birthday: Option<String>,
     pub website: Option<String>,
     pub notes: Option<String>,
+    pub collection_id: Option<String>,
 }
 
 /// Complete user-supplied account configuration. `password` is accepted only
@@ -1694,8 +1769,21 @@ pub fn save_local_calendar_event(
             "reminder may be at most {MAX_REMINDER_MINUTES} minutes before the start"
         ));
     }
+    let id = WorkspaceItemId::parse(input.id).map_err(|error| error.to_string())?;
+    let recurrence = input.recurrence.map(recurrence_from_dto).transpose()?;
+    for date in &input.exception_dates {
+        if !is_iso_calendar_date(date) {
+            return Err("exception dates must be ISO 8601 calendar dates (YYYY-MM-DD)".into());
+        }
+    }
+    let mut store = open_profile_store(database_path)?;
+    let existing = store
+        .find_calendar_event(&id)
+        .map_err(|error| error.to_string())?
+        .map(|event| event.sync);
+    let sync = next_sync_metadata(&mut store, existing, input.collection_id)?;
     let event = CalendarEvent {
-        id: WorkspaceItemId::parse(input.id).map_err(|error| error.to_string())?,
+        id,
         title: validated_text(input.title, "calendar title", 200)?,
         starts_at_ms: input.starts_at_ms,
         ends_at_ms: input.ends_at_ms,
@@ -1703,11 +1791,116 @@ pub fn save_local_calendar_event(
         location: optional_text(input.location, "location", 500)?,
         description: optional_text(input.description, "description", MAX_NOTES_LENGTH)?,
         reminder_minutes_before: input.reminder_minutes_before,
-        reminder_dismissed: input.reminder_dismissed,
+        reminder_dismissed_through_ms: input.reminder_dismissed_through_ms,
+        recurrence,
+        exception_dates: input.exception_dates,
+        sync,
     };
-    open_profile_store(database_path)?
+    store
         .save_calendar_event(&event)
         .map_err(|error| error.to_string())
+}
+
+fn recurrence_from_dto(dto: RecurrenceDto) -> Result<Recurrence, String> {
+    let frequency = match dto.frequency.as_str() {
+        "daily" => RecurrenceFrequency::Daily,
+        "weekly" => RecurrenceFrequency::Weekly,
+        "monthly" => RecurrenceFrequency::Monthly,
+        "yearly" => RecurrenceFrequency::Yearly,
+        other => return Err(format!("unknown recurrence frequency {other}")),
+    };
+    if dto.interval == 0 || dto.interval > 999 {
+        return Err("recurrence interval must be between 1 and 999".into());
+    }
+    if dto.weekdays.iter().any(|day| !(1..=7).contains(day)) {
+        return Err("recurrence weekdays must be ISO weekdays 1 to 7".into());
+    }
+    if dto.count.is_some_and(|count| count == 0) {
+        return Err("recurrence count must be at least 1".into());
+    }
+    let mut weekdays = dto.weekdays;
+    weekdays.sort_unstable();
+    weekdays.dedup();
+    Ok(Recurrence {
+        frequency,
+        interval: dto.interval,
+        weekdays,
+        until_ms: dto.until_ms,
+        count: dto.count,
+    })
+}
+
+fn recurrence_dto(recurrence: Recurrence) -> RecurrenceDto {
+    RecurrenceDto {
+        frequency: match recurrence.frequency {
+            RecurrenceFrequency::Daily => "daily",
+            RecurrenceFrequency::Weekly => "weekly",
+            RecurrenceFrequency::Monthly => "monthly",
+            RecurrenceFrequency::Yearly => "yearly",
+        }
+        .to_owned(),
+        interval: recurrence.interval,
+        weekdays: recurrence.weekdays,
+        until_ms: recurrence.until_ms,
+        count: recurrence.count,
+    }
+}
+
+/// Synchronization metadata for a record the user just saved: it keeps its
+/// server identity while it stays in the same collection and is marked for
+/// upload. Moving it to another collection schedules the deletion of the old
+/// server copy and lets the next synchronization create a fresh one.
+fn next_sync_metadata(
+    store: &mut SqliteMailStore,
+    existing: Option<SyncMetadata>,
+    collection_id: Option<String>,
+) -> Result<SyncMetadata, String> {
+    let collection_id = collection_id
+        .map(CollectionId::parse)
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    if let Some(collection_id) = &collection_id {
+        let known = store
+            .list_dav_collections()
+            .map_err(|error| error.to_string())?
+            .iter()
+            .any(|collection| &collection.id == collection_id);
+        if !known {
+            return Err("unknown calendar, task list, or address book".into());
+        }
+    }
+    let Some(existing) = existing else {
+        return Ok(SyncMetadata {
+            collection_id,
+            uid: None,
+            remote_href: None,
+            etag: None,
+            dirty: true,
+        });
+    };
+    if existing.collection_id == collection_id {
+        return Ok(SyncMetadata {
+            dirty: true,
+            ..existing
+        });
+    }
+    if let (Some(previous_collection), Some(href)) = (existing.collection_id, existing.remote_href)
+    {
+        store
+            .record_remote_deletion(&RemoteDeletion {
+                collection_id: previous_collection,
+                href,
+                etag: existing.etag,
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(SyncMetadata {
+        collection_id,
+        uid: None,
+        remote_href: None,
+        etag: None,
+        dirty: true,
+    })
 }
 
 /// Removes a local calendar event.
@@ -1734,8 +1927,15 @@ pub fn save_local_task(database_path: String, input: LocalTaskInput) -> Result<(
             return Err("task must not be due before it starts".into());
         }
     }
+    let id = WorkspaceItemId::parse(input.id).map_err(|error| error.to_string())?;
+    let mut store = open_profile_store(database_path)?;
+    let existing = store
+        .find_task(&id)
+        .map_err(|error| error.to_string())?
+        .map(|task| task.sync);
+    let sync = next_sync_metadata(&mut store, existing, input.collection_id)?;
     let task = TaskItem {
-        id: WorkspaceItemId::parse(input.id).map_err(|error| error.to_string())?,
+        id,
         title: validated_text(input.title, "task title", 200)?,
         description: optional_text(input.description, "description", MAX_NOTES_LENGTH)?,
         starts_at_ms: input.starts_at_ms,
@@ -1745,10 +1945,9 @@ pub fn save_local_task(database_path: String, input: LocalTaskInput) -> Result<(
         reminder_at_ms: input.reminder_at_ms,
         reminder_dismissed: input.reminder_dismissed,
         completed_at_ms: input.completed_at_ms,
+        sync,
     };
-    open_profile_store(database_path)?
-        .save_task(&task)
-        .map_err(|error| error.to_string())
+    store.save_task(&task).map_err(|error| error.to_string())
 }
 
 /// Removes a local task.
@@ -1828,8 +2027,15 @@ pub fn save_local_contact(database_path: String, input: LocalContactInput) -> Re
             return Err("birthday must be an ISO 8601 calendar date (YYYY-MM-DD)".into());
         }
     }
+    let id = WorkspaceItemId::parse(input.id).map_err(|error| error.to_string())?;
+    let mut store = open_profile_store(database_path)?;
+    let existing = store
+        .find_contact(&id)
+        .map_err(|error| error.to_string())?
+        .map(|contact| contact.sync);
+    let sync = next_sync_metadata(&mut store, existing, input.collection_id)?;
     let contact = Contact {
-        id: WorkspaceItemId::parse(input.id).map_err(|error| error.to_string())?,
+        id,
         name: validated_text(input.name, "contact name", 200)?,
         company: optional_text(input.company, "company", 200)?,
         job_title: optional_text(input.job_title, "job title", 200)?,
@@ -1839,8 +2045,9 @@ pub fn save_local_contact(database_path: String, input: LocalContactInput) -> Re
         birthday,
         website: optional_text(input.website, "website", 500)?,
         notes: optional_text(input.notes, "notes", MAX_NOTES_LENGTH)?,
+        sync,
     };
-    open_profile_store(database_path)?
+    store
         .save_contact(&contact)
         .map_err(|error| error.to_string())
 }
@@ -1856,6 +2063,192 @@ pub fn delete_local_contact(database_path: String, contact_id: String) -> Result
     open_profile_store(database_path)?
         .delete_contact(&contact_id)
         .map_err(|error| error.to_string())
+}
+
+fn dav_account_from_input(input: DavAccountInput) -> Result<DavAccount, String> {
+    let server_url = validated_text(input.server_url, "server URL", 500)?;
+    let username = validated_text(input.username, "user name", 200)?;
+    // Validates scheme and host the same way the connector will.
+    DavClient::new(&server_url, &username, "x").map_err(|error| error.to_string())?;
+    Ok(DavAccount {
+        id: AccountId::parse(input.id).map_err(|error| error.to_string())?,
+        display_name: validated_text(input.display_name, "account name", 200)?,
+        server_url,
+        username,
+        last_sync_at_ms: None,
+    })
+}
+
+fn discovered_collection_dto(collection: DiscoveredCollection) -> DiscoveredCollectionDto {
+    DiscoveredCollectionDto {
+        kind: match collection.kind {
+            CollectionKind::Calendar => "calendar",
+            CollectionKind::TaskList => "task_list",
+            CollectionKind::AddressBook => "address_book",
+        }
+        .to_owned(),
+        href: collection.href,
+        display_name: collection.display_name,
+    }
+}
+
+/// Connects to a CalDAV/CardDAV server and lists the calendars and address
+/// books the credentials can reach, without storing anything.
+///
+/// # Errors
+///
+/// Returns a validation, connection, or authentication error.
+pub async fn test_dav_account_connection(
+    input: DavAccountInput,
+    password: String,
+) -> Result<Vec<DiscoveredCollectionDto>, String> {
+    let account = dav_account_from_input(input)?;
+    if password.is_empty() {
+        return Err("a password is required".into());
+    }
+    let client = DavClient::new(&account.server_url, &account.username, &password)
+        .map_err(|error| error.to_string())?;
+    let discovered = client.discover().await.map_err(|error| error.to_string())?;
+    Ok(discovered
+        .into_iter()
+        .map(discovered_collection_dto)
+        .collect())
+}
+
+/// Saves a CalDAV/CardDAV account, stores its password in the encrypted
+/// profile, and records the collections found on the server so they show
+/// up immediately. An empty password keeps the stored one when editing.
+///
+/// # Errors
+///
+/// Returns a validation, connection, authentication, or storage error.
+pub async fn save_dav_account(
+    database_path: String,
+    input: DavAccountInput,
+    password: String,
+) -> Result<(), String> {
+    let mut account = dav_account_from_input(input)?;
+    let mut store = open_profile_store(&database_path)?;
+    let existing = store
+        .list_dav_accounts()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|known| known.id == account.id);
+    let password = if password.is_empty() {
+        store
+            .dav_secret(&account.id, ACCOUNT_PASSWORD_KEY)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "a password is required".to_owned())?
+    } else {
+        password
+    };
+    let client = DavClient::new(&account.server_url, &account.username, &password)
+        .map_err(|error| error.to_string())?;
+    let discovered = client.discover().await.map_err(|error| error.to_string())?;
+    account.last_sync_at_ms = existing.and_then(|known| known.last_sync_at_ms);
+    store
+        .save_dav_account(&account)
+        .map_err(|error| error.to_string())?;
+    store
+        .set_dav_secret(&account.id, ACCOUNT_PASSWORD_KEY, &password)
+        .map_err(|error| error.to_string())?;
+    dav_sync::reconcile_collections(&mut store, &account.id, &discovered)
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Removes a CalDAV/CardDAV account together with its collections, their
+/// synchronized records, and the stored password. The server is not
+/// touched.
+///
+/// # Errors
+///
+/// Returns an error when the account is unknown or cannot be removed.
+pub fn delete_dav_account(database_path: String, account_id: String) -> Result<(), String> {
+    let account_id = AccountId::parse(account_id).map_err(|error| error.to_string())?;
+    open_profile_store(database_path)?
+        .delete_dav_account(&account_id)
+        .map_err(|error| error.to_string())
+}
+
+/// Switches one calendar, task list, or address book on or off. A switched
+/// off collection keeps its records but is neither shown nor synchronized.
+///
+/// # Errors
+///
+/// Returns an error when the collection is unknown or cannot be updated.
+pub fn save_collection_enabled(
+    database_path: String,
+    collection_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let collection_id = CollectionId::parse(collection_id).map_err(|error| error.to_string())?;
+    let mut store = open_profile_store(database_path)?;
+    let mut collection = store
+        .list_dav_collections()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|collection| collection.id == collection_id)
+        .ok_or_else(|| "unknown collection".to_owned())?;
+    collection.enabled = enabled;
+    store
+        .save_dav_collection(&collection)
+        .map_err(|error| error.to_string())
+}
+
+/// Synchronizes every CalDAV/CardDAV account in both directions and
+/// returns the refreshed workspace. Problems with single accounts or
+/// records become warnings; the pass continues with the next account.
+///
+/// # Errors
+///
+/// Returns an error when the profile cannot be opened.
+pub async fn synchronize_dav_accounts(database_path: String) -> Result<DavSyncDto, String> {
+    let mut store = open_profile_store(&database_path)?;
+    let accounts = store
+        .list_dav_accounts()
+        .map_err(|error| error.to_string())?;
+    let mut uploaded = 0_u32;
+    let mut downloaded = 0_u32;
+    let mut removed = 0_u32;
+    let mut warnings = Vec::new();
+    for account in accounts {
+        let password = match store.dav_secret(&account.id, ACCOUNT_PASSWORD_KEY) {
+            Ok(Some(password)) => password,
+            Ok(None) => {
+                warnings.push(format!(
+                    "{}: kein Passwort hinterlegt.",
+                    account.display_name
+                ));
+                continue;
+            }
+            Err(error) => {
+                warnings.push(format!("{}: {error}", account.display_name));
+                continue;
+            }
+        };
+        match dav_sync::synchronize_account(&mut store, &account, &password).await {
+            Ok(report) => {
+                for collection in &report.collections {
+                    uploaded = uploaded.saturating_add(collection.uploaded);
+                    downloaded = downloaded.saturating_add(collection.downloaded);
+                    removed = removed
+                        .saturating_add(collection.removed_locally)
+                        .saturating_add(collection.removed_remotely);
+                }
+                warnings.extend(report.warnings);
+            }
+            Err(error) => warnings.push(format!("{}: {error}", account.display_name)),
+        }
+    }
+    let snapshot = load_snapshot(&store)?;
+    Ok(DavSyncDto {
+        uploaded,
+        downloaded,
+        removed,
+        warnings,
+        snapshot,
+    })
 }
 
 /// Saves account configuration and places its password inside the encrypted
@@ -3751,6 +4144,18 @@ fn load_snapshot(store: &SqliteMailStore) -> Result<WorkspaceSnapshot, String> {
             .map(contact_dto)
             .collect(),
         mail_accounts: mail_account_dtos,
+        dav_accounts: store
+            .list_dav_accounts()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(dav_account_dto)
+            .collect(),
+        collections: store
+            .list_dav_collections()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(collection_dto)
+            .collect(),
         sync_warnings: Vec::new(),
         catalog_messages_remaining: 0,
         delta_mailboxes_synchronized: 0,
@@ -3921,7 +4326,36 @@ fn calendar_event_dto(event: CalendarEvent) -> CalendarEventDto {
         location: event.location,
         description: event.description,
         reminder_minutes_before: event.reminder_minutes_before,
-        reminder_dismissed: event.reminder_dismissed,
+        reminder_dismissed_through_ms: event.reminder_dismissed_through_ms,
+        recurrence: event.recurrence.map(recurrence_dto),
+        exception_dates: event.exception_dates,
+        collection_id: event.sync.collection_id.map(|id| id.to_string()),
+    }
+}
+
+fn dav_account_dto(account: DavAccount) -> DavAccountDto {
+    DavAccountDto {
+        id: account.id.to_string(),
+        display_name: account.display_name,
+        server_url: account.server_url,
+        username: account.username,
+        last_sync_at_ms: account.last_sync_at_ms,
+    }
+}
+
+fn collection_dto(collection: DavCollection) -> CollectionDto {
+    CollectionDto {
+        id: collection.id.to_string(),
+        account_id: collection.account_id.to_string(),
+        kind: match collection.kind {
+            CollectionKind::Calendar => "calendar",
+            CollectionKind::TaskList => "task_list",
+            CollectionKind::AddressBook => "address_book",
+        }
+        .to_owned(),
+        display_name: collection.display_name,
+        color: collection.color,
+        enabled: collection.enabled,
     }
 }
 
@@ -3937,6 +4371,7 @@ fn task_dto(task: TaskItem) -> TaskDto {
         reminder_at_ms: task.reminder_at_ms,
         reminder_dismissed: task.reminder_dismissed,
         completed_at_ms: task.completed_at_ms,
+        collection_id: task.sync.collection_id.map(|id| id.to_string()),
     }
 }
 
@@ -3976,6 +4411,7 @@ fn contact_dto(contact: Contact) -> ContactDto {
         birthday: contact.birthday,
         website: contact.website,
         notes: contact.notes,
+        collection_id: contact.sync.collection_id.map(|id| id.to_string()),
     }
 }
 
@@ -4181,7 +4617,7 @@ mod tests {
         ACCOUNT_PASSWORD_KEY, ContactAddressDto, ContactEmailDto, ContactPhoneDto,
         LocalCalendarEventInput, LocalContactInput, LocalMessageInput, LocalTaskInput,
         MICROSOFT_TOKEN_ENDPOINT, MailAccountInput, OAUTH_REFRESH_TOKEN_KEY, OAuthTokenInput,
-        attachment_content_type, attachment_object_path, cache_remote_message,
+        RecurrenceDto, attachment_content_type, attachment_object_path, cache_remote_message,
         create_local_mailbox, delete_local_calendar_event, delete_local_contact,
         delete_local_mailbox, delete_local_task, export_local_attachment, export_profile,
         import_profile, load_mailbox_messages, load_outgoing_attachments, mail_account_from_input,
@@ -4599,7 +5035,16 @@ mod tests {
                 location: Some("Lokal".into()),
                 description: Some("  Agenda  ".into()),
                 reminder_minutes_before: Some(30),
-                reminder_dismissed: false,
+                reminder_dismissed_through_ms: None,
+                recurrence: Some(RecurrenceDto {
+                    frequency: "weekly".into(),
+                    interval: 1,
+                    weekdays: vec![3, 1, 3],
+                    until_ms: None,
+                    count: Some(10),
+                }),
+                exception_dates: vec!["2026-08-10".into()],
+                collection_id: None,
             },
         )
         .expect("save event");
@@ -4616,6 +5061,7 @@ mod tests {
                 reminder_at_ms: Some(1_785_900_000_000),
                 reminder_dismissed: true,
                 completed_at_ms: Some(1_785_910_000_000),
+                collection_id: None,
             },
         )
         .expect("save task");
@@ -4659,6 +5105,7 @@ mod tests {
                 birthday: Some("1980-05-17".into()),
                 website: None,
                 notes: Some("Notiz".into()),
+                collection_id: None,
             },
         )
         .expect("save contact");
@@ -4671,6 +5118,16 @@ mod tests {
             .expect("event");
         assert_eq!(event.description.as_deref(), Some("Agenda"));
         assert_eq!(event.reminder_minutes_before, Some(30));
+        let recurrence = event.recurrence.as_ref().expect("recurrence");
+        assert_eq!(recurrence.frequency, "weekly");
+        assert_eq!(
+            recurrence.weekdays,
+            vec![1, 3],
+            "weekdays are sorted and unique"
+        );
+        assert_eq!(recurrence.count, Some(10));
+        assert_eq!(event.exception_dates, vec!["2026-08-10".to_owned()]);
+        assert_eq!(event.collection_id, None);
         let task = restarted
             .tasks
             .iter()
@@ -4708,6 +5165,7 @@ mod tests {
                     birthday: Some("17.05.1980".into()),
                     website: None,
                     notes: None,
+                    collection_id: None,
                 },
             )
             .is_err(),
