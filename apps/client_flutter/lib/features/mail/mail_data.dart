@@ -1,5 +1,9 @@
 import '../../src/rust/api/workspace.dart' as rust;
+import '../workspace/german_dates.dart';
+import '../workspace/workspace_items.dart';
 import 'oauth_service.dart';
+
+export '../workspace/workspace_items.dart';
 
 class MailFolder {
   const MailFolder({
@@ -141,74 +145,6 @@ class MailAttachmentData {
   final String contentType;
   final int sizeBytes;
   final bool availableLocally;
-}
-
-class LocalCalendarItem {
-  const LocalCalendarItem({
-    required this.id,
-    required this.title,
-    required this.startsAt,
-    required this.endsAt,
-    this.location,
-  });
-
-  final String id;
-  final String title;
-  final DateTime startsAt;
-  final DateTime endsAt;
-  final String? location;
-
-  int get day => startsAt.day;
-
-  String get time => '${_clock(startsAt)}–${_clock(endsAt)}';
-}
-
-class LocalTaskItem {
-  const LocalTaskItem({
-    required this.id,
-    required this.title,
-    required this.dueAt,
-    required this.done,
-  });
-
-  final String id;
-  final String title;
-  final DateTime? dueAt;
-  final bool done;
-
-  String get due {
-    final value = dueAt;
-    if (value == null) return done ? 'Erledigt' : 'Ohne Datum';
-    final now = DateTime.now();
-    final date = DateTime(value.year, value.month, value.day);
-    final today = DateTime(now.year, now.month, now.day);
-    final difference = date.difference(today).inDays;
-    if (difference == 0) return 'Heute';
-    if (difference == 1) return 'Morgen';
-    return '${value.day.toString().padLeft(2, '0')}.'
-        '${value.month.toString().padLeft(2, '0')}.';
-  }
-
-  LocalTaskItem copyWith({bool? done}) {
-    return LocalTaskItem(
-      id: id,
-      title: title,
-      dueAt: dueAt,
-      done: done ?? this.done,
-    );
-  }
-}
-
-class LocalContactItem {
-  const LocalContactItem({
-    required this.id,
-    required this.name,
-    required this.email,
-  });
-
-  final String id;
-  final String name;
-  final String email;
 }
 
 /// One additional sender address of an account ("send as" alias).
@@ -462,8 +398,11 @@ abstract interface class MailDataSource {
   Future<void> saveFolderOrder(List<String> folderIds);
   Future<void> saveDarkMode(bool enabled);
   Future<void> saveCalendarEvent(LocalCalendarItem event);
+  Future<void> deleteCalendarEvent(String eventId);
   Future<void> saveTask(LocalTaskItem task);
+  Future<void> deleteTask(String taskId);
   Future<void> saveContact(LocalContactItem contact);
+  Future<void> deleteContact(String contactId);
   Future<void> testAccount(MailAccountConfig account, String password);
   Future<void> saveAccount(MailAccountConfig account, String password);
   Future<void> testOAuthAccount(
@@ -665,10 +604,19 @@ class DemoMailDataSource implements MailDataSource {
   Future<void> saveCalendarEvent(LocalCalendarItem event) async {}
 
   @override
+  Future<void> deleteCalendarEvent(String eventId) async {}
+
+  @override
   Future<void> saveTask(LocalTaskItem task) async {}
 
   @override
+  Future<void> deleteTask(String taskId) async {}
+
+  @override
   Future<void> saveContact(LocalContactItem contact) async {}
+
+  @override
+  Future<void> deleteContact(String contactId) async {}
 
   @override
   Future<void> testAccount(MailAccountConfig account, String password) async {}
@@ -1023,8 +971,20 @@ class RustMailDataSource implements MailDataSource {
         title: event.title,
         startsAtMs: event.startsAt.millisecondsSinceEpoch,
         endsAtMs: event.endsAt.millisecondsSinceEpoch,
+        allDay: event.allDay,
         location: event.location,
+        description: event.description,
+        reminderMinutesBefore: event.reminderMinutesBefore,
+        reminderDismissed: event.reminderDismissed,
       ),
+    );
+  }
+
+  @override
+  Future<void> deleteCalendarEvent(String eventId) {
+    return rust.deleteLocalCalendarEvent(
+      databasePath: databasePath,
+      eventId: eventId,
     );
   }
 
@@ -1035,10 +995,21 @@ class RustMailDataSource implements MailDataSource {
       input: rust.LocalTaskInput(
         id: task.id,
         title: task.title,
+        description: task.description,
+        startsAtMs: task.startsAt?.millisecondsSinceEpoch,
         dueAtMs: task.dueAt?.millisecondsSinceEpoch,
-        completed: task.done,
+        status: task.status.key,
+        priority: task.priority.key,
+        reminderAtMs: task.reminderAt?.millisecondsSinceEpoch,
+        reminderDismissed: task.reminderDismissed,
+        completedAtMs: task.completedAt?.millisecondsSinceEpoch,
       ),
     );
+  }
+
+  @override
+  Future<void> deleteTask(String taskId) {
+    return rust.deleteLocalTask(databasePath: databasePath, taskId: taskId);
   }
 
   @override
@@ -1048,8 +1019,43 @@ class RustMailDataSource implements MailDataSource {
       input: rust.LocalContactInput(
         id: contact.id,
         name: contact.name,
-        email: contact.email,
+        company: contact.company,
+        jobTitle: contact.jobTitle,
+        emails: [
+          for (final email in contact.emails)
+            rust.ContactEmailDto(
+              label: email.label.key,
+              address: email.address,
+            ),
+        ],
+        phones: [
+          for (final phone in contact.phones)
+            rust.ContactPhoneDto(label: phone.label.key, number: phone.number),
+        ],
+        addresses: [
+          for (final address in contact.addresses)
+            rust.ContactAddressDto(
+              label: address.label.key,
+              street: address.street,
+              postalCode: address.postalCode,
+              city: address.city,
+              country: address.country,
+            ),
+        ],
+        birthday: contact.birthday == null
+            ? null
+            : formatIsoDate(contact.birthday!),
+        website: contact.website,
+        notes: contact.notes,
       ),
+    );
+  }
+
+  @override
+  Future<void> deleteContact(String contactId) {
+    return rust.deleteLocalContact(
+      databasePath: databasePath,
+      contactId: contactId,
     );
   }
 
@@ -1215,13 +1221,13 @@ WorkspaceDataSnapshot _workspaceData(rust.WorkspaceSnapshot snapshot) {
           (event) => LocalCalendarItem(
             id: event.id,
             title: event.title,
-            startsAt: DateTime.fromMillisecondsSinceEpoch(
-              event.startsAtMs,
-            ).toLocal(),
-            endsAt: DateTime.fromMillisecondsSinceEpoch(
-              event.endsAtMs,
-            ).toLocal(),
+            startsAt: _localTime(event.startsAtMs),
+            endsAt: _localTime(event.endsAtMs),
+            allDay: event.allDay,
             location: event.location,
+            description: event.description,
+            reminderMinutesBefore: event.reminderMinutesBefore,
+            reminderDismissed: event.reminderDismissed,
           ),
         )
         .toList(growable: false),
@@ -1230,10 +1236,14 @@ WorkspaceDataSnapshot _workspaceData(rust.WorkspaceSnapshot snapshot) {
           (task) => LocalTaskItem(
             id: task.id,
             title: task.title,
-            dueAt: task.dueAtMs == null
-                ? null
-                : DateTime.fromMillisecondsSinceEpoch(task.dueAtMs!).toLocal(),
-            done: task.completed,
+            description: task.description,
+            startsAt: _optionalLocalTime(task.startsAtMs),
+            dueAt: _optionalLocalTime(task.dueAtMs),
+            status: TaskStatus.fromKey(task.status),
+            priority: TaskPriority.fromKey(task.priority),
+            reminderAt: _optionalLocalTime(task.reminderAtMs),
+            reminderDismissed: task.reminderDismissed,
+            completedAt: _optionalLocalTime(task.completedAtMs),
           ),
         )
         .toList(growable: false),
@@ -1242,7 +1252,35 @@ WorkspaceDataSnapshot _workspaceData(rust.WorkspaceSnapshot snapshot) {
           (contact) => LocalContactItem(
             id: contact.id,
             name: contact.name,
-            email: contact.email,
+            company: contact.company,
+            jobTitle: contact.jobTitle,
+            emails: [
+              for (final email in contact.emails)
+                ContactEmail(
+                  label: ContactLabel.fromKey(email.label),
+                  address: email.address,
+                ),
+            ],
+            phones: [
+              for (final phone in contact.phones)
+                ContactPhone(
+                  label: ContactLabel.fromKey(phone.label),
+                  number: phone.number,
+                ),
+            ],
+            addresses: [
+              for (final address in contact.addresses)
+                ContactAddress(
+                  label: ContactLabel.fromKey(address.label),
+                  street: address.street,
+                  postalCode: address.postalCode,
+                  city: address.city,
+                  country: address.country,
+                ),
+            ],
+            birthday: parseIsoDate(contact.birthday),
+            website: contact.website,
+            notes: contact.notes,
           ),
         )
         .toList(growable: false),
@@ -1350,11 +1388,6 @@ rust.MailAccountInput _mailAccountInput(MailAccountConfig account) {
         )
         .toList(growable: false),
   );
-}
-
-String _clock(DateTime value) {
-  return '${value.hour.toString().padLeft(2, '0')}:'
-      '${value.minute.toString().padLeft(2, '0')}';
 }
 
 String _formatTimestamp(int milliseconds) {
@@ -1501,19 +1534,22 @@ const demoMessages = <DemoMessage>[
   ),
 ];
 
+final DateTime _demoToday = dateOnly(DateTime.now());
+
 final demoCalendarEvents = <LocalCalendarItem>[
   LocalCalendarItem(
     id: 'demo.calendar.standup',
     title: 'Team-Stand-up',
-    startsAt: DateTime(2026, 7, 28, 9, 30),
-    endsAt: DateTime(2026, 7, 28, 10),
+    startsAt: _demoToday.add(const Duration(hours: 9, minutes: 30)),
+    endsAt: _demoToday.add(const Duration(hours: 10)),
     location: 'Besprechungsraum Nord',
+    description: 'Kurzer Abgleich zum Tagesstand.',
   ),
   LocalCalendarItem(
     id: 'demo.calendar.planning',
     title: 'Projektplanung',
-    startsAt: DateTime(2026, 7, 30, 14),
-    endsAt: DateTime(2026, 7, 30, 15),
+    startsAt: _demoToday.add(const Duration(days: 2, hours: 14)),
+    endsAt: _demoToday.add(const Duration(days: 2, hours: 15)),
   ),
 ];
 
@@ -1521,20 +1557,21 @@ final demoTasks = <LocalTaskItem>[
   LocalTaskItem(
     id: 'demo.task.imap',
     title: 'IMAP-Testkonto vorbereiten',
-    dueAt: DateTime(2026, 8, 3),
-    done: false,
+    dueAt: _demoToday,
+    priority: TaskPriority.high,
+    description: 'Zugangsdaten im Vault ablegen und Ordnerstruktur prüfen.',
   ),
   LocalTaskItem(
     id: 'demo.task.architecture',
     title: 'Architekturfeedback einarbeiten',
-    dueAt: DateTime(2026, 8, 4),
-    done: false,
+    dueAt: _demoToday.add(const Duration(days: 1)),
+    status: TaskStatus.inProgress,
   ),
-  const LocalTaskItem(
+  LocalTaskItem(
     id: 'demo.task.prototype',
     title: 'Desktop-Prototyp prüfen',
-    dueAt: null,
-    done: true,
+    status: TaskStatus.completed,
+    completedAt: _demoToday.subtract(const Duration(days: 1, hours: 8)),
   ),
 ];
 
@@ -1542,16 +1579,43 @@ const demoContacts = <LocalContactItem>[
   LocalContactItem(
     id: 'demo.contact.anna',
     name: 'Anna Schneider',
-    email: 'anna@example.org',
+    company: 'Schneider Consulting',
+    jobTitle: 'Projektleitung',
+    emails: [
+      ContactEmail(label: ContactLabel.work, address: 'anna@example.org'),
+    ],
+    phones: [
+      ContactPhone(label: ContactLabel.mobile, number: '+49 170 1234567'),
+    ],
+    addresses: [
+      ContactAddress(
+        label: ContactLabel.work,
+        street: 'Musterstraße 1',
+        postalCode: '10115',
+        city: 'Berlin',
+        country: 'Deutschland',
+      ),
+    ],
   ),
   LocalContactItem(
     id: 'demo.contact.jonas',
     name: 'Jonas Weber',
-    email: 'jonas@example.org',
+    emails: [
+      ContactEmail(label: ContactLabel.home, address: 'jonas@example.org'),
+    ],
   ),
   LocalContactItem(
     id: 'demo.contact.team',
     name: 'MAICENTA Team',
-    email: 'hello@maicenta.local',
+    emails: [
+      ContactEmail(label: ContactLabel.other, address: 'hello@maicenta.local'),
+    ],
+    website: 'https://maicenta.com',
   ),
 ];
+
+DateTime _localTime(int milliseconds) =>
+    DateTime.fromMillisecondsSinceEpoch(milliseconds).toLocal();
+
+DateTime? _optionalLocalTime(int? milliseconds) =>
+    milliseconds == null ? null : _localTime(milliseconds);

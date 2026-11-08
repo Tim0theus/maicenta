@@ -9,6 +9,23 @@ section of the tagged version into the GitHub Release notes.
 
 ### Added
 
+- Calendar, tasks, and contacts grew from prototype lists into full modules.
+  The calendar has day, work-week, week, and month views with a time grid,
+  a navigable mini calendar, and an appointment window with subject,
+  location, all-day events, start and end, a reminder lead time, and a
+  description; double-clicking a slot or day creates an appointment there.
+  Tasks have a quick-entry line, lists for today, overdue, the next seven
+  days, and completed tasks, a detail pane, and a task window with start
+  and due dates, status, priority, a reminder with date and time, and
+  notes. Contacts keep company, job title, several labelled e-mail
+  addresses, phone numbers, and postal addresses, a birthday, a website,
+  and notes, with a searchable list, a contact card, and "E-Mail senden"
+  straight into the composer. All three can be edited and deleted.
+- Reminders. Due reminders for appointments and tasks open a reminder
+  window in the app that lists them with "Später" (postpone by 5 minutes to
+  one day) and "Schließen"; closed reminders stay closed across restarts.
+- Profile schema 17 carries existing appointments, tasks, and contacts over;
+  a contact's single e-mail address becomes the first entry of its list.
 - In-app updates. MAICENTA looks for a new release at startup and then once
   a day, shows its release notes, and on Windows and Linux downloads,
   verifies, and installs it with one click and a restart (Velopack). On

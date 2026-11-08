@@ -278,8 +278,10 @@ Current account limitations are important:
   `BODYSTRUCTURE` metadata is visible in the reading pane and an individual
   file can be fetched with `BODY.PEEK` after an explicit click, subject to a
   100 MiB decoded-size limit and fresh mailbox UIDVALIDITY/UID checks.
-- Calendar, tasks, and contacts are durable local records; CalDAV, CardDAV,
-  iCalendar, VTODO, and vCard synchronization are not implemented yet.
+- Calendar, tasks, and contacts are durable local records with full editors
+  and in-app reminders; CalDAV, CardDAV, iCalendar, VTODO, and vCard
+  synchronization are not implemented yet, and reminders only appear while
+  MAICENTA is running.
 - Safe inline `cid:` PNG, JPEG, and GIF resources are resolved fully offline;
   sender-provided data URLs remain blocked. Display-part synchronization is
   bounded and reports an explicit warning when a declared section is missing,

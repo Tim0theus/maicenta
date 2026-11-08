@@ -74,10 +74,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ReleaseNoticeDto dco_decode_box_autoadd_release_notice_dto(dynamic raw);
 
   @protected
+  int dco_decode_box_autoadd_u_32(dynamic raw);
+
+  @protected
   CalendarEventDto dco_decode_calendar_event_dto(dynamic raw);
 
   @protected
+  ContactAddressDto dco_decode_contact_address_dto(dynamic raw);
+
+  @protected
   ContactDto dco_decode_contact_dto(dynamic raw);
+
+  @protected
+  ContactEmailDto dco_decode_contact_email_dto(dynamic raw);
+
+  @protected
+  ContactPhoneDto dco_decode_contact_phone_dto(dynamic raw);
 
   @protected
   DraftSyncDto dco_decode_draft_sync_dto(dynamic raw);
@@ -95,7 +107,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<CalendarEventDto> dco_decode_list_calendar_event_dto(dynamic raw);
 
   @protected
+  List<ContactAddressDto> dco_decode_list_contact_address_dto(dynamic raw);
+
+  @protected
   List<ContactDto> dco_decode_list_contact_dto(dynamic raw);
+
+  @protected
+  List<ContactEmailDto> dco_decode_list_contact_email_dto(dynamic raw);
+
+  @protected
+  List<ContactPhoneDto> dco_decode_list_contact_phone_dto(dynamic raw);
 
   @protected
   List<MailAccountDto> dco_decode_list_mail_account_dto(dynamic raw);
@@ -169,6 +190,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ReleaseNoticeDto? dco_decode_opt_box_autoadd_release_notice_dto(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
 
   @protected
   OutgoingMessageInput dco_decode_outgoing_message_input(dynamic raw);
@@ -271,10 +295,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
   CalendarEventDto sse_decode_calendar_event_dto(SseDeserializer deserializer);
 
   @protected
+  ContactAddressDto sse_decode_contact_address_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ContactDto sse_decode_contact_dto(SseDeserializer deserializer);
+
+  @protected
+  ContactEmailDto sse_decode_contact_email_dto(SseDeserializer deserializer);
+
+  @protected
+  ContactPhoneDto sse_decode_contact_phone_dto(SseDeserializer deserializer);
 
   @protected
   DraftSyncDto sse_decode_draft_sync_dto(SseDeserializer deserializer);
@@ -294,7 +332,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<ContactAddressDto> sse_decode_list_contact_address_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<ContactDto> sse_decode_list_contact_dto(SseDeserializer deserializer);
+
+  @protected
+  List<ContactEmailDto> sse_decode_list_contact_email_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ContactPhoneDto> sse_decode_list_contact_phone_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<MailAccountDto> sse_decode_list_mail_account_dto(
@@ -384,6 +437,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ReleaseNoticeDto? sse_decode_opt_box_autoadd_release_notice_dto(
     SseDeserializer deserializer,
   );
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
   OutgoingMessageInput sse_decode_outgoing_message_input(
@@ -508,13 +564,34 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_calendar_event_dto(
     CalendarEventDto self,
     SseSerializer serializer,
   );
 
   @protected
+  void sse_encode_contact_address_dto(
+    ContactAddressDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_contact_dto(ContactDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_contact_email_dto(
+    ContactEmailDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_contact_phone_dto(
+    ContactPhoneDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_draft_sync_dto(DraftSyncDto self, SseSerializer serializer);
@@ -535,8 +612,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_contact_address_dto(
+    List<ContactAddressDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_contact_dto(
     List<ContactDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_contact_email_dto(
+    List<ContactEmailDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_contact_phone_dto(
+    List<ContactPhoneDto> self,
     SseSerializer serializer,
   );
 
@@ -665,6 +760,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     ReleaseNoticeDto? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
 
   @protected
   void sse_encode_outgoing_message_input(

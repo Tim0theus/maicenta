@@ -195,10 +195,18 @@ The first usable release will focus on a stable, local desktop mail client.
 
 - [x] Persist local calendar entries, tasks, and contacts in SQLite across
   application restarts.
+- [x] Full local calendar: day, work-week, week, and month views, all-day
+  events, descriptions, locations, and reminders with an in-app reminder
+  window.
+- [x] Full local tasks: start and due dates, status, priority, notes,
+  reminders, quick entry, and filtered lists.
+- [x] Full local contacts: several labelled e-mail addresses, phone numbers,
+  and postal addresses, company, job title, birthday, website, notes, search,
+  and composing to a contact.
 - Add CalDAV synchronization for calendars.
-- Support iCalendar events, reminders, recurrence, and time zones.
-- Add local tasks and VTODO/CalDAV synchronization.
-- Add contacts with vCard and CardDAV support.
+- Support iCalendar events, recurrence, and time zones.
+- Add VTODO/CalDAV synchronization for tasks.
+- Add vCard and CardDAV support for contacts.
 - Provide a combined daily overview.
 - Create tasks and calendar events from email.
 

@@ -17,5 +17,6 @@ pub use mail::{
 };
 pub use modules::{ModuleState, WorkspaceModule};
 pub use workspace::{
-    CalendarEvent, Contact, MailAccount, MailProvider, TaskItem, TransportSecurity,
+    CalendarEvent, Contact, ContactEmail, ContactLabel, ContactPhone, MailAccount, MailProvider,
+    PostalAddress, TaskItem, TaskPriority, TaskStatus, TransportSecurity,
 };
