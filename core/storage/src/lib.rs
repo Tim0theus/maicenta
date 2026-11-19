@@ -1,5 +1,7 @@
 //! SQLite-backed local persistence for MAICENTA.
 
+mod dav_conflicts;
+
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
@@ -11,10 +13,10 @@ use std::{
 };
 
 use maicenta_application::{
-    ApplicationError, DavStore, LocalDraftMetadata, LocalDraftStore, MailAccountStore, MailStore,
-    MailSyncStore, PendingDraftAction, PendingDraftOperation, PendingMailMutation,
-    RemoteMailboxSyncState, RemoteMessageIdentity, RemoteMessageMetadata, SecretStore,
-    WorkspaceStore,
+    ApplicationError, DavConflict, DavItemKind, DavStore, LocalDraftMetadata, LocalDraftStore,
+    MailAccountStore, MailStore, MailSyncStore, PendingDraftAction, PendingDraftOperation,
+    PendingMailMutation, RemoteMailboxSyncState, RemoteMessageIdentity, RemoteMessageMetadata,
+    SecretStore, WorkspaceStore,
 };
 use maicenta_domain::{
     AccountId, AttachmentId, CalendarEvent, CollectionId, CollectionKind, Contact, ContactEmail,
@@ -26,7 +28,7 @@ use maicenta_domain::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-const CURRENT_SCHEMA_VERSION: u32 = 18;
+const CURRENT_SCHEMA_VERSION: u32 = 19;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const FAVORITE_MAILBOXES_KEY: &str = "favorite_mailbox_ids";
 const COLLAPSED_MAILBOXES_KEY: &str = "collapsed_mailbox_ids";
@@ -2264,6 +2266,24 @@ impl SqliteMailStore {
 }
 
 impl DavStore for SqliteMailStore {
+    fn preserve_dav_conflict(
+        &mut self,
+        collection: &DavCollection,
+        item_id: &WorkspaceItemId,
+        kind: DavItemKind,
+        href: &str,
+        uid: &str,
+    ) -> Result<(), ApplicationError> {
+        self.preserve_conflict(collection, item_id, kind, href, uid)
+    }
+
+    fn list_dav_conflicts(
+        &self,
+        account_id: Option<&AccountId>,
+    ) -> Result<Vec<DavConflict>, ApplicationError> {
+        self.conflicts(account_id)
+    }
+
     fn list_dav_accounts(&self) -> Result<Vec<DavAccount>, ApplicationError> {
         let connection = self.connection()?;
         let mut statement = connection
@@ -3683,6 +3703,10 @@ fn migrate(connection: &mut Connection) -> Result<(), ApplicationError> {
         apply_migration_v18(connection)?;
     }
 
+    if version < 19 {
+        apply_migration_v19(connection)?;
+    }
+
     Ok(())
 }
 
@@ -4843,6 +4867,41 @@ fn apply_migration_v18(connection: &mut Connection) -> Result<(), ApplicationErr
     transaction.commit().map_err(storage_error)
 }
 
+/// Recovery copies are ordinary local records. Provenance deliberately has no
+/// foreign key to accounts/collections: remote removal must not erase recovery.
+fn apply_migration_v19(connection: &mut Connection) -> Result<(), ApplicationError> {
+    let transaction = connection.transaction().map_err(storage_error)?;
+    transaction
+        .execute_batch(
+            "CREATE TABLE dav_conflicts (
+            recovery_id TEXT PRIMARY KEY NOT NULL,
+            item_kind TEXT NOT NULL CHECK (item_kind IN ('calendar_events', 'tasks', 'contacts')),
+            original_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            collection_id TEXT NOT NULL,
+            collection_name TEXT NOT NULL,
+            original_title TEXT NOT NULL,
+            uid TEXT NOT NULL,
+            href TEXT NOT NULL,
+            etag TEXT,
+            created_at_ms INTEGER NOT NULL DEFAULT (CAST(unixepoch('subsec') * 1000 AS INTEGER))
+        ) STRICT;
+        CREATE INDEX dav_conflicts_account ON dav_conflicts (account_id);
+        CREATE TRIGGER calendar_conflict_removed AFTER DELETE ON calendar_events BEGIN
+            DELETE FROM dav_conflicts WHERE recovery_id = OLD.id AND item_kind = 'calendar_events';
+        END;
+        CREATE TRIGGER task_conflict_removed AFTER DELETE ON tasks BEGIN
+            DELETE FROM dav_conflicts WHERE recovery_id = OLD.id AND item_kind = 'tasks';
+        END;
+        CREATE TRIGGER contact_conflict_removed AFTER DELETE ON contacts BEGIN
+            DELETE FROM dav_conflicts WHERE recovery_id = OLD.id AND item_kind = 'contacts';
+        END;
+        PRAGMA user_version = 19;",
+        )
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)
+}
+
 fn search_expression(
     query: &str,
     include_content: bool,
@@ -5245,12 +5304,12 @@ mod tests {
 
     static NEXT_DATABASE_ID: AtomicU64 = AtomicU64::new(0);
 
-    struct TemporaryDatabase {
-        path: PathBuf,
+    pub(super) struct TemporaryDatabase {
+        pub(super) path: PathBuf,
     }
 
     impl TemporaryDatabase {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let unique = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("system clock")

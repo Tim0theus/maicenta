@@ -7,6 +7,14 @@ section of the tagged version into the GitHub Release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- DAV upload conflicts now preserve the complete local event, task, or contact
+  as an editable local conflict copy before accepting the server version.
+  Conflict notices survive subsequent network failures and restarts; retries
+  do not duplicate recovery copies. Profile schema 19 records their provenance
+  atomically with the copy and the source's sync state.
+
 ### Added
 
 - Calendar, tasks, and contacts grew from prototype lists into full modules.

@@ -2241,6 +2241,13 @@ pub async fn synchronize_dav_accounts(database_path: String) -> Result<DavSyncDt
             Err(error) => warnings.push(format!("{}: {error}", account.display_name)),
         }
     }
+    // Notices outlive failed discovery, missing credentials and removed
+    // collections/accounts. Do not hide them behind a successful network pass.
+    for warning in dav_sync::conflict_warnings(&store, None).map_err(|error| error.to_string())? {
+        if !warnings.contains(&warning) {
+            warnings.push(warning);
+        }
+    }
     let snapshot = load_snapshot(&store)?;
     Ok(DavSyncDto {
         uploaded,
@@ -5610,6 +5617,114 @@ aW5jb21pbmcgYnl0ZXM=
             let _ = fs::remove_dir_all(path.with_extension("objects"));
         }
         let _ = fs::remove_file(archive);
+    }
+
+    #[test]
+    fn returns_dav_recovery_without_credentials_and_after_account_removal() {
+        use maicenta_application::{DavItemKind, DavStore, WorkspaceStore};
+        use maicenta_domain::{
+            CollectionId, CollectionKind, DavAccount, DavCollection, SyncMetadata, TaskItem,
+            TaskPriority, TaskStatus, WorkspaceItemId,
+        };
+
+        let path = temporary_database_path();
+        let database_path = path.to_string_lossy().into_owned();
+        let sync_without_network = || {
+            use std::{
+                future::Future,
+                task::{Context, Poll, Waker},
+            };
+            let mut future = std::pin::pin!(super::synchronize_dav_accounts(database_path.clone()));
+            match future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+            {
+                Poll::Ready(result) => result.unwrap(),
+                Poll::Pending => panic!("missing credentials must not initiate network work"),
+            }
+        };
+
+        let mut store = open_profile_store(&path).unwrap();
+        let account = DavAccount {
+            id: AccountId::parse("synthetic").unwrap(),
+            display_name: "Synthetic".into(),
+            server_url: "https://example.invalid".into(),
+            username: "synthetic".into(),
+            last_sync_at_ms: None,
+        };
+        store.save_dav_account(&account).unwrap();
+        let collection = DavCollection {
+            id: CollectionId::parse("synthetic.tasks").unwrap(),
+            account_id: account.id.clone(),
+            kind: CollectionKind::TaskList,
+            href: "/tasks/".into(),
+            display_name: "Tasks".into(),
+            color: None,
+            ctag: None,
+            enabled: true,
+            position: 0,
+        };
+        store.save_dav_collection(&collection).unwrap();
+        let task = TaskItem {
+            id: WorkspaceItemId::parse("synthetic.task").unwrap(),
+            title: "Local edit".into(),
+            description: Some("Synthetic recovery notes".into()),
+            starts_at_ms: None,
+            due_at_ms: None,
+            status: TaskStatus::NotStarted,
+            priority: TaskPriority::Normal,
+            reminder_at_ms: None,
+            reminder_dismissed: false,
+            completed_at_ms: None,
+            sync: SyncMetadata {
+                collection_id: Some(collection.id.clone()),
+                uid: Some("task".into()),
+                remote_href: Some("/tasks/task.ics".into()),
+                etag: Some("old".into()),
+                dirty: true,
+            },
+        };
+        store.save_task(&task).unwrap();
+        store
+            .preserve_dav_conflict(
+                &collection,
+                &task.id,
+                DavItemKind::Task,
+                "/tasks/task.ics",
+                "task",
+            )
+            .unwrap();
+        let recovery_id = store.list_dav_conflicts(None).unwrap()[0]
+            .recovery_id
+            .to_string();
+        drop(store);
+        // No password is present: the bridge must surface the persisted notice
+        // without making any request to the synthetic server URL.
+        let result = sync_without_network();
+        assert_eq!(result.warnings.len(), 2);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Konfliktkopie"))
+        );
+        assert!(
+            result
+                .snapshot
+                .tasks
+                .iter()
+                .any(|task| task.id == recovery_id && task.collection_id.is_none())
+        );
+        super::delete_dav_account(database_path.clone(), account.id.to_string()).unwrap();
+        let result = sync_without_network();
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(result.snapshot.tasks.len(), 1);
+        super::delete_local_task(database_path.clone(), recovery_id).unwrap();
+        let result = sync_without_network();
+        assert_eq!(result.warnings, Vec::<String>::new());
+        for suffix in ["", "-shm", "-wal"] {
+            let _ = fs::remove_file(format!("{}{suffix}", path.display()));
+        }
     }
 
     fn temporary_database_path() -> PathBuf {

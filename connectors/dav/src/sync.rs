@@ -4,10 +4,10 @@
 //! deletions are sent, dirty records are uploaded with conditional `PUT`,
 //! then the server listing is compared with the local copies by entity tag
 //! and anything new or changed is downloaded. The server wins conflicts: a
-//! record whose upload is refused keeps its local edits only until the
-//! server copy arrives in the same pass.
+//! rejected upload is first preserved as a durable local-only recovery copy
+//! with a persistent notice, then the server version replaces the synced record.
 
-use maicenta_application::{ApplicationError, DavStore, WorkspaceStore};
+use maicenta_application::{ApplicationError, DavItemKind, DavStore, WorkspaceStore};
 use maicenta_domain::{
     AccountId, CalendarEvent, CollectionId, CollectionKind, Contact, DavAccount, DavCollection,
     RemoteDeletion, SyncMetadata, TaskItem, WorkspaceItemId,
@@ -168,8 +168,29 @@ pub async fn synchronize_account<S: WorkspaceStore + DavStore>(
                 .push(format!("{}: {error}", collection.display_name)),
         }
     }
+    report
+        .warnings
+        .extend(conflict_warnings(store, Some(&account.id))?);
     store.update_dav_account_last_sync(&account.id, now_ms())?;
     Ok(report)
+}
+
+/// Durable notices for recovery copies, also available when discovery or
+/// credentials fail. The bridge includes these even for removed accounts.
+///
+/// # Errors
+///
+/// Returns a storage error when the conflict journal cannot be read.
+pub fn conflict_warnings<S: DavStore>(
+    store: &S,
+    account_id: Option<&AccountId>,
+) -> Result<Vec<String>, ApplicationError> {
+    Ok(store.list_dav_conflicts(account_id)?.into_iter().map(|conflict| {
+        format!(
+            "{}: „{}“ hat einen DAV-Konflikt. Die lokale Fassung ist als „{} (DAV-Konfliktkopie)“ im lokalen Bereich gesichert ({}). Bitte prüfen und nach der Übernahme löschen; die Serverversion wird separat synchronisiert.",
+            conflict.collection_name, conflict.original_title, conflict.original_title, conflict.recovery_id
+        )
+    }).collect())
 }
 
 fn now_ms() -> i64 {
@@ -184,6 +205,7 @@ fn now_ms() -> i64 {
 
 /// A local record of any of the three kinds, with the pieces the
 /// synchronization needs.
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum LocalRecord {
     Event(CalendarEvent),
     Task(TaskItem),
@@ -191,6 +213,14 @@ enum LocalRecord {
 }
 
 impl LocalRecord {
+    fn kind(&self) -> DavItemKind {
+        match self {
+            Self::Event(_) => DavItemKind::Event,
+            Self::Task(_) => DavItemKind::Task,
+            Self::Contact(_) => DavItemKind::Contact,
+        }
+    }
+
     fn id(&self) -> &WorkspaceItemId {
         match self {
             Self::Event(event) => &event.id,
@@ -215,6 +245,7 @@ impl LocalRecord {
         }
     }
 
+    #[cfg(test)]
     fn title(&self) -> &str {
         match self {
             Self::Event(event) => &event.title,
@@ -401,14 +432,21 @@ async fn synchronize_collection<S: WorkspaceStore + DavStore>(
                     record.save(store)?;
                 }
                 Err(DavError::PreconditionFailed) => {
-                    warnings.push(format!(
-                        "{}: „{}“ wurde auf dem Server geändert; die Serverversion wird übernommen.",
-                        collection.display_name,
-                        record.title()
-                    ));
-                    // Drop the local copy's claim so the pull replaces it.
+                    // No source mutation is committed unless its full recovery
+                    // copy and notice are durable in the same transaction.
+                    store.preserve_dav_conflict(
+                        collection,
+                        record.id(),
+                        record.kind(),
+                        record
+                            .sync()
+                            .remote_href
+                            .as_deref()
+                            .expect("upload assigned href"),
+                        record.sync().uid.as_deref().expect("upload assigned uid"),
+                    )?;
                     record.sync_mut().dirty = false;
-                    record.save(store)?;
+                    record.sync_mut().etag = None;
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -503,6 +541,9 @@ async fn upload(
             record.extension()
         )
     });
+    // Retain the attempted identity on 412, including create collisions.
+    record.sync_mut().uid = Some(uid.clone());
+    record.sync_mut().remote_href = Some(href.clone());
     let body = record.body(&uid);
     let etag = client
         .put(
@@ -761,3 +802,6 @@ mod tests {
         let _ = client.delete(&book_href, None).await;
     }
 }
+
+#[cfg(test)]
+mod conflict_tests;

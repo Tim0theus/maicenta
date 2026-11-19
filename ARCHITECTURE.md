@@ -235,6 +235,20 @@ accounts commit their cache and timestamps even when another account reports a
 credential or protocol error; the bridge returns those warnings alongside the
 refreshed snapshot.
 
+DAV uses conditional PUT and retains server-wins reconciliation. A 412 first
+commits a detached local recovery record, a `dav_conflicts` provenance row,
+and release of the source's dirty flag in one schema-19 SQLite transaction.
+The copy keeps every domain field except its new ID, conflict suffix, and
+cleared server identity. Clearing the source ETag forces a subsequent fetch,
+including after a failed listing/multiget or a create collision. A rollback
+leaves the original dirty and unchanged; a committed release prevents duplicate
+copies on retry. Later user edits can produce independent recovery copies.
+Conflict notices are loaded from storage even when discovery or credentials
+fail. Recovery records and their provenance outlive source/account/collection
+removal. Deleting the recovery record through its ordinary editor clears its
+notice without queueing a remote deletion. Schema migrations must maintain
+these explicit copy column lists when adding personal-record fields.
+
 Removing an account deletes its configuration, all vault secrets, and cached
 mail in one encrypted SQLite transaction. Other workspace modules and the
 server-side mailbox remain untouched.

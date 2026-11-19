@@ -721,12 +721,57 @@ pub trait WorkspaceStore: Send + Sync {
     fn delete_contact(&mut self, contact_id: &WorkspaceItemId) -> Result<(), ApplicationError>;
 }
 
+/// The workspace record whose conditional DAV upload was rejected.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DavItemKind {
+    Event,
+    Task,
+    Contact,
+}
+
+/// Durable conflict notice linking to an editable, local-only recovery copy.
+/// The notice remains until the user deletes that copy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DavConflict {
+    pub recovery_id: WorkspaceItemId,
+    pub collection_name: String,
+    pub original_title: String,
+}
+
 /// Persistence contract for `CalDAV`/`CardDAV` accounts, their collections, and
 /// the bookkeeping the synchronization needs.
 ///
 /// Deleting an event, task, or contact that has a server copy records a
 /// [`RemoteDeletion`] so the next synchronization removes it there too.
 pub trait DavStore: Send + Sync {
+    /// Atomically preserves the current local record and conflict notice before
+    /// releasing its dirty flag. The recovery copy has no server identity.
+    /// Repeated calls on an already released record do nothing. The source's
+    /// `ETag` is cleared to force downloading the server version on retry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without changing the source if preservation fails.
+    fn preserve_dav_conflict(
+        &mut self,
+        collection: &DavCollection,
+        item_id: &WorkspaceItemId,
+        kind: DavItemKind,
+        href: &str,
+        uid: &str,
+    ) -> Result<(), ApplicationError>;
+
+    /// Lists unresolved conflicts, including after restart or collection removal.
+    /// `None` includes every account, including accounts removed locally.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error if the notices cannot be read.
+    fn list_dav_conflicts(
+        &self,
+        account_id: Option<&AccountId>,
+    ) -> Result<Vec<DavConflict>, ApplicationError>;
+
     /// Lists configured DAV accounts ordered by display name.
     ///
     /// # Errors
