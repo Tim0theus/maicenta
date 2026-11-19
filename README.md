@@ -286,6 +286,14 @@ Current account limitations are important:
   the system so they also show after the app was closed, on Linux only while
   it runs. Recurrence exceptions that change a single occurrence
   (RECURRENCE-ID) are kept on the server but not edited in MAICENTA.
+  If a conditional DAV upload conflicts, MAICENTA keeps the local version as
+  a separate local-only record named `… (DAV-Konfliktkopie)` before accepting
+  the server version. Open the local calendar, task list, or contacts to review
+  it, manually transfer any wanted changes to the synchronized record, then
+  delete the recovery copy. Its reminders and recurrence are preserved too.
+  The conflict warning remains until that copy is deleted, including across
+  failed syncs and restarts. Copies are never uploaded automatically and
+  survive removal of the original remote collection or account.
 - Safe inline `cid:` PNG, JPEG, and GIF resources are resolved fully offline;
   sender-provided data URLs remain blocked. Display-part synchronization is
   bounded and reports an explicit warning when a declared section is missing,
