@@ -40,6 +40,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: subosito/flutter-action@v2
         with:
+          # Keep CI on the SDK validated for this client; upgrade UI APIs separately.
+          flutter-version: '3.47.2'
           channel: stable
           cache: true
       - name: Resolve dependencies
