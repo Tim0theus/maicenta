@@ -8,6 +8,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'app_theme.dart';
 import 'build_version.dart';
@@ -30,6 +31,7 @@ import 'features/mail/safe_message_html.dart';
 import 'features/mail/sender_aliases_dialog.dart';
 import 'features/reminders/reminder_dialog.dart';
 import 'features/reminders/system_notifications.dart';
+import 'features/startup/newer_profile_failure.dart';
 import 'features/tasks/task_editor.dart';
 import 'features/tasks/tasks_workspace.dart';
 import 'features/updates/app_updates.dart';
@@ -96,6 +98,7 @@ class StartupFailureApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final newerProfile = NewerProfileFailure.tryParse(message);
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
@@ -116,21 +119,48 @@ class StartupFailureApp extends StatelessWidget {
                     semanticLabel: 'MAICENTA-Logo',
                   ),
                   const SizedBox(height: 14),
-                  const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                  if (newerProfile == null)
+                    const Icon(Icons.error_outline, size: 48, color: Colors.red)
+                  else
+                    const Icon(
+                      Icons.system_update_alt_outlined,
+                      size: 48,
+                      color: maicentaPrimaryBlue,
+                    ),
                   const SizedBox(height: 16),
-                  const Text(
-                    'MAICENTA konnte nicht gestartet werden',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+                  Text(
+                    newerProfile == null
+                        ? 'MAICENTA konnte nicht gestartet werden'
+                        : NewerProfileFailure.title,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w600,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 10),
-                  const Text(
-                    'Die lokale Profildatenbank oder der Rust-Core konnte nicht geöffnet werden.',
+                  Text(
+                    newerProfile == null
+                        ? 'Die lokale Profildatenbank oder der Rust-Core konnte '
+                              'nicht geöffnet werden.'
+                        : NewerProfileFailure.startupExplanation,
                     textAlign: TextAlign.center,
                   ),
+                  if (newerProfile != null) ...[
+                    const SizedBox(height: 20),
+                    FilledButton.icon(
+                      key: const Key('startup-download-current-version'),
+                      onPressed: () => launchUrl(
+                        Uri.parse(maicentaReleasesUrl),
+                        mode: LaunchMode.externalApplication,
+                      ),
+                      icon: const Icon(Icons.open_in_new),
+                      label: const Text('Aktuelle Version herunterladen'),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   SelectableText(
-                    message,
+                    newerProfile?.details ?? message,
                     style: const TextStyle(fontSize: 11, color: Colors.black54),
                     textAlign: TextAlign.center,
                   ),
@@ -2854,7 +2884,15 @@ class _WorkspaceShellState extends State<WorkspaceShell>
       );
     } on Object catch (error) {
       if (!mounted) return;
-      showInformation('Import fehlgeschlagen', error.toString());
+      final newer = NewerProfileFailure.tryParse(error.toString());
+      if (newer != null) {
+        showInformation(
+          NewerProfileFailure.title,
+          '${NewerProfileFailure.importExplanation}\n\n${newer.details}',
+        );
+      } else {
+        showInformation('Import fehlgeschlagen', error.toString());
+      }
     }
   }
 

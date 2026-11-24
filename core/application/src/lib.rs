@@ -139,6 +139,12 @@ pub enum ApplicationError {
     PermissionDenied,
     Storage(String),
     Provider(String),
+    /// The profile was last opened by a newer MAICENTA with a schema this
+    /// build cannot read. Nothing was changed; a current build opens it.
+    ProfileNewerThanApp {
+        profile_schema: u32,
+        supported_schema: u32,
+    },
 }
 
 impl fmt::Display for ApplicationError {
@@ -150,6 +156,16 @@ impl fmt::Display for ApplicationError {
             Self::PermissionDenied => formatter.write_str("permission denied"),
             Self::Storage(message) => write!(formatter, "storage error: {message}"),
             Self::Provider(message) => write!(formatter, "provider error: {message}"),
+            // The client recognizes this exact wording (see
+            // `NewerProfileFailure` in the Flutter app); keep both in sync.
+            Self::ProfileNewerThanApp {
+                profile_schema,
+                supported_schema,
+            } => write!(
+                formatter,
+                "profile schema {profile_schema} was written by a newer MAICENTA version; \
+                 this version supports up to schema {supported_schema}"
+            ),
         }
     }
 }

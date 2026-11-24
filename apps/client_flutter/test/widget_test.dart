@@ -18,6 +18,7 @@ import 'package:maicenta/features/reminders/system_notifications.dart';
 import 'package:maicenta/features/workspace/german_dates.dart';
 import 'package:maicenta/features/mail/oauth_service.dart';
 import 'package:maicenta/features/mail/safe_message_html.dart';
+import 'package:maicenta/features/startup/newer_profile_failure.dart';
 
 void main() {
   testWidgets('shows the mail workspace by default', (tester) async {
@@ -1108,6 +1109,48 @@ void main() {
 
     expect(find.text('MAICENTA konnte nicht gestartet werden'), findsOneWidget);
     expect(find.text('database error'), findsOneWidget);
+  });
+
+  testWidgets('explains a profile written by a newer version', (tester) async {
+    // Same wording as ApplicationError::ProfileNewerThanApp in the Rust core.
+    await tester.pumpWidget(
+      const StartupFailureApp(
+        message:
+            'profile schema 20 was written by a newer MAICENTA version; '
+            'this version supports up to schema 19',
+      ),
+    );
+
+    expect(
+      find.text('Profil stammt aus einer neueren Version'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Deine Daten sind unverändert'), findsOneWidget);
+    expect(
+      find.byKey(const Key('startup-download-current-version')),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Profilschema 20, diese Version unterstützt bis Schema 19.'),
+      findsOneWidget,
+    );
+    expect(find.text('MAICENTA konnte nicht gestartet werden'), findsNothing);
+  });
+
+  test('recognizes only the newer-profile error', () {
+    final failure = NewerProfileFailure.tryParse(
+      'storage error: profile schema 18 was written by a newer MAICENTA '
+      'version; this version supports up to schema 16',
+    );
+    expect(failure?.profileSchema, 18);
+    expect(failure?.supportedSchema, 16);
+    expect(
+      NewerProfileFailure.tryParse(
+        'storage error: database schema 18 is newer than supported schema 16',
+      ),
+      isNull,
+    );
+    expect(NewerProfileFailure.tryParse('database error'), isNull);
   });
 
   testWidgets('opens desktop rich text compose window', (tester) async {

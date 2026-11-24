@@ -9,6 +9,10 @@ section of the tagged version into the GitHub Release notes.
 
 ### Fixed
 
+- Opening a profile that a newer MAICENTA version has already migrated
+  now explains what happened instead of showing a raw storage error: the
+  startup screen says the data is unchanged and links to the current
+  version, and importing a backup from a newer version says the same.
 - DAV upload conflicts now preserve the complete local event, task, or contact
   as an editable local conflict copy before accepting the server version.
   Conflict notices survive subsequent network failures and restarts; retries
