@@ -3626,9 +3626,10 @@ fn migrate(connection: &mut Connection) -> Result<(), ApplicationError> {
         .map_err(storage_error)?;
 
     if version > CURRENT_SCHEMA_VERSION {
-        return Err(ApplicationError::Storage(format!(
-            "database schema {version} is newer than supported schema {CURRENT_SCHEMA_VERSION}"
-        )));
+        return Err(ApplicationError::ProfileNewerThanApp {
+            profile_schema: version,
+            supported_schema: CURRENT_SCHEMA_VERSION,
+        });
     }
 
     if version < 1 {
@@ -6941,6 +6942,42 @@ mod tests {
                 .is_empty(),
             "other account has no attachments"
         );
+    }
+
+    #[test]
+    fn refuses_a_profile_from_a_newer_version_without_changing_it() {
+        let database = TemporaryDatabase::new();
+        let newer = CURRENT_SCHEMA_VERSION + 1;
+        {
+            let connection = Connection::open(&database.path).expect("open database");
+            connection
+                .execute_batch(&format!("PRAGMA user_version = {newer};"))
+                .expect("mark as newer");
+        }
+
+        let error = SqliteMailStore::open(&database.path)
+            .err()
+            .expect("newer profile is refused");
+        assert_eq!(
+            error,
+            ApplicationError::ProfileNewerThanApp {
+                profile_schema: newer,
+                supported_schema: CURRENT_SCHEMA_VERSION,
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "profile schema {newer} was written by a newer MAICENTA version; \
+                 this version supports up to schema {CURRENT_SCHEMA_VERSION}"
+            )
+        );
+
+        let connection = Connection::open(&database.path).expect("reopen database");
+        let version: u32 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user version");
+        assert_eq!(version, newer);
     }
 
     #[test]
