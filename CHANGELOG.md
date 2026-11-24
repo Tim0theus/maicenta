@@ -67,6 +67,11 @@ section of the tagged version into the GitHub Release notes.
   macOS the dialog downloads the new DMG; the sandboxed app cannot replace
   itself yet. Options → "Automatisch nach Updates suchen" turns the check
   off; it also pauses while offline mode is switched on by hand.
+- Automatic profile backup before every schema migration. Before a new
+  version changes the profile, MAICENTA writes an encrypted snapshot next to
+  it (`maicenta.sqlite.schema-<old>.bak`) and keeps the two newest; if the
+  snapshot cannot be written, the profile is not migrated. The README
+  explains how to restore it.
 
 ### Changed
 
@@ -75,6 +80,36 @@ section of the tagged version into the GitHub Release notes.
   Copies unpacked from the 0.1.0-beta.1 ZIP or tarball must be replaced once
   by hand; profiles are kept.
 - The options dialog scrolls when the window is too low for all entries.
+
+### Known limitations
+
+- **Unsigned builds.** macOS reports "“MAICENTA” Not Opened"; since macOS 15
+  the app has to be allowed once under System Settings → Privacy & Security
+  → Open Anyway, and again after each new DMG. Windows SmartScreen warns on
+  first start. The downloads describe both. Signing and notarization follow
+  with the Apple Developer and code-signing certificates.
+- **macOS installs updates by hand.** The sandboxed app reports new versions
+  and downloads the DMG but cannot replace itself yet.
+- **First self-updating release on Windows and Linux.** Copies installed with
+  this release's Setup.exe or AppImage update themselves from the next
+  release on; the update path has not yet run on users' machines.
+- **Linux shows reminder notifications only while MAICENTA runs.**
+- **CalDAV/CardDAV** is tested against Radicale only so far.
+- **Google sign-in in the browser is not yet available** because the
+  Google OAuth client is still under verification. Gmail and Google
+  Workspace accounts work through IMAP with an app password; the account
+  dialog recommends that path automatically.
+- **Microsoft consent screen** shows "unverified publisher" until the Entra
+  publisher verification is complete. Tenants that block unverified apps
+  need a one-time admin consent.
+- **On-premises Exchange (EWS)** is detected but not supported.
+- **Permanent deletion** of messages has no dedicated workflow yet;
+  messages moved to the trash stay there until the server or another client
+  removes them.
+- **Server folders** cannot be created, renamed, or deleted from MAICENTA
+  yet; local folders in the local profile can.
+- **Retry and backoff** after mail synchronization errors are basic; a
+  failed pass is reported and retried on the next interval.
 
 ## [0.1.0-beta.1] - 2026-11-03
 

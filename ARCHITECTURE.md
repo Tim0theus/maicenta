@@ -476,6 +476,15 @@ connector verifies UIDVALIDITY and the exact UID, fetches bounded display
 sections with `BODY.PEEK`, and persists the sanitized result without fetching
 attachments.
 
+Schema migrations run in place when a profile is opened. Before an existing
+profile moves to a newer schema, the store writes `VACUUM INTO` a sibling
+`<profile>.schema-<old>.bak`: a consistent snapshot that includes committed
+WAL content and, under SQLCipher, carries the profile's key. The two snapshots
+with the highest schema are kept. If the snapshot cannot be written, the
+migration does not start and the profile is left untouched. A profile whose
+schema is newer than the build supports is refused with
+`ProfileNewerThanApp` and not modified.
+
 Workspace snapshots contain only the newest 100 locally catalogued messages
 per mailbox. Older summaries are queried directly from encrypted SQLite with a
 bounded `LIMIT`/`OFFSET` page through the Rust bridge. This is a presentation

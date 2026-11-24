@@ -75,7 +75,7 @@ impl SqliteMailStore {
         let operation_lock = database_operation_lock(path);
         let _operation_guard = lock_operation(&operation_lock)?;
         let connection = Connection::open(path).map_err(storage_error)?;
-        Self::from_connection_with_lock(connection, operation_lock.clone())
+        Self::from_connection_with_lock(connection, operation_lock.clone(), Some(path))
     }
 
     /// Opens an encrypted profile database, migrating a legacy plaintext
@@ -96,7 +96,7 @@ impl SqliteMailStore {
         let connection = open_keyed_connection(path, key)?;
         #[cfg(unix)]
         restrict_database_permissions(path)?;
-        Self::from_connection_with_lock(connection, operation_lock.clone())
+        Self::from_connection_with_lock(connection, operation_lock.clone(), Some(path))
     }
 
     /// Creates an initialized in-memory database.
@@ -110,12 +110,15 @@ impl SqliteMailStore {
     }
 
     fn from_connection(connection: Connection) -> Result<Self, ApplicationError> {
-        Self::from_connection_with_lock(connection, Arc::new(Mutex::new(())))
+        Self::from_connection_with_lock(connection, Arc::new(Mutex::new(())), None)
     }
 
+    /// `database_path` is the file behind `connection`; when set, an existing
+    /// profile is backed up before its schema is migrated.
     fn from_connection_with_lock(
         mut connection: Connection,
         operation_lock: Arc<Mutex<()>>,
+        database_path: Option<&Path>,
     ) -> Result<Self, ApplicationError> {
         connection
             .busy_timeout(Duration::from_secs(5))
@@ -136,7 +139,7 @@ impl SqliteMailStore {
                 .execute_batch("PRAGMA journal_mode = WAL;")
                 .map_err(storage_error)?;
         }
-        migrate(&mut connection)?;
+        migrate(&mut connection, database_path)?;
 
         Ok(Self {
             connection: Mutex::new(connection),
@@ -3136,6 +3139,76 @@ fn migrate_plaintext_database(path: &Path, key: &[u8; 32]) -> Result<(), Applica
     export_result
 }
 
+/// Pre-migration snapshots kept next to a profile, by descending schema.
+const PRE_MIGRATION_BACKUPS_KEPT: usize = 2;
+
+/// `maicenta.sqlite` → `maicenta.sqlite.schema-16.bak`.
+fn pre_migration_backup_path(database_path: &Path, schema: u32) -> PathBuf {
+    path_with_suffix(database_path, &format!(".schema-{schema}.bak"))
+}
+
+/// Writes a consistent snapshot of the profile at `schema` before it is
+/// migrated. `VACUUM INTO` includes committed WAL content and, under
+/// `SQLCipher`, encrypts the copy with the profile's key, so the backup is as
+/// protected as the profile itself. Migration does not start when the
+/// snapshot cannot be written.
+fn back_up_before_migration(
+    connection: &Connection,
+    database_path: &Path,
+    schema: u32,
+) -> Result<(), ApplicationError> {
+    let target = pre_migration_backup_path(database_path, schema);
+    let temporary = path_with_suffix(&target, ".tmp");
+    remove_if_exists(&temporary)?;
+    let written = connection
+        .execute("VACUUM INTO ?1", [temporary.to_string_lossy().as_ref()])
+        .map_err(|error| {
+            ApplicationError::Storage(format!(
+                "profile could not be backed up before migrating schema {schema}: {error}"
+            ))
+        })
+        .and_then(|_| {
+            #[cfg(unix)]
+            restrict_database_permissions(&temporary)?;
+            fs::rename(&temporary, &target).map_err(storage_error)
+        });
+    if let Err(error) = written {
+        let _ = remove_if_exists(&temporary);
+        return Err(error);
+    }
+    prune_pre_migration_backups(database_path)
+}
+
+/// Keeps the [`PRE_MIGRATION_BACKUPS_KEPT`] snapshots with the highest
+/// schema and removes older ones.
+fn prune_pre_migration_backups(database_path: &Path) -> Result<(), ApplicationError> {
+    let (Some(directory), Some(file_name)) = (
+        database_path.parent(),
+        database_path.file_name().and_then(|name| name.to_str()),
+    ) else {
+        return Ok(());
+    };
+    let prefix = format!("{file_name}.schema-");
+    let mut backups = fs::read_dir(directory)
+        .map_err(storage_error)?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let schema = name
+                .strip_prefix(&prefix)?
+                .strip_suffix(".bak")?
+                .parse::<u32>()
+                .ok()?;
+            Some((schema, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    backups.sort_unstable_by(|(left, _), (right, _)| right.cmp(left));
+    for (_, path) in backups.into_iter().skip(PRE_MIGRATION_BACKUPS_KEPT) {
+        remove_if_exists(&path)?;
+    }
+    Ok(())
+}
+
 fn migration_sibling(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(format!(".{suffix}"));
@@ -3620,7 +3693,10 @@ fn refresh_mailbox_counts(transaction: &rusqlite::Transaction<'_>) -> Result<(),
         .map_err(storage_error)
 }
 
-fn migrate(connection: &mut Connection) -> Result<(), ApplicationError> {
+fn migrate(
+    connection: &mut Connection,
+    database_path: Option<&Path>,
+) -> Result<(), ApplicationError> {
     let version: u32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(storage_error)?;
@@ -3630,6 +3706,15 @@ fn migrate(connection: &mut Connection) -> Result<(), ApplicationError> {
             profile_schema: version,
             supported_schema: CURRENT_SCHEMA_VERSION,
         });
+    }
+
+    // Updates migrate profiles in place without the user exporting first.
+    // Keep a snapshot of the old schema so a failed or unwanted upgrade can
+    // be undone by hand. A fresh profile (version 0) has nothing to keep.
+    if let Some(database_path) = database_path
+        && (1..CURRENT_SCHEMA_VERSION).contains(&version)
+    {
+        back_up_before_migration(connection, database_path, version)?;
     }
 
     if version < 1 {
@@ -5272,8 +5357,9 @@ fn invalid_data(error: impl std::fmt::Display) -> ApplicationError {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs,
-        path::PathBuf,
+        fs::{self, File},
+        io::Read as _,
+        path::{Path, PathBuf},
         sync::{
             atomic::{AtomicU64, Ordering},
             mpsc,
@@ -5300,7 +5386,12 @@ mod tests {
 
     use super::{
         CURRENT_SCHEMA_VERSION, SQLITE_HEADER, SqliteMailStore, apply_migration_v1,
-        apply_migration_v2, apply_migration_v3, apply_migration_v4, valid_attachment_section,
+        apply_migration_v2, apply_migration_v3, apply_migration_v4, apply_migration_v5,
+        apply_migration_v6, apply_migration_v7, apply_migration_v8, apply_migration_v9,
+        apply_migration_v10, apply_migration_v11, apply_migration_v12, apply_migration_v13,
+        apply_migration_v14, apply_migration_v15, apply_migration_v16, open_keyed_connection,
+        path_with_suffix, pre_migration_backup_path, prune_pre_migration_backups,
+        valid_attachment_section,
     };
 
     static NEXT_DATABASE_ID: AtomicU64 = AtomicU64::new(0);
@@ -5331,6 +5422,24 @@ mod tests {
                 let mut path = self.path.as_os_str().to_owned();
                 path.push(suffix);
                 let _ = fs::remove_file(PathBuf::from(path));
+            }
+            // Pre-migration snapshots (`<db>.schema-N.bak[.tmp]`).
+            let (Some(directory), Some(name)) = (
+                self.path.parent(),
+                self.path.file_name().and_then(|name| name.to_str()),
+            ) else {
+                return;
+            };
+            let prefix = format!("{name}.schema-");
+            for entry in fs::read_dir(directory).into_iter().flatten().flatten() {
+                if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let _ = fs::remove_dir_all(path);
+                    } else {
+                        let _ = fs::remove_file(path);
+                    }
+                }
             }
         }
     }
@@ -5778,6 +5887,154 @@ mod tests {
         assert_ne!(&bytes[..16], SQLITE_HEADER);
         assert!(SqliteMailStore::open_encrypted(&database.path, &wrong_key).is_err());
         SqliteMailStore::open_encrypted(&database.path, &key).expect("reopen with profile key");
+    }
+
+    /// Builds an encrypted profile at schema 16 (the 0.1.0-beta.1 release)
+    /// whose task row is still in the WAL when the connection closes.
+    fn encrypted_schema_16_profile(path: &Path, key: &[u8; 32]) {
+        let mut connection = open_keyed_connection(path, key).expect("keyed database");
+        connection
+            .execute_batch("PRAGMA journal_mode = WAL;")
+            .expect("wal");
+        for migration in [
+            apply_migration_v1,
+            apply_migration_v2,
+            apply_migration_v3,
+            apply_migration_v4,
+            apply_migration_v5,
+            apply_migration_v6,
+            apply_migration_v7,
+            apply_migration_v8,
+            apply_migration_v9,
+            apply_migration_v10,
+            apply_migration_v11,
+            apply_migration_v12,
+            apply_migration_v13,
+            apply_migration_v14,
+            apply_migration_v15,
+            apply_migration_v16,
+        ] {
+            migration(&mut connection).expect("historic migration");
+        }
+        connection
+            .execute_batch("PRAGMA wal_autocheckpoint = 0;")
+            .expect("keep the wal");
+        connection
+            .execute(
+                "INSERT INTO tasks (id, title, due_at_ms, completed) \
+                 VALUES ('beta1.task', 'Aufgabe aus beta.1', NULL, 0)",
+                [],
+            )
+            .expect("beta.1 task");
+    }
+
+    fn pre_migration_backups(path: &Path) -> Vec<String> {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("name");
+        let mut found = fs::read_dir(path.parent().expect("parent"))
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter_map(|file| file.strip_prefix(&format!("{name}.")).map(str::to_owned))
+            .filter(|suffix| suffix.starts_with("schema-"))
+            .collect::<Vec<_>>();
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn backs_up_an_encrypted_profile_before_migrating_it() {
+        let database = TemporaryDatabase::new();
+        let key = [0x52; 32];
+        encrypted_schema_16_profile(&database.path, &key);
+
+        let store = SqliteMailStore::open_encrypted(&database.path, &key).expect("upgrade");
+        assert_eq!(store.schema_version(), Ok(CURRENT_SCHEMA_VERSION));
+        drop(store);
+        assert_eq!(pre_migration_backups(&database.path), ["schema-16.bak"]);
+
+        let backup = pre_migration_backup_path(&database.path, 16);
+        let mut header = [0_u8; SQLITE_HEADER.len()];
+        File::open(&backup)
+            .and_then(|mut file| file.read_exact(&mut header))
+            .expect("backup header");
+        assert_ne!(header, *SQLITE_HEADER, "the backup must not be plaintext");
+        assert!(
+            Connection::open(&backup)
+                .and_then(|plain| plain.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master",
+                    [],
+                    |row| { row.get::<_, i64>(0) }
+                ))
+                .is_err(),
+            "the backup must not open without the key"
+        );
+
+        let snapshot = open_keyed_connection(&backup, &key).expect("backup opens with the key");
+        let version: u32 = snapshot
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("backup version");
+        assert_eq!(version, 16);
+        let title: String = snapshot
+            .query_row(
+                "SELECT title FROM tasks WHERE id = 'beta1.task'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("the WAL row is in the backup");
+        assert_eq!(title, "Aufgabe aus beta.1");
+    }
+
+    #[test]
+    fn fresh_and_current_profiles_are_not_backed_up() {
+        let database = TemporaryDatabase::new();
+        drop(SqliteMailStore::open(&database.path).expect("create"));
+        drop(SqliteMailStore::open(&database.path).expect("reopen"));
+        assert_eq!(pre_migration_backups(&database.path), Vec::<String>::new());
+    }
+
+    #[test]
+    fn keeps_only_the_two_newest_pre_migration_backups() {
+        let database = TemporaryDatabase::new();
+        for schema in [3, 15, 16] {
+            fs::write(pre_migration_backup_path(&database.path, schema), b"old")
+                .expect("old backup");
+        }
+        let unrelated = path_with_suffix(&database.path, ".schema-notes.txt");
+        fs::write(&unrelated, b"keep").expect("unrelated file");
+
+        prune_pre_migration_backups(&database.path).expect("prune");
+
+        assert_eq!(
+            pre_migration_backups(&database.path),
+            ["schema-15.bak", "schema-16.bak", "schema-notes.txt"]
+        );
+    }
+
+    #[test]
+    fn does_not_migrate_when_the_backup_cannot_be_written() {
+        let database = TemporaryDatabase::new();
+        let key = [0x63; 32];
+        encrypted_schema_16_profile(&database.path, &key);
+        // A directory where the snapshot belongs makes the final rename fail.
+        fs::create_dir(pre_migration_backup_path(&database.path, 16)).expect("blocker");
+
+        let error = SqliteMailStore::open_encrypted(&database.path, &key)
+            .err()
+            .expect("migration is refused");
+        assert!(error.to_string().contains("storage error"), "{error}");
+
+        let connection = open_keyed_connection(&database.path, &key).expect("profile opens");
+        let version: u32 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, 16, "the profile stays on its old schema");
+        assert!(
+            !path_with_suffix(&pre_migration_backup_path(&database.path, 16), ".tmp").exists(),
+            "no half-written snapshot is left behind"
+        );
     }
 
     #[test]

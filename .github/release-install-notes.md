@@ -30,8 +30,10 @@ Alternativ im Terminal:
 Nach einem Update über eine neue DMG ist die Freigabe erneut nötig. MAICENTA
 meldet neue Versionen selbst; installiert wird über die neue DMG.
 
-Profile werden beim ersten Start einer neuen Version übernommen. Vor einem
-Beta-Update empfiehlt sich ein passwortgeschützter Export.
+Profile werden beim ersten Start einer neuen Version übernommen. Vorher legt
+MAICENTA eine verschlüsselte Kopie neben das Profil (`maicenta.sqlite.schema-N.bak`);
+wie man sie zurückspielt, steht in der README. Ein passwortgeschützter Export
+bleibt die sicherste Sicherung.
 
 Prüfsummen stehen in `SHA256SUMS.txt`. Die Dateien `releases.*.json`,
 `RELEASES*` und `*.nupkg` sind für das In-App-Update bestimmt.
@@ -66,8 +68,10 @@ Alternatively, in Terminal:
 After updating from a new DMG, the approval is needed again. MAICENTA reports
 new versions itself; you install them from the new DMG.
 
-Profiles are carried over on the first start of a new version. Before a beta
-update, a password-protected export is recommended.
+Profiles are carried over on the first start of a new version. Before that,
+MAICENTA places an encrypted copy next to the profile
+(`maicenta.sqlite.schema-N.bak`); the README explains how to restore it. A
+password-protected export remains the safest backup.
 
 Checksums are in `SHA256SUMS.txt`. The files `releases.*.json`, `RELEASES*`,
 and `*.nupkg` are used by the in-app update.
