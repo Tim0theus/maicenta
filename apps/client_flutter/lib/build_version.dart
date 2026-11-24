@@ -5,4 +5,4 @@
 /// `CFBundleShortVersionString`. The value must equal the `version:` in
 /// `pubspec.yaml` without the build number; a unit test and the release
 /// workflow enforce that.
-const String maicentaVersion = '0.1.0-beta.1';
+const String maicentaVersion = '0.1.0-beta.2';
