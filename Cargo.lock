@@ -1608,14 +1608,14 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "maicenta-application"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "maicenta-domain",
 ]
 
 [[package]]
 name = "maicenta-dav-connector"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1629,11 +1629,11 @@ dependencies = [
 
 [[package]]
 name = "maicenta-domain"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 
 [[package]]
 name = "maicenta-graph-connector"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "base64 0.22.1",
  "maicenta-domain",
@@ -1646,7 +1646,7 @@ dependencies = [
 
 [[package]]
 name = "maicenta-mail-connector"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "async-imap",
  "async-native-tls",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "maicenta-rendering"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "ammonia",
  "base64 0.22.1",
@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "maicenta-storage"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "maicenta-application",
  "maicenta-domain",
@@ -1680,7 +1680,7 @@ dependencies = [
 
 [[package]]
 name = "maicenta-vault"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -1697,7 +1697,7 @@ dependencies = [
 
 [[package]]
 name = "maicenta_bridge"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "flutter_rust_bridge",
  "maicenta-application",

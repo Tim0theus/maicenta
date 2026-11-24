@@ -7,6 +7,8 @@ section of the tagged version into the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.1.0-beta.2]
+
 ### Fixed
 
 - Opening a profile that a newer MAICENTA version has already migrated
@@ -183,5 +185,6 @@ First public beta of the desktop client for macOS, Windows, and Linux.
 - Profiles are migrated in place between versions. Keep a password-protected
   export before upgrading a beta anyway.
 
-[Unreleased]: https://github.com/Tim0theus/maicenta/compare/v0.1.0-beta.1...HEAD
+[Unreleased]: https://github.com/Tim0theus/maicenta/compare/v0.1.0-beta.2...HEAD
+[0.1.0-beta.2]: https://github.com/Tim0theus/maicenta/compare/v0.1.0-beta.1...v0.1.0-beta.2
 [0.1.0-beta.1]: https://github.com/Tim0theus/maicenta/releases/tag/v0.1.0-beta.1
