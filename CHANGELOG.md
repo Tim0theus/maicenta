@@ -7,7 +7,7 @@ section of the tagged version into the GitHub Release notes.
 
 ## [Unreleased]
 
-## [0.1.0-beta.2]
+## [0.1.0-beta.2] - 2026-11-24
 
 ### Fixed
 
