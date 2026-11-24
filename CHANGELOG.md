@@ -9,6 +9,12 @@ section of the tagged version into the GitHub Release notes.
 
 ### Fixed
 
+- The macOS installation notes in the DMG and on the release page describe
+  the approval under System Settings → Privacy & Security. Since macOS 15
+  the right-click → Open shortcut they named no longer offers an Open button.
+  The DMG now also contains "Getting Started.txt" in English, and the release
+  page repeats the installation notes in English.
+
 - DAV upload conflicts now preserve the complete local event, task, or contact
   as an editable local conflict copy before accepting the server version.
   Conflict notices survive subsequent network failures and restarts; retries
