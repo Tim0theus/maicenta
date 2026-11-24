@@ -16,8 +16,9 @@ contacts, notes, and optional AI assistants together in one personal workspace.
 > MAICENTA is in public beta. Downloads with SHA-256 checksums, release notes,
 > and the current list of known limitations are on the
 > [releases page](https://github.com/Tim0theus/maicenta/releases). Profiles
-> are migrated in place between versions; keep a password-protected export
-> before upgrading a beta.
+> are migrated in place between versions. MAICENTA keeps an encrypted copy of
+> the profile before each migration (see "Restoring a profile from before an
+> update" below); a password-protected export remains the safest backup.
 
 ## Vision
 
@@ -179,6 +180,32 @@ the backup before replacing the active profile. The password cannot be
 recovered by MAICENTA. Existing alpha databases and attachment objects are
 encrypted automatically on first launch; existing per-account keychain entries
 are then moved into the profile vault and removed where possible.
+
+### Restoring a profile from before an update
+
+Before a new version changes the profile schema, MAICENTA writes a snapshot
+of the database next to it, for example `maicenta.sqlite.schema-16.bak` for a
+profile at schema 16. The snapshot is encrypted with the same key as the
+profile and opens only on the same device and user account. The two newest
+snapshots are kept. If the snapshot cannot be written, for example because
+the disk is full, the profile is not migrated and stays as it was.
+
+To go back to the state before an update:
+
+1. Quit MAICENTA.
+2. Open the profile folder:
+   - macOS: `~/Library/Containers/org.maicenta.maicenta/Data/Library/Application Support/org.maicenta.maicenta/`
+   - Windows: `%APPDATA%\MAICENTA contributors\MAICENTA\`
+   - Linux: `~/.local/share/org.maicenta.maicenta/`
+3. Move `maicenta.sqlite`, `maicenta.sqlite-wal`, and `maicenta.sqlite-shm`
+   into another folder.
+4. Rename the snapshot, for example `maicenta.sqlite.schema-16.bak`, to
+   `maicenta.sqlite`.
+5. Start the MAICENTA version that matches the snapshot. A newer version
+   migrates it again and writes a new snapshot first.
+
+Snapshots cover the database only. Attachment objects are not changed by
+schema migrations.
 
 ```sh
 cd apps/client_flutter
