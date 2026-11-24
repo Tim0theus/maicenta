@@ -143,16 +143,50 @@ jobs:
           MAICENTA Beta für macOS
 
           Diese Vorabversion ist noch nicht von Apple beglaubigt. Beim ersten
-          Start meldet macOS deshalb, die App könne nicht geöffnet werden.
+          Start meldet macOS deshalb „‚MAICENTA‘ nicht geöffnet“ und bietet
+          nur „Fertig“ und „In den Papierkorb legen“ an. Seit macOS 15 hilft
+          auch der Rechtsklick auf „Öffnen“ nicht mehr.
 
           So startest du sie trotzdem:
-            1. MAICENTA in den Ordner „Programme“ ziehen.
-            2. Im Finder mit der rechten Maustaste auf MAICENTA klicken und
-               „Öffnen“ wählen. Den Hinweis mit „Öffnen“ bestätigen.
-            3. Falls die Meldung bleibt: Systemeinstellungen → Datenschutz &
-               Sicherheit → unten bei MAICENTA auf „Dennoch öffnen“ klicken.
+            1. MAICENTA in den Ordner „Programme“ ziehen und einmal starten.
+               Den Hinweis mit „Fertig“ schließen, NICHT „In den Papierkorb
+               legen“ wählen.
+            2. Systemeinstellungen → Datenschutz & Sicherheit öffnen und ganz
+               nach unten zu „Sicherheit“ scrollen. Bei „‚MAICENTA‘ wurde
+               blockiert“ auf „Dennoch öffnen“ klicken und mit Passwort oder
+               Touch ID bestätigen. Der Knopf erscheint nur etwa eine Stunde
+               nach dem Startversuch.
+            3. MAICENTA erneut starten und „Dennoch öffnen“ wählen. Danach
+               startet die App ohne Rückfrage.
+
+          Alternativ im Terminal:
+            xattr -dr com.apple.quarantine /Applications/MAICENTA.app
 
           Prüfsumme und Hinweise: https://github.com/Tim0theus/maicenta/releases
+          TXT
+          cat > "${staging}/Getting Started.txt" <<'TXT'
+          MAICENTA beta for macOS
+
+          This pre-release is not notarized by Apple yet. On first launch,
+          macOS therefore reports "“MAICENTA” Not Opened" and only offers
+          "Done" and "Move to Trash". Since macOS 15, right-clicking and
+          choosing "Open" no longer helps either.
+
+          To start it anyway:
+            1. Drag MAICENTA into the Applications folder and launch it once.
+               Close the message with "Done". Do NOT choose "Move to Trash".
+            2. Open System Settings → Privacy & Security and scroll down to
+               "Security". Next to "“MAICENTA” was blocked", click "Open
+               Anyway" and confirm with your password or Touch ID. The
+               button only appears for about an hour after the launch
+               attempt.
+            3. Launch MAICENTA again and choose "Open Anyway". From then on
+               it starts without asking.
+
+          Alternatively, in Terminal:
+            xattr -dr com.apple.quarantine /Applications/MAICENTA.app
+
+          Checksums and notes: https://github.com/Tim0theus/maicenta/releases
           TXT
           mkdir -p dist
           hdiutil create -volname "${APP_NAME} ${version}" -srcfolder "${staging}" \
